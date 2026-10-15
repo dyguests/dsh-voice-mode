@@ -22595,9 +22595,9 @@ var require_buffer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/Output.js
+// node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/Output.js
 var require_Output = __commonJS({
-  "node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/Output.js"(exports2) {
+  "node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/Output.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.OUTPUT_EXTENSIONS = exports2.OUTPUT_FORMAT = void 0;
@@ -22615,9 +22615,9 @@ var require_Output = __commonJS({
   }
 });
 
-// node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/Prosody.js
+// node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/Prosody.js
 var require_Prosody = __commonJS({
-  "node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/Prosody.js"(exports2) {
+  "node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/Prosody.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.VOLUME = exports2.PITCH = exports2.RATE = exports2.ProsodyOptions = void 0;
@@ -22673,9 +22673,9 @@ var require_Prosody = __commonJS({
   }
 });
 
-// node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/utils.js
+// node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/utils.js
 var require_utils = __commonJS({
-  "node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/utils.js"(exports2) {
+  "node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/utils.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.joinPath = void 0;
@@ -22686,9 +22686,9 @@ var require_utils = __commonJS({
   }
 });
 
-// node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/MsEdgeTTS.js
+// node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/MsEdgeTTS.js
 var require_MsEdgeTTS = __commonJS({
-  "node_modules/.pnpm/msedge-tts@2.0.7_debug@4.4.3/node_modules/msedge-tts/dist/MsEdgeTTS.js"(exports2) {
+  "node_modules/.pnpm/msedge-tts@2.1.0_debug@4.4.3/node_modules/msedge-tts/dist/MsEdgeTTS.js"(exports2) {
     "use strict";
     var __createBinding = exports2 && exports2.__createBinding || (Object.create ? function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -22759,19 +22759,25 @@ var require_MsEdgeTTS = __commonJS({
     var MsEdgeTTS2 = class _MsEdgeTTS {
       static TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
       static VOICES_URL = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=${_MsEdgeTTS.TRUSTED_CLIENT_TOKEN}`;
-      static WSS_URL = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
+      static WSS_URL = "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1";
       static JSON_XML_DELIM = "\r\n\r\n";
       static AUDIO_DELIM = "Path:audio\r\n";
-      static VOICE_LANG_REGEX = /\w{2}-\w{2}/;
+      static VOICE_LANG_REGEX = /\b[a-z]{2,}-[A-Z]{2}\b/;
+      static _clockOffsetMs = 0;
       _enableLogger;
       _isBrowser;
       _ws;
+      _clientInit;
+      _clientGeneration = 0;
       _voice;
       _outputFormat;
       _metadataOptions = new MetadataOptions();
       _streams = {};
+      _retiredSockets = [];
       _startTime = 0;
       _agent;
+      _connectionTimeoutMs;
+      _synthesisTimeoutMs;
       _log(...o) {
         if (this._enableLogger) {
           console.log(...o);
@@ -22786,24 +22792,81 @@ var require_MsEdgeTTS = __commonJS({
         this._agent = options?.agent || void 0;
         this._enableLogger = options?.enableLogger || false;
         this._isBrowser = typeof window !== "undefined" && typeof window.document !== "undefined";
+        this._connectionTimeoutMs = options?.connectionTimeoutMs === void 0 ? 1e4 : options.connectionTimeoutMs;
+        this._synthesisTimeoutMs = options?.synthesisTimeoutMs === void 0 ? 6e4 : options.synthesisTimeoutMs;
+        for (const [name, value] of Object.entries({ connectionTimeoutMs: this._connectionTimeoutMs, synthesisTimeoutMs: this._synthesisTimeoutMs })) {
+          if (!Number.isInteger(value) || value < 0 || value > 2147483647) {
+            throw new Error(`${name} must be an integer between 0 and 2147483647 milliseconds.`);
+          }
+        }
       }
       static async getSynthUrl() {
         const req_id = _MsEdgeTTS.generateUUID();
         const secMsGEC = await _MsEdgeTTS.generateSecMsGec(this.TRUSTED_CLIENT_TOKEN);
-        return `${this.WSS_URL}?TrustedClientToken=${this.TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGEC}&Sec-MS-GEC-Version=1-143.0.3650.96&ConnectionId=${req_id}`;
+        return `${this.WSS_URL}?Ocp-Apim-Subscription-Key=${this.TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGEC}&Sec-MS-GEC-Version=1-143.0.3650.96&ConnectionId=${req_id}`;
       }
-      async _initClient() {
+      _initClient() {
+        if (this._clientInit)
+          return this._clientInit;
+        const init = this._createClient();
+        const tracked = init.finally(() => {
+          if (this._clientInit === tracked)
+            this._clientInit = void 0;
+        });
+        this._clientInit = tracked;
+        return tracked;
+      }
+      async _createClient(retryClock = true, deadline = this._connectionTimeoutMs ? Date.now() + this._connectionTimeoutMs : 0, generation = this._clientGeneration) {
+        const previous = this._ws;
+        if (previous) {
+          if (previous.readyState === previous.OPEN && Object.values(this._streams).some((stream) => stream.socket === previous && !stream.turnEnded)) {
+            if (!this._retiredSockets.includes(previous))
+              this._retiredSockets.push(previous);
+          } else {
+            this._closeSocket(previous);
+          }
+        }
         const synthUrl = await _MsEdgeTTS.getSynthUrl();
+        if (generation !== this._clientGeneration)
+          throw new Error("Edge TTS connection closed before initialization completed.");
+        const remaining = deadline ? deadline - Date.now() : 0;
+        if (deadline && remaining <= 0)
+          throw new Error(`Edge TTS connection timed out after ${this._connectionTimeoutMs} milliseconds.`);
         const options = {
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
             "Origin": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
           }
         };
-        this._ws = this._isBrowser ? new isomorphic_ws_1.default(synthUrl, options) : new isomorphic_ws_1.default(synthUrl, { ...options, agent: this._agent });
-        this._ws.binaryType = "arraybuffer";
+        const ws = this._ws = this._isBrowser ? new isomorphic_ws_1.default(synthUrl) : new isomorphic_ws_1.default(synthUrl, { ...options, agent: this._agent });
+        ws.binaryType = "arraybuffer";
         return new Promise((resolve, reject) => {
-          this._ws.onopen = () => {
+          let connecting = true;
+          const connectionTimeout = this._connectionTimeoutMs ? setTimeout(() => {
+            connecting = false;
+            reject(new Error(`Edge TTS connection timed out after ${this._connectionTimeoutMs} milliseconds.`));
+            this._closeSocket(ws);
+          }, remaining) : void 0;
+          if (!this._isBrowser) {
+            ws.once("unexpected-response", (request, response) => {
+              if (!connecting || ws.readyState !== ws.CONNECTING || generation !== this._clientGeneration) {
+                request.destroy();
+                response.destroy();
+                return;
+              }
+              const error = Object.assign(new Error(`Unexpected server response: ${response.statusCode}`), {
+                statusCode: response.statusCode,
+                serverDate: response.headers.date
+              });
+              request.destroy(error);
+              response.destroy();
+            });
+          }
+          ws.onopen = () => {
+            if (!connecting)
+              return;
+            connecting = false;
+            clearTimeout(connectionTimeout);
             this._log("Connected in", (Date.now() - this._startTime) / 1e3, "seconds");
             this._send(`Content-Type:application/json; charset=utf-8\r
 Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
@@ -22820,39 +22883,58 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
                             }
                         }
                     }
-                `).then(resolve);
+                `, void 0, ws).then(resolve, (error) => {
+              this._closeSocket(ws);
+              reject(error);
+            });
           };
-          this._ws.onmessage = (m) => {
+          ws.onmessage = (m) => {
             const buffer = index_1.Buffer.from(m.data);
             const message = buffer.toString();
-            const requestId = /X-RequestId:(.*?)\r\n/gm.exec(message)[1];
+            const requestId = /X-RequestId:(.*?)\r\n/.exec(message)?.[1];
+            const stream = requestId && this._streams[requestId];
+            if (!stream || stream.audio.destroyed || stream.turnEnded || stream.socket !== ws)
+              return;
             if (message.includes(`Path:${messageTypes.TURN_START}`)) {
               this._log("->", message);
+              this._resetSynthesisTimeout(requestId);
             } else if (message.includes(`Path:${messageTypes.TURN_END}`)) {
               this._log("->", message);
-              this._streams[requestId].turnEnded = true;
-              this._streams[requestId].audio.push(null);
+              clearTimeout(stream.timeout);
+              stream.timeout = void 0;
+              stream.turnEnded = true;
+              stream.audio.push(null);
+              this._closeRetiredSockets();
             } else if (message.includes(`Path:${messageTypes.RESPONSE}`)) {
               this._log("->", message);
+              this._resetSynthesisTimeout(requestId);
             } else if (message.includes(`Path:${messageTypes.AUDIO_METADATA}`)) {
               const dataStartIndex = buffer.indexOf(_MsEdgeTTS.JSON_XML_DELIM) + _MsEdgeTTS.JSON_XML_DELIM.length;
               const data = buffer.subarray(dataStartIndex);
               this._log("->", message);
+              this._resetSynthesisTimeout(requestId);
               this._pushMetadata(data, requestId);
             } else if (message.includes(`Path:${messageTypes.AUDIO}`) && m.data instanceof ArrayBuffer) {
               const dataStartIndex = buffer.indexOf(_MsEdgeTTS.AUDIO_DELIM) + _MsEdgeTTS.AUDIO_DELIM.length;
               const headers = buffer.subarray(0, dataStartIndex).toString();
               const data = buffer.subarray(dataStartIndex);
               this._log("->", headers);
+              this._resetSynthesisTimeout(requestId);
               this._pushAudioData(data, requestId);
             } else {
               this._log("->", "UNKNOWN MESSAGE", message);
             }
           };
-          this._ws.onclose = () => {
+          ws.onclose = () => {
+            connecting = false;
+            clearTimeout(connectionTimeout);
+            reject(new Error("Edge TTS connection closed before initialization completed."));
             this._log("disconnected after:", (Date.now() - this._startTime) / 1e3, "seconds");
             for (const requestId in this._streams) {
               const stream = this._streams[requestId];
+              if (stream.socket !== ws)
+                continue;
+              clearTimeout(stream.timeout);
               if (stream.turnEnded) {
                 stream.audio.push(null);
               } else {
@@ -22860,14 +22942,47 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
               }
             }
           };
-          this._ws.onerror = (event) => {
+          ws.onerror = (event) => {
+            connecting = false;
+            clearTimeout(connectionTimeout);
             const underlying = event?.error ?? event;
             const message = underlying?.message ?? String(underlying);
             const code = underlying?.code ?? event?.code;
             const wrapped = new Error(`Edge TTS WebSocket error: ${message}${code ? ` (code=${code})` : ""}`);
             wrapped.cause = underlying;
             reject(wrapped);
+            for (const stream of Object.values(this._streams)) {
+              if (stream.socket === ws && !stream.turnEnded)
+                stream.audio.destroy(wrapped);
+            }
+            this._closeSocket(ws);
           };
+        }).catch((error) => {
+          const underlying = error.cause;
+          const serverTime = typeof underlying?.serverDate === "string" ? Date.parse(underlying.serverDate) : NaN;
+          if (retryClock && underlying?.statusCode === 403 && Number.isFinite(serverTime) && generation === this._clientGeneration && (!deadline || Date.now() < deadline)) {
+            _MsEdgeTTS._clockOffsetMs = serverTime - Date.now();
+            return this._createClient(false, deadline, generation);
+          }
+          throw error;
+        });
+      }
+      _closeSocket(socket) {
+        if (socket.readyState === socket.CLOSED)
+          return;
+        const terminate = socket.terminate;
+        if (socket.readyState !== socket.OPEN && terminate)
+          terminate.call(socket);
+        else
+          socket.close();
+      }
+      _closeRetiredSockets() {
+        this._retiredSockets = this._retiredSockets.filter((socket) => {
+          if (Object.values(this._streams).some((stream) => stream.socket === socket && !stream.turnEnded)) {
+            return true;
+          }
+          socket.close();
+          return false;
         });
       }
       static generateUUID() {
@@ -22878,7 +22993,7 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
         });
       }
       static async generateSecMsGec(trustedClientToken) {
-        const ticks = Math.floor(Date.now() / 1e3) + 11644473600;
+        const ticks = Math.floor((Date.now() + _MsEdgeTTS._clockOffsetMs) / 1e3) + 11644473600;
         const rounded = ticks - ticks % 300;
         const windowsTicks = rounded * 1e7;
         const encoder = new TextEncoder();
@@ -22886,23 +23001,58 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
         const hashBuffer = await crypto.subtle.digest("SHA-256", data);
         return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
       }
-      async _send(message) {
-        for (let i = 1; i <= 3 && this._ws.readyState !== this._ws.OPEN; i++) {
+      async _send(message, requestId, initialSocket) {
+        let socket = initialSocket ?? this._ws;
+        for (let i = 1; !initialSocket && i <= 3 && socket.readyState !== socket.OPEN; i++) {
+          if (requestId && !this._streams[requestId])
+            return;
           if (i == 1) {
             this._startTime = Date.now();
           }
           this._log("connecting: ", i);
           await this._initClient();
+          socket = this._ws;
         }
-        this._ws.send(message, () => {
+        if (requestId) {
+          const stream = this._streams[requestId];
+          if (!stream || stream.audio.destroyed || stream.turnEnded)
+            return;
+          stream.socket = socket;
+        }
+        if (socket.readyState !== socket.OPEN)
+          throw new Error("Edge TTS WebSocket is not open.");
+        if (requestId)
+          this._resetSynthesisTimeout(requestId);
+        if (this._isBrowser) {
+          socket.send(message);
           this._log("<-", message);
+          return;
+        }
+        await new Promise((resolve, reject) => {
+          socket.send(message, (error) => {
+            if (error)
+              return reject(error);
+            this._log("<-", message);
+            resolve();
+          });
         });
       }
+      _resetSynthesisTimeout(requestId) {
+        const stream = this._streams[requestId];
+        if (!stream || stream.audio.destroyed || stream.turnEnded)
+          return;
+        clearTimeout(stream.timeout);
+        if (this._synthesisTimeoutMs) {
+          stream.timeout = setTimeout(() => {
+            stream.audio.destroy(new Error(`Edge TTS synthesis timed out after ${this._synthesisTimeoutMs} milliseconds without activity.`));
+          }, this._synthesisTimeoutMs);
+        }
+      }
       _pushAudioData(data, requestId) {
-        this._streams[requestId].audio.push(data);
+        this._streams[requestId]?.audio.push(data);
       }
       _pushMetadata(data, requestId) {
-        this._streams[requestId].metadata.push(data);
+        this._streams[requestId]?.metadata?.push(data);
       }
       _SSMLTemplate(input, options = {}) {
         options = { ...new Prosody_1.ProsodyOptions(), ...options };
@@ -22938,16 +23088,16 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
         const oldOutputFormat = this._outputFormat;
         const oldOptions = JSON.stringify(this._metadataOptions);
         this._voice = voiceName;
-        if (!this._metadataOptions.voiceLocale || !metadataOptions.voiceLocale && oldVoice !== this._voice) {
+        Object.assign(this._metadataOptions, metadataOptions);
+        if (!metadataOptions?.voiceLocale && (!this._metadataOptions.voiceLocale || oldVoice !== this._voice)) {
           const voiceLangMatch = _MsEdgeTTS.VOICE_LANG_REGEX.exec(this._voice);
           if (!voiceLangMatch)
             throw new Error("Could not infer voiceLocale from voiceName, and no voiceLocale was specified!");
           this._metadataOptions.voiceLocale = voiceLangMatch[0];
         }
         this._outputFormat = outputFormat;
-        Object.assign(this._metadataOptions, metadataOptions);
         const changed = oldVoice !== this._voice || oldOutputFormat !== this._outputFormat || oldOptions !== JSON.stringify(this._metadataOptions);
-        if (!changed && this._ws.readyState === this._ws.OPEN) {
+        if (!changed && !this._clientInit && this._ws?.readyState === isomorphic_ws_1.default.OPEN && !this._retiredSockets.includes(this._ws)) {
           return;
         }
         this._startTime = Date.now();
@@ -22961,7 +23111,18 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
        * Close the WebSocket connection.
        */
       close() {
-        this._ws?.close();
+        this._clientGeneration++;
+        const sockets = new Set(this._retiredSockets);
+        if (this._ws)
+          sockets.add(this._ws);
+        this._retiredSockets = [];
+        for (const stream of Object.values(this._streams)) {
+          clearTimeout(stream.timeout);
+          if (!stream.turnEnded) {
+            stream.audio.destroy(new Error("Stream closed before the synthesis completed (no turn.end received). The audio is likely truncated."));
+          }
+        }
+        sockets.forEach((socket) => this._closeSocket(socket));
       }
       /**
        * Writes raw audio synthesised from text to a file. Uses a basic {@link _SSMLTemplate SML template}.
@@ -23023,7 +23184,7 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
                   resolve(audioFilePath);
                 } else {
                   reject(new Error("No audio data received"));
-                  fs.unlinkSync(audioFilePath);
+                  fs.rmSync(audioFilePath, { force: true });
                 }
               });
               writableAudioFile.once("error", reject);
@@ -23043,7 +23204,7 @@ Path:${messageTypes.SPEECH_CONFIG}${_MsEdgeTTS.JSON_XML_DELIM}
                   resolve(metadataFilePath);
                 } else {
                   reject(new Error("No metadata received"));
-                  fs.unlinkSync(metadataFilePath);
+                  fs.rmSync(metadataFilePath, { force: true });
                 }
               });
               metadataStream.once("error", reject);
@@ -23072,7 +23233,9 @@ Path:${messageTypes.SSML}${_MsEdgeTTS.JSON_XML_DELIM}` + requestSSML.trim();
           read() {
           },
           destroy(error, callback) {
+            clearTimeout(self2._streams[requestId]?.timeout);
             delete self2._streams[requestId];
+            self2._closeRetiredSockets();
             callback(error);
           }
         });
@@ -23093,7 +23256,9 @@ Path:${messageTypes.SSML}${_MsEdgeTTS.JSON_XML_DELIM}` + requestSSML.trim();
           metadata: metadataStream,
           turnEnded: false
         };
-        this._send(request).then();
+        this._send(request, requestId).catch((error) => {
+          this._streams[requestId]?.audio.destroy(error);
+        });
         return { audioStream, metadataStream, requestId };
       }
     };

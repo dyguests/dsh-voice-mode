@@ -35,7 +35,7 @@ comment in `build.mjs` for why). Their licenses are reproduced below. Generated 
 | mime-db | 1.52.0 | MIT |
 | mime-types | 2.1.35 | MIT |
 | ms | 2.1.3 | MIT |
-| msedge-tts | 2.0.7 | MIT |
+| msedge-tts | 2.1.0 | MIT |
 | ws | 8.21.3 | MIT |
 
 ## agent-base 6.0.0
@@ -835,7 +835,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## msedge-tts 2.0.7
+## msedge-tts 2.1.0
 
 - License: MIT
 - Source: https://github.com/Migushthe2nd/MsEdgeTTS.git
