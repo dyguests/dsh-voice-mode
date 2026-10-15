@@ -17,7 +17,7 @@
 
 ![dsh-voice-mode 全双工语音对话](assets/hero-banner.png)
 
-> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-alpha.2，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§17）。433 项测试全绿（33 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
+> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-alpha.3，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§18）。433 项测试全绿（33 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
 
 ---
 
@@ -158,7 +158,7 @@ flowchart LR
 | 打断检测 | 基础 VAD | **三档灵敏度 + 回声门控 + 让位语义** |
 | 字幕 a11y | 无 | **4 档字号 + 3 档宽度 + 主题跟随** |
 | 唤醒词 | 无 | **轻量流式匹配 + 前缀语气词白名单** |
-| 兼容 dsh | — | **0.1.1-rc.2 起全版本（含 0.2.1-alpha.2）** |
+| 兼容 dsh | — | **0.1.1-rc.2 起全版本（含 0.2.1-alpha.3）** |
 
 ---
 

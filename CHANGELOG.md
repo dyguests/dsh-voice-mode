@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Edge 云端朗读恢复**：内联的 msedge-tts 2.0.7 对微软 Edge TTS 服务的握手被拒（403），默认朗读引擎无声；升级到 **2.1.0** 并重新内联（`lib/msedge-tts.cjs`、`THIRD_PARTY_NOTICES.md`）。已发布版本需升级本插件才能恢复（本地 VITS / Kokoro 不受影响）。
+
+### 兼容
+
+- 复核 dsh 0.2.1-alpha.2 / 0.2.1-alpha.3（锚点 9/9、typecheck、runtime 冒烟、真 LLM 全流程）；alpha.3 起设置入口移入侧栏「More」菜单，插件两处设置入口仍有效，冒烟脚本已适配（详见 docs/compat-contract.md §17–§18）。
+
 ### 规划中
 
 - F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）

@@ -639,3 +639,19 @@ class AgentDefaultModelConfig extends Service {
 - 环境注记：本机以 root 跑 `typecheck-dual.sh` 时，`node_modules` 由 `www` 的 pnpm store 链入，pnpm 会报 `ERR_PNPM_UNEXPECTED_STORE`（脚本把 `pnpm add` 输出吞掉，表现为「pnpm add 失败」）；设 `pnpm_config_store_dir=/home/www/.local/share/pnpm/store/v11` 即可，与 alpha.2 本身无关。
 - 已纳入 `verify-dual.sh` 字面量矩阵（14 版锚点/typecheck、11 核心冒烟），`check-dsh-version.sh` 退出 0。插件运行行为零改动，无需发版。
 
+## 18. 0.2.1-alpha.3 复核（2026-10-15，上游 alpha 通道新版本）
+
+- 发现途径：`scripts/check-dsh-version.sh` 报 dist-tag 含未覆盖的 `0.2.1-alpha.3`（2026-10-14 发布；latest/next 仍为 0.2.0-rc.2）。其 cordis 对等依赖升为 `~4.0.5-alpha.2`（alpha.1/2 为 `4.0.5-alpha.1`），`typecheck-dual.sh` 的映射表新增 `0.2.1-alpha.3 → 4.0.5-alpha.2`。
+- 结果：
+
+| 层 | 结果 |
+| --- | --- |
+| L1 锚点 | ✅ 9/9 |
+| L2 双 typecheck | ✅ host + client |
+| L3 runtime 冒烟 | ✅（修正冒烟脚本后；见下「界面变化」） |
+| L4 真流程（真 LLM） | ✅ 4 帧 SSE 音频 / 0 tts-error（升级 msedge-tts 之后；见下「Edge 云端 TTS」） |
+
+- **界面变化（插件本身无需改动）**：alpha.3 的侧栏底部不再有「Settings」按钮，改为「More」菜单内的「Settings」；设置弹窗里原「Plugins」改名「Built-in plugins」，并新增 `dsh-client-ui-plugin-manager` / `-settings-plugin-inventory` / `-settings-shell` 三个包。本插件两处设置入口都仍有效：设置弹窗内「Voice Mode」专属页（`settings.section`）与插件详情页卡片（`plugins.bundle.config`）。`scripts/smoke-settings.mjs` 新增 `openSettings()`：先找直接按钮，找不到再走 More 菜单；已用 alpha.3 与线上 0.2.0-rc.2 回归通过。
+- **Edge 云端 TTS 同日失效（与 dsh 无关）**：Edge 默认朗读引擎对内联的 msedge-tts 2.0.7 / 2.0.9 的 WebSocket 握手一律返回 403（`Sec-MS-GEC-Version` 等握手参数被服务端拒绝）；msedge-tts **2.1.0**（2026-10-13 发布）握手参数已更新，实测合成成功。已将构建期依赖升到 `^2.1.0` 并重新内联（`lib/msedge-tts.cjs`、`THIRD_PARTY_NOTICES.md`、`pnpm-lock.yaml`）；已发布的 v0.7.23 及更早版本的 Edge 朗读受影响，需发补丁版。
+- 已纳入 `verify-dual.sh` 字面量矩阵（15 版锚点/typecheck、12 核心冒烟）。
+

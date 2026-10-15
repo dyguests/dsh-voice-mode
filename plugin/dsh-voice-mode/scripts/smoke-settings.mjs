@@ -46,6 +46,16 @@ async function clickText(re, sel = 'button,[role=button],[role=tab],[role=menuit
     return false
   }, { src: re.source, sel })
 }
+// 打开 Settings 弹窗：旧宿主侧栏直接有「Settings」；0.2.1-alpha.3 起收进侧栏底部的「More」菜单（需真实点击）。
+async function openSettings(pg, directClick) {
+  if (await directClick()) return true
+  try {
+    await pg.getByText(/^(More|更多)$/).first().click({ timeout: 2000 })
+    await pg.waitForTimeout(600)
+    await pg.getByText(/^(Settings|设置)$/).first().click({ timeout: 2000 })
+    return true
+  } catch { return false }
+}
 async function dismissOnboarding() {
   for (let i = 0; i < 8; i++) {
     if (!(await page.evaluate(() => !!document.querySelector('[role="dialog"]')))) break
@@ -91,7 +101,7 @@ try {
     await page.goto(url, { waitUntil: 'load' })
     await page.waitForTimeout(1500)
     await dismissOnboarding()
-    if (await clickText(/^settings$/i)) {
+    if (await openSettings(page, () => clickText(/^settings$/i))) {
       await page.waitForTimeout(1200)
       await clickText(/^plugins$/i, '[role=dialog] button,[role=dialog] [role=tab],[role=dialog] a,[role=dialog] li')
       await page.waitForTimeout(1200)
@@ -137,7 +147,7 @@ try {
   await page.waitForTimeout(1500)
   await dismissOnboarding()
   let sectionOk = false
-  if (await clickText(/^settings$/i)) {
+  if (await openSettings(page, () => clickText(/^settings$/i))) {
     await page.waitForTimeout(1200)
     if (await clickText(/voice mode|语音模式/i, '[role=dialog] button,[role=dialog] [role=tab],[role=dialog] a,[role=dialog] li')) {
       await page.waitForTimeout(1500)
@@ -172,7 +182,7 @@ try {
       if (e) { e.click(); return true }
       return false
     }, { src: re.source, sel })
-    if (!(await click(/^(settings|设置)$/, 'button,[role=button]'))) return ''
+    if (!(await openSettings(p, () => click(/^(settings|设置)$/, 'button,[role=button]')))) return ''
     await p.waitForTimeout(1200)
     if (!(await click(/voice mode|语音模式/, '[role=dialog] button,[role=dialog] [role=tab],[role=dialog] a,[role=dialog] li'))) return ''
     await p.waitForTimeout(1500)

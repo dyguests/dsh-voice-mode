@@ -357,7 +357,8 @@
 
 ### 剩余（均不紧急）
 
-- dsh 上游 0.2.1-alpha.2 已于 2026-10-10 复核通过（compat-contract §17），`check-dsh-version.sh` 退出 0；插件行为零改动，未发版。
+- dsh 上游 0.2.1-alpha.2（§17）、0.2.1-alpha.3（§18，2026-10-15）已复核通过；alpha.3 的设置入口移入侧栏 More 菜单，插件无需改动、冒烟脚本已适配。
+- **待发补丁版（2026-10-15 发现）**：Edge 云端 TTS 对 msedge-tts ≤2.0.9 握手 403，源码已升 2.1.0 并重建（未提交发布前，已发布的 v0.7.23 Edge 朗读不可用）；发版见 docs/RELEASE-WORKFLOW.md。
 
 - 只能真机验证（均为 OS 层，已无法再用 Linux 缩小）：macOS 的系统麦克风授权（`systemPreferences`）、Windows 安装器与 PATH 行为、真实硬件独占行为。
 - CONTEXT.md「已知待办」长期遗留项：原生 AEC 失效兜底（耳机/Safari 无真机数据）、ADR-0006 第一级探测部分实现、Ctrl 强制发送在已停顿但草稿有累积时不 flush、松手恰在 30s 滚段边界的竞态。
