@@ -125,7 +125,9 @@ export async function ensureModelFile(opts: EnsureModelOptions): Promise<boolean
   // 不删 .part：保留断点续传进度。慢网络（如 310MB Kokoro 主模型 @ ~250KB/s）
   // 单次请求无法下载完，删掉会让每次预览都从头开始、永远不完成。
   // 仅在校验失败（downloadVerified 内部 SHA 不匹配）时才清 .part——那里已处理。
-  broadcast('asr-error', { file: spec.file, reason: 'checksum_or_download_failed', detail: lastError })
+  // 原始错误串只进宿主日志；下行（SSE，所有客户端可见）不带，避免泄露路径/URL（host 只发稳定码的约定）。
+  if (lastError) console.warn(`[dsh-voice-mode] model download failed: ${spec.file}: ${lastError}`)
+  broadcast('asr-error', { file: spec.file, reason: 'checksum_or_download_failed' })
   return false
 }
 
@@ -210,6 +212,16 @@ async function downloadVerified(opts: {
  * 判定，不逐一校验 SHA（均为官方仓库的非权重资产；权重类仍走 ensureModelFile 强校验）。
  * 任一文件在所有上游失败时返回 false（上层可退避重试）。
  */
+/**
+ * 模型树条目路径校验：条目名来自远端 API（siblings.rfilename），不可信。
+ * 必须落在 subdir/ 之下，且不含 `..` / `.` / 空段 / 反斜杠 / NUL，防止经 join(repoDir, rel) 写出缓存目录。
+ */
+export function isSafeModelRel(rel: string, subdir: string): boolean {
+  if (!rel.startsWith(subdir + '/')) return false
+  if (rel.includes('\\') || rel.includes('\0')) return false
+  return !rel.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')
+}
+
 export async function ensureModelTree(opts: {
   repo: string
   repoDir: string
@@ -230,7 +242,7 @@ export async function ensureModelTree(opts: {
       const res = await fetch(host + '/api/models/' + repo + '?blobs=true', { headers: { 'user-agent': 'dsh-voice-mode' } })
       if (res.ok) {
         const j = (await res.json()) as { siblings?: Array<{ rfilename?: string }> }
-        tree = (j.siblings ?? []).map((s) => s.rfilename ?? '').filter((f) => f.startsWith(subdir + '/') && f.length > 0)
+        tree = (j.siblings ?? []).map((s) => s.rfilename ?? '').filter((f) => isSafeModelRel(f, subdir))
         if (tree.length > 0) break
       }
     } catch {

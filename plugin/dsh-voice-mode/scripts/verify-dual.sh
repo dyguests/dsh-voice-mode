@@ -46,7 +46,7 @@ echo "======== 2/14 十五版本 typecheck ========"
 bash scripts/typecheck-dual.sh 0.1.1-rc.2 0.1.2-rc.1 0.1.5-rc.1 0.1.5-rc.2 0.1.5-rc.3 0.1.6-alpha.2 0.1.7-alpha.1 0.1.7-alpha.2 0.1.7-rc.1 0.1.7-rc.2 0.2.0-rc.1 0.2.0-rc.2 0.2.1-alpha.1 0.2.1-alpha.2 0.2.1-alpha.3
 
 echo "======== 3/14 runtime 冒烟 0.1.1 ========"
-bash scripts/smoke-runtime.sh "$CORE_011" 3135
+DSH_TEST_SKIP_HMR_WATCH=1 bash scripts/smoke-runtime.sh "$CORE_011" 3135   # 0.1.1 核心需 HMR 跳过夹具（ensure-core.sh 自动打）
 
 echo "======== 4/14 runtime 冒烟 0.1.5 ========"
 bash scripts/smoke-runtime.sh "$CORE_015" 3136

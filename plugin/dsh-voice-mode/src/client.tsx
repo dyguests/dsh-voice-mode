@@ -961,11 +961,24 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     // 不朗读」根因之一）。ttsNotice 由下一次成功播音清除（play 路径 setUi ttsNotice:null）。
     source.addEventListener('tts-skip', (e: MessageEvent<string>) => {
       try {
-        const p = JSON.parse(e.data) as { sessionId?: string; text?: string }
+        const p = JSON.parse(e.data) as { sessionId?: string; text?: string; streak?: number }
         if (p.sessionId !== activeSessionId) return
-        ui.ttsNotice = t('ttsSkipNotice')
+        // 连续 ≥2 句失败：不是偶发抖动而是朗读服务整体不可用——给可行动的提示（切本地引擎），
+        // 并在首次越线时弹一次 toast（状态条的 ttsNotice 优先级最低，回复期间常被「思考中」遮蔽）。
+        const down = (p.streak ?? 1) >= 2
+        const msg = down ? t('ttsUnavailableNotice') : t('ttsSkipNotice')
+        ui.ttsNotice = msg
+        if (down && p.streak === 2) {
+          ui.error = msg
+          setTimeout(() => {
+            if (ui.error === msg) {
+              ui.error = null
+              notify()
+            }
+          }, 8000)
+        }
         notify()
-        debugLog('tts-skip', { text: (p.text ?? '').slice(0, 40) })
+        debugLog('tts-skip', { text: (p.text ?? '').slice(0, 40), streak: p.streak })
       } catch {
         // ignore malformed frame
       }

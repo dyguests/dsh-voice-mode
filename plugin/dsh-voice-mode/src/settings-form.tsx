@@ -766,7 +766,7 @@ function EngineStatusInline(): React.ReactElement {
               : tr('ttsDownload')}
         </button>
       )}
-      {tts.error && <span style={{ fontSize: 11, color: 'var(--dsw-alias-state-error-primary)', flexBasis: '100%' }}>{tts.errorCode === 'kokoro_needs_node' ? tr('errKokoroNeedsNode') : tts.error}</span>}
+      {tts.error && <span style={{ fontSize: 11, color: 'var(--dsw-alias-state-error-primary)', flexBasis: '100%' }}>{tts.errorCode === 'kokoro_needs_node' ? tr('errKokoroNeedsNode') : tr('engineError')}</span>}
     </div>
   )
 }

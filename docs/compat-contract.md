@@ -654,4 +654,11 @@ class AgentDefaultModelConfig extends Service {
 - **界面变化（插件本身无需改动）**：alpha.3 的侧栏底部不再有「Settings」按钮，改为「More」菜单内的「Settings」；设置弹窗里原「Plugins」改名「Built-in plugins」，并新增 `dsh-client-ui-plugin-manager` / `-settings-plugin-inventory` / `-settings-shell` 三个包。本插件两处设置入口都仍有效：设置弹窗内「Voice Mode」专属页（`settings.section`）与插件详情页卡片（`plugins.bundle.config`）。`scripts/smoke-settings.mjs` 新增 `openSettings()`：先找直接按钮，找不到再走 More 菜单；已用 alpha.3 与线上 0.2.0-rc.2 回归通过。
 - **Edge 云端 TTS 同日失效（与 dsh 无关）**：Edge 默认朗读引擎对内联的 msedge-tts 2.0.7 / 2.0.9 的 WebSocket 握手一律返回 403（`Sec-MS-GEC-Version` 等握手参数被服务端拒绝）；msedge-tts **2.1.0**（2026-10-13 发布）握手参数已更新，实测合成成功。已将构建期依赖升到 `^2.1.0` 并重新内联（`lib/msedge-tts.cjs`、`THIRD_PARTY_NOTICES.md`、`pnpm-lock.yaml`）；已发布的 v0.7.23 及更早版本的 Edge 朗读受影响，需发补丁版。
 - 已纳入 `verify-dual.sh` 字面量矩阵（15 版锚点/typecheck、12 核心冒烟）。
+- **v0.7.24 发版前全矩阵（2026-10-15，对当前源码构建）**：
+  - 15 版锚点 9/9 + 15 版 host/client 双 typecheck 全绿；
+  - 12 个隔离核心 runtime 冒烟全绿（0.1.1-rc.2 / 0.1.5-rc.3 / 0.1.6-alpha.2 / 0.1.7-alpha.2 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.1 / 0.2.0-rc.2 / 0.2.1-alpha.1 / .2 / .3 + 线上全局 0.2.0-rc.2）；
+  - 真 LLM + 真实语音闭环（说话→识别→自动发送→LLM 回复→Edge 朗读帧到达客户端）在 0.2.1-alpha.3、线上 0.2.0-rc.2、0.1.7-rc.2 上通过；
+  - **负面路径**（`DSHVM_VOICE_LOOP=1 DSHVM_TTS_DOWN=1 bash scripts/full-e2e.sh <核心> <端口>`，预加载 `scripts/fixtures/block-edge-tts.cjs` 让 Edge 域名连接一律失败）：host 连续跳过计数到达 2，客户端出现「云端朗读暂不可用」可行动提示；反向验证（换回改动前的 lib）这两条断言都变红。
+- 测试装置修复（与插件代码无关）：`smoke-runtime.sh` 补就绪等待——旧核心先打印 URL 后监听，curl 连接被拒会因 `set -e` 以 exit 7 误杀；原写法 `curl -w ... || echo "000"` 在失败时输出 `000000` 而永远判「已就绪」，`full-e2e.sh` 同款写法一并修正；`ensure-core.sh` 对 0.1.0-*/0.1.1-* 自动打 `DSH_TEST_SKIP_HMR_WATCH` 夹具（先 cp 出新 inode 再覆盖，不改 pnpm store 里的共享文件），`verify-dual.sh` 的 0.1.1 冒烟带上该环境变量。
+- 说明：msedge-tts 2.1.0 把 Edge TTS 端点换为 `api.msedgeservices.com`（旧版为 `speech.platform.bing.com`），夹具按两个域名都拦。
 

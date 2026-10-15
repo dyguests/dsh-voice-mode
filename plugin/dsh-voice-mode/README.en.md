@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue)](./LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases)](https://github.com/qishuilalala/dsh-voice-mode/releases)
 [![npm version](https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange)](https://www.npmjs.com/package/dsh-voice-mode)
-[![Tests: 433 passing](https://img.shields.io/badge/tests-433%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
+[![Tests: 440 passing](https://img.shields.io/badge/tests-440%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
 
 Full-duplex voice conversation mode for DeepSeek Harness (dsh): speak, get a
 spoken answer. Streamed zipformer2 ASR → editable draft → auto send → the
@@ -16,7 +16,7 @@ interrupts playback and the running turn. No API key.
 
 ![Real recording: streaming transcription → auto-send → sentence-by-sentence read-aloud with live captions](https://raw.githubusercontent.com/qishuilalala/dsh-voice-mode/HEAD/plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
 
-> **Runtime changes (most recent batch: v0.7.17 – v0.7.19, 2026-10-02)**: (1) **Settings work on every dsh version** — fixed the settings page and persistence on dsh 0.1.7+ (dedicated Settings → Voice Mode page, writes survive restarts); (2) **i18n reworked** — the UI follows dsh's official language setting, Chinese/English are fully consistent and switch without a reload; (3) **fixed fresh-install failures with npm/pnpm and `failed to import` on dsh ≥0.1.7** (affects 0.7.17 and earlier — please upgrade to ≥0.7.18); (4) **local Kokoro fixed on the official Electron desktop host** — needs Node.js ≥18 on PATH (see the desktop note below). Earlier batches (v0.7.10: silent-audio fixes, etc.) and the full history are in [`CHANGELOG.md`](https://github.com/qishuilalala/dsh-voice-mode/blob/main/CHANGELOG.md).
+> **Runtime changes (latest: v0.7.18 – v0.7.24)**: (1) **Settings work on every dsh version** — fixed the settings page and persistence on dsh 0.1.7+ (Settings → Voice Mode page, writes survive restarts); (2) **i18n rebuilt** — the UI follows dsh's official language setting, zh/en fully consistent, switching needs no refresh; (3) **fixed fresh npm/pnpm installs and the dsh ≥0.1.7 installed-form "failed to import"** (0.7.17 and earlier are affected — upgrade to ≥0.7.18); (4) **local Kokoro fixed under the official desktop (Electron) app** — needs Node.js ≥18 on PATH (or set `DSHVM_NODE`); (5) **v0.7.24: Edge cloud read-aloud restored** — since 2026-10-15 Microsoft's service rejects the old handshake (v0.7.23 and earlier are silent on the default Edge engine; local VITS / Kokoro are unaffected), so the inlined msedge-tts is bumped to 2.1.0; when read-aloud **fails several sentences in a row** the plugin now suggests switching to a local engine; plus host hardening (`/models/retry` is same-origin POST only, model-tree path checks, raw error strings no longer sent downstream). Compatible with dsh up to 0.2.1-alpha.3 (its Settings entry moved into the sidebar "More" menu; both of this plugin's entry points still work).
 
 ---
 
@@ -41,7 +41,7 @@ interrupts playback and the running turn. No API key.
   - `hold` push-to-talk: short tap to enter/exit, **hold the mic button to talk, release to send** (swipe up to cancel, `Esc`/blur abandons the segment; pauses do not split while held, up to 10 min); hold `Ctrl` to record-by-keyboard, release to send
 - **Wake word (optional, off by default)**: after setting `wakeWord`, entering voice mode starts in standby, and recognition only begins once the wake word is spoken (e.g. `你好小D`). **You may say it together with your command** ("wake word, check the weather") — the wake word is stripped from the transcript/caption and never sent; matching is fault-tolerant (homophone substitutions, a wrong first char, leading fillers); 3-4 characters recommended; in standby the status bar live-shows "say '<word>' · what it heard". Boundaries (important): **toggle mode only** (inactive with `hold` / manual barge-in); **it must be repeated after each completed utterance or barge-in** (if you only said the wake word, the engine keeps listening so you may pause before the command); **saying it while the agent is reading does not trigger** (barge-in is VAD-based and unrelated to the wake word)
 - **Caption tiers (batch 3)**: `captionFontSize` 4 levels (0=12px / 1=14px / 2=18px / 3=24px) + `captionMaxWidth` 3 levels (0=50vw / 1=70vw / 2=90vw); adapts to narrow viewports
-- **Yield semantics (batch 5 / ADR-0008)**: `backchannelYield` on by default (I10-exempt) — saying `嗯 / 对 / right` while the AI is reading auto-pauses for 1.5 s; genuine speech still triggers hard barge-in; lets the LLM yield the turn
+- **Yield semantics (ADR-0008)**: `backchannelYield` on by default — saying `嗯 / 对 / right` while the AI is reading auto-pauses for 1.5 s; genuine speech still triggers hard barge-in; lets the LLM yield the turn
 - **Output pipeline**: only the final answer's `text-delta` is read (reasoning/tool calls are skipped), streamed sentence-by-sentence (Edge cloud by default; local VITS / Kokoro, int8/fp32, optional) with a live caption overlay at the bottom-right; tool calls trigger a beep; the full text is still written to the chat; in voice mode a spoken-format system prompt is injected (short natural sentences, no Markdown decoration), and the reader side strips markers as well for a smoother listening experience
 - **Barge-in**: three sensitivity levels of voice-onset detection → local mute + host synth queue invalidation (epoch) + running turn cancellation (the half-finished part is kept and naturally flows into your new message). With a wake word set, barge-in **remains speak-to-interrupt** (the gate is the VAD, not the wake word; the engine returns to standby afterwards)
 - **Lazy model download with progress**: the zipformer2 Chinese streaming model (~160 MB, `.part` resumable) is downloaded on first use with live progress in the status bar; `npm run prefetch` can pre-download it
@@ -78,7 +78,7 @@ dsh plugin --profile web add dsh-voice-mode
 npx -y @deepseek-ai/dsh plugin --profile web add dsh-voice-mode
 
 # Option 2: local tarball
-dsh plugin --profile web add ./dsh-voice-mode-0.1.0.tgz
+dsh plugin --profile web add ./dsh-voice-mode-<version>.tgz
 
 # Option 3: from source
 git clone https://github.com/qishuilalala/dsh-voice-mode.git
@@ -120,26 +120,7 @@ If a wake word is configured, you land in standby first (the status bar prompts 
 - On dsh 0.1.7+ the values are stored in the plugin's own file `~/.dsh/voice-mode.settings.json` (under `$DSH_HOME`) and take precedence over same-named keys in the profile config. The first run migrates the old `voice-mode:` block from `settings.yaml(.imported)` once. To reset, set the file's content to `{}` (do not delete it).
 
 
-### 4 new settings (11 batches of comprehensive fixes)
-
-| Key | Default | Description |
-| --- | --- | --- |
-| `senseITN` | `true` | Batch 2 P0: SenseVoice inverse text normalization (number / date / currency; on by default) |
-| `captionFontSize` | `0` | Batch 3 P0: caption font tier 0=12px / 1=14px / 2=18px / 3=24px (default 0 is byte-equivalent to legacy) |
-| `captionMaxWidth` | `1` | Batch 3 P0: caption width tier 0=50vw / 1=70vw / 2=90vw |
-| `backchannelYield` | `true` | Batch 5 P1: yield semantics (ADR-0008); saying `嗯 / 对` while reading auto-pauses for 1.5 s; genuine speech still triggers hard barge-in. I10-exempt (default-on is a product decision); off = behavior identical to pre-change |
-
-### 5 defaults micro-adjusted (batch J)
-
-| Key | Old | New | Why |
-| --- | --- | --- | --- |
-| `rate` | 1.0 | **1.1** | Edge TTS defaults slightly slow; +10% improves perceived quality |
-| `idleTimeoutMinutes` | 10 | **5** | More responsive idle exit (reading still counts as activity) |
-| `interruptLevel` description | old wording | new wording | Make "3/2/1 frame confirmation" explicit |
-
-> Field names unchanged → 100% backward compatible with existing `~/.dsh/settings.yaml`.
-
-### Full 19-key settings table
+### Full 23-key settings table
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -161,10 +142,10 @@ If a wake word is configured, you land in standby first (the status bar prompts 
 | `spokenFormat` | `true` | Spoken-format system prompt: inject "short natural sentences, no Markdown decoration" into voice-mode replies only, **applies live** |
 | `senseVoice` | `true` | Re-transcribe the finalized utterance with SenseVoice (punctuation + number normalization, more accurate; on by default). **Turning it off saves ~228 MB of models** and uses streaming recognition only (faster, less accurate) |
 | `toolBeep` | `false` | Tool-call beep (off by default): when on, a short beep plays each time the agent calls a tool; off = silent |
-| `senseITN` | `true` | Batch 2 P0: SenseVoice inverse text normalization (number / date / currency; on by default) |
-| `captionFontSize` | `0` | Batch 3 P0: caption font tier 0=12px / 1=14px / 2=18px / 3=24px (default 0 is byte-equivalent to legacy) |
-| `captionMaxWidth` | `1` | Batch 3 P0: caption width tier 0=50vw / 1=70vw / 2=90vw |
-| `backchannelYield` | `true` | Batch 5 P1: yield semantics (ADR-0008); saying `嗯 / 对` while reading auto-pauses for 1.5 s; genuine speech still triggers hard barge-in. I10-exempt (default-on is a product decision); off = behavior identical to pre-change |
+| `senseITN` | `true` | SenseVoice inverse text normalization (number / date / currency; on by default) |
+| `captionFontSize` | `0` | Caption font tier 0=12px / 1=14px / 2=18px / 3=24px (default 0 is byte-equivalent to legacy) |
+| `captionMaxWidth` | `1` | Caption width tier 0=50vw / 1=70vw / 2=90vw |
+| `backchannelYield` | `true` | Yield semantics (ADR-0008); saying `嗯 / 对` while reading auto-pauses for 1.5 s; genuine speech still triggers hard barge-in; off = behavior identical to pre-change |
 | `yieldMs` | `1500` | Yield-window length (ms, 500-3000): how long TTS frames are dropped after `backchannelYield` triggers; if you really want to speak in the window the normal `hardBreak` takes over, and playback resumes when the window ends |
 
 Effect timing: `voice`/`rate`/`ttsEngine`/`kokoroModel`/`spokenFormat` take effect **immediately** (TTS hot-swap); the rest apply on the next voice-mode entry. Defaults come from the plugin config (`base` layer) — they follow the config unless explicitly changed.
@@ -296,10 +277,9 @@ flowchart LR
 | Multi-language | English-first | **SenseVoice auto-recognition + ITN** |
 | TTS engine | Cloud TTS | **Edge cloud + local VITS/Kokoro** (three-way switch) |
 | Barge-in detection | Basic VAD | **3 sensitivity levels + echo gate + yield semantics** |
-| Hotword biasing | None | None (removed in v0.7.7; see version note) |
 | Caption a11y | None | **4 font tiers + 3 width tiers + theme-following** |
 | Wake word | None | **Lightweight streaming match + prefix filler whitelist** |
-| dsh compatibility | — | **full range since 0.1.1-rc.2 (incl. 0.1.7-rc.1)** |
+| dsh compatibility | — | **full range since 0.1.1-rc.2 (incl. 0.2.1-alpha.3)** |
 
 ---
 
@@ -328,7 +308,7 @@ Also: the on-device recording fixture used for debugging is **off by default**; 
 
 ## 🚧 Known limitations
 
-- Barge-in relies on browser echo cancellation (`echoCancellation`); loud speaker volume may leak into the mic (no JS-level AEC)
+- Barge-in relies on browser echo cancellation (`echoCancellation`); loud speaker volume may leak into the mic (a self-built NLMS canceller only kicks in as a fallback when native AEC is unavailable)
 - `Ctrl+Shift+V` overrides the browser's "paste as plain text" shortcut (normal `Ctrl+V` paste still works)
 - The recognition model prioritizes Simplified Chinese; recognition quality is affected by ambient noise
 - Browser autoplay policy: reading requires prior user interaction on the page (clicking the mic satisfies it); if the browser blocks playback and the status bar shows no hint, make sure the page is foregrounded and not muted
@@ -336,6 +316,11 @@ Also: the on-device recording fixture used for debugging is **off by default**; 
 - In hold mode, switching windows/tabs while holding **abandons the segment** (prevents continuous recording); come back and hold again
 - The hero (new-session empty state) has no voice entry: voice mode is a session-level feature; enter a session first and use the mic button in the input toolbar
 - The preview request timeout uses `AbortSignal.timeout` (Chrome 103+ / Firefox 100+ / Safari 16+); on older browsers clicking preview immediately shows a failure hint — an expected degradation
+- **Cloud read-aloud (Edge) depends on a Microsoft online service**: the server side may change its handshake or limits at any time (it did on 2026-10-15 — see CHANGELOG 0.7.24). If several sentences in a row fail, the status bar/toast suggests switching to local VITS / Kokoro, which the settings panel does in one click
+- `spokenFormat` is injected through the official `system-prompt/assemble` waterfall; if the current session uses a **complete prompt** (persona `complete: true` agent preset) it is not injected (the official `complete` contract wins)
+- Local Kokoro needs about 1 s to rebuild its engine before the next sentence after a barge-in (the price of killing in-flight synthesis)
+- **Apple Safari / iOS**: needs **HTTPS or localhost** (a secure context is mandatory; the mic is unavailable on `http://` LAN IPs); grant the mic on first entry (iOS: Settings → Safari → Microphone if denied); recognition and read-aloud pause while backgrounded or locked and resume on return (sentences may be lost)
+- **Security note**: the plugin's HTTP surface (`/voice-mode/*`) follows the host's security model — do not expose the dsh port to the public internet; behind a reverse proxy, authenticate at the proxy (e.g. basic auth)
 
 ---
 
@@ -347,6 +332,7 @@ Also: the on-device recording fixture used for debugging is **off by default**; 
 | Status bar stuck on `Loading model… x%` | Check the network; the model is large (160 MB) — `npm run prefetch` first; on mainland networks set `modelHost` to `https://hf-mirror.com` |
 | Status bar shows `Model download failed (<file>)` | Both mirrors are unreachable: check network/proxy and re-enter voice mode (resumable) |
 | Local Kokoro on the official desktop app shows "failed" and asks for Node.js | The desktop host is Electron, where Kokoro's native add-on cannot run: install Node.js >= 18 on PATH (or set `DSHVM_NODE` to its path) and retry, or use the default Edge / local VITS (unaffected on desktop) |
+| No sound and no captions on the default (Edge cloud) engine | Edge read-aloud depends on a Microsoft online service. If several sentences fail in a row you will see "cloud read-aloud unavailable" — switch the engine to local VITS / Kokoro in settings. v0.7.23 and earlier are silent since 2026-10-15 (server-side handshake rejection) — upgrade to ≥0.7.24 |
 | Caption appears (overlay) but no sound | Check system volume/output; if autoplay is blocked, click anywhere on the page and retry |
 | Status bar shows `朗读连接失败：正在重试…` | Edge TTS unreachable (overseas service), auto-retries; if it persists, check network/proxy |
 | Poor recognition | Get closer to the mic, reduce ambient noise; if echo remains, raise the interrupt sensitivity by one step |
@@ -375,33 +361,20 @@ Full backlog (43 P0-P3 items) at [`docs/competitive/backlog.md`](https://github.
 
 ### Dependency discipline (important)
 
-Three categories, each with its own home:
+- **Runtime dependencies** (`dependencies`): `@deepseek-ai/schemastery`, `sherpa-onnx`, `sherpa-onnx-node` — external at runtime, resolved from the registry.
+- **`msedge-tts` is a build-time `devDependency`** and is inlined together with all of its transitive dependencies into `lib/msedge-tts.cjs` (ADR-0011): it ships a `preinstall: npx only-allow pnpm` that pnpm 11 rejects, and its `require("buffer/index")` breaks under dsh ≥0.1.7's resolver. Inlined packages are listed in `THIRD_PARTY_NOTICES.md`; the inlined `axios` is pinned `>=1.20.0` via `pnpm-workspace.yaml` overrides, and CI runs `pnpm audit`.
+- **Host framework packages** (`@deepseek-ai/cordis`, `react`) → `peerDependencies` (provided by the dsh runtime; putting them in `dependencies` would make dshmarket treat the plugin as shadowing host versions).
+- **Type-only references** (`@deepseek-ai/dsh-settings` / `dsh-host-webserver` / `dsh-llm` / `dsh-system-prompt`) are `devDependencies` used for type checking only; no runtime imports between instances.
 
-- **Third-party runtime deps** (`msedge-tts` / `sherpa-onnx`) and **registry-resolvable framework packages**
-  (`@deepseek-ai/schemastery`) → `dependencies`. schemastery is a public npm package and the
-  dsh host platform does not shadow it internally, so installing it into a profile causes no
-  version conflicts.
-- **Host framework packages** (`@deepseek-ai/cordis` / `@deepseek-ai/dsh-web` / `react`) →
-  `peerDependencies`. Host packages are provided by the dsh runtime; putting them in
-  dependencies makes dshmarket treat it as "shadowing host versions" and blocks marketplace
-  upgrades. Peer versions must match the current dsh runtime
-  (locally: cordis `^4.0.1`, dsh-web `^0.1.0-rc.6 || ^0.1.1-rc.0`, react `^18.2.0`),
-  and be bumped when dsh is upgraded.
-- **Type-only references** (`@deepseek-ai/dsh-settings` / `dsh-host-webserver` / `dsh-llm`) →
-  no runtime imports between instances (`import type` + esbuild stripping), no declaration needed;
-  during development the types link via pnpm `file:` to the local dsh distribution's node_modules
-  (the registry's rc.1 type snapshot lags behind the distribution; the distribution types are the
-  runtime truth).
-
-`dependencies` must contain only true third-party runtime deps — never host-shared packages; after
-changing deps, run `npm pack --dry-run` and `pnpm test` as regression.
+After changing dependencies run `npm pack --dry-run`, `npm test` and `bash scripts/verify-install.sh` (fresh install of the packed tarball with pnpm + npm).
 
 ### Build & test
 
 ```sh
-pnpm install && pnpm build    # esbuild: lib/index.js (host) + lib/client.js (browser)
-pnpm test                     # segmenter/wakeword unit tests + pre-release self-check (no network)
-node test/hold-e2e.js         # hold-mode acceptance (standalone browser, /asr route interception)
+pnpm install && pnpm build    # esbuild: lib/index.js (host) + lib/client.js (browser) + lib/msedge-tts.cjs
+pnpm test                     # 34 test files chained: unit tests + harnesses (fake browser driving the real engine) + structure guards + pre-release self-check (no network)
+bash scripts/smoke-runtime.sh <dsh-core-bin.js> <port>   # boot an isolated dsh core: endpoints, mic button, settings page, i18n
+bash scripts/full-e2e.sh <dsh-core-bin.js> <port>        # real-LLM end to end: create → toggle → prompt → SSE audio frames
 systemctl restart dsh         # Linux; restart the dsh process on other platforms
 ```
 
@@ -412,18 +385,22 @@ systemctl restart dsh         # Linux; restart the dsh process on other platform
 ### Structure
 
 ```
-src/index.ts      host: single-active pointer, llm/stream tap, SSE, settings registration
-src/asr-host.ts   host: zipformer2 streaming ASR + lazy model download (.part resume)
-src/tts-queue.ts  host: per-session TTS queue + epoch barge-in
-src/segmenter.ts  host: sentence segmentation (markdown stripping + terminating punctuation)
-src/client.tsx    client: mic button + status bar + reading overlay + barge-in
-src/asr.ts        client: getUserMedia + RMS VAD + partial polling
-scripts/prefetch.mjs  model pre-download (cross-platform cache dir + resume)
-test/segmenter.test.mjs  sentence segmentation unit tests
-test/wakeword.test.mjs    wake-word matching unit tests
-test/verify-client.mjs   pre-release self-check (bundle manifest/exports/shape)
-test/hold-e2e.js          hold-mode end-to-end acceptance (standalone browser)
-scripts/list-voices.mjs   print all Edge TTS voices (source of the voice table)
+src/index.ts          host: single-active pointer, llm/stream tap, SSE, settings registration, spoken-style prompt injection
+src/asr-host.ts       host: zipformer2 streaming ASR + SenseVoice finalization + lazy model download (.part resume)
+src/models.ts         host: model download/verification (SHA256 pinning + host allowlist + path checks)
+src/security.ts       host: rate limiter and guards
+src/tts-local.ts      host: local TTS engines (VITS WASM / Kokoro native addon, child-process management)
+src/tts-runtime.ts    host: picks a real Node for the Kokoro child under Electron hosts
+src/tts-queue.ts      host: per-session TTS queue + epoch barge-in + consecutive-failure streak
+src/settings-store.ts, settings-http-scope.ts   host: ≥0.1.7 settings self-persistence (ADR-0009)
+src/segmenter.ts      host: sentence segmentation + text sanitizing
+src/asr.ts            client: capture, VAD segmentation, incremental recognition, wake word, hold-to-talk gate
+src/client.tsx        client: mic button + mode toggle + status bar + caption overlay + barge-in
+src/strings.ts, i18n.ts, error-text.ts   client: zh/en dictionary + official locale service + stable error-code texts
+src/voice-catalog.ts, voice-labels.ts    voice catalog (single source) + per-language labels
+src/errors.ts, prompts.ts                stable error codes; LLM spoken-style prompts and preview sentences
+test/*.test.mjs       unit tests, harnesses and structure guards (see `npm test`)
+scripts/              smoke-runtime.sh, full-e2e.sh, verify-install.sh, verify-dual.sh (version matrix), list-voices.mjs, prefetch.mjs
 ```
 
 Integration probes (`hold-e2e.js`, `spoken-prompt-rpc.sh`, `spoken-toggle-ui-check.js`) live in the repo root `test/`, outside this npm package.

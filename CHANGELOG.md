@@ -7,19 +7,37 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- **Edge 云端朗读恢复**：内联的 msedge-tts 2.0.7 对微软 Edge TTS 服务的握手被拒（403），默认朗读引擎无声；升级到 **2.1.0** 并重新内联（`lib/msedge-tts.cjs`、`THIRD_PARTY_NOTICES.md`）。已发布版本需升级本插件才能恢复（本地 VITS / Kokoro 不受影响）。
-
-### 兼容
-
-- 复核 dsh 0.2.1-alpha.2 / 0.2.1-alpha.3（锚点 9/9、typecheck、runtime 冒烟、真 LLM 全流程）；alpha.3 起设置入口移入侧栏「More」菜单，插件两处设置入口仍有效，冒烟脚本已适配（详见 docs/compat-contract.md §17–§18）。
-
 ### 规划中
 
 - F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）
 - ADR-0003：client-side VAD 下沉（语音活动检测从 host 侧移至客户端，进一步压延迟）
 - 发布与美化批次：博客、发布说明与文档收尾（对应 `blog/` 与 `RELEASE-NOTES.md`）
+- 引擎层静态审计待办（需真机验证后再改，见 CONTEXT.md「已知待办」）
+
+## [0.7.24] - 2026-10-15
+
+**Patch**：恢复 Edge 云端朗读 + 朗读失败可见性 + host 加固 + 兼容 dsh 0.2.1-alpha.2 / alpha.3。
+
+### Fixed
+
+- **Edge 云端朗读恢复（影响 ≤0.7.23 的默认引擎）**：微软 Edge TTS 服务端自 2026-10-15 起对内联的 msedge-tts 2.0.7 / 2.0.9 的 WebSocket 握手一律返回 403，默认朗读引擎整体无声；升级到 **msedge-tts 2.1.0** 并重新内联（`lib/msedge-tts.cjs`、`THIRD_PARTY_NOTICES.md`）。本地 VITS / Kokoro 不受影响。
+- **朗读连续失败时给出可行动提示**：此前每句失败只提示「网络抖动，可重发」，且状态条优先级最低、回复期间常被「思考中」遮蔽，用户只会觉得「没声音」。现在 host 的 `tts-skip` 带连续失败计数，连续 ≥2 句失败时弹出并持续显示「云端朗读暂不可用，可稍后再试或切换本地引擎」；预览的 `WebSocket error` 归入网络类。
+- **设置面板不再直出 host 原始错误串**（可能含路径），统一显示本地化文案。
+
+### Security
+
+- `/voice-mode/models/retry` 只接受**同源 POST**：跨站 `<img src>` 的 GET 不带 Origin，原先可让本机悄悄下载约 388MB 模型。
+- 模型树下载条目路径校验（拒绝 `..`、`.`、空段、反斜杠、NUL），防止远端 `rfilename` 经 `join` 写出缓存目录。
+- `asr-error` 的 SSE 下行不再携带原始下载错误串（改为只写宿主日志）。
+
+### 兼容
+
+- 复核 dsh **0.2.1-alpha.2 / 0.2.1-alpha.3**（锚点 9/9、双 typecheck、runtime 冒烟、真 LLM 全流程）。alpha.3 起设置入口移入侧栏「More」菜单、设置弹窗里的「Plugins」改名「Built-in plugins」；本插件两处设置入口（设置弹窗专属页 / 插件详情页卡片）仍有效，冒烟脚本已适配（详见 docs/compat-contract.md §17–§18）。
+
+### 测试与文档
+
+- 新增 `test/host-hardening.test.mjs`、连续失败计数与预览归类用例；单测 440 项 / 34 套件。
+- 架构图 `assets/architecture.svg` 重绘（旧图仍写「静音 700ms」且连线穿框）；README 去掉叠放的装饰图与过期的批次术语，中英文对齐，设置表以 23 项为准。
 
 ## [0.7.23] - 2026-10-08
 

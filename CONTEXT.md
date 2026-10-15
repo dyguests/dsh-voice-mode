@@ -72,14 +72,14 @@ DSH 语音双工插件：进入语音模式 → 流式识别入草稿 → 静音
 | ttsEngine | edge | 朗读引擎 edge / vits / kokoro（即时） |
 | kokoroModel | int8 | Kokoro 精度 int8（109MB，CPU）/ fp32（311MB，音质更好）；即时切换，两档共用 103 音色 |
 | voice | 按引擎 | VITS 说话人名 / Kokoro sid 或中文名 / Edge ShortName（即时） |
-| bargeInMode | detect | detect 自动打断（批 7O 默认，src/index.ts:208 真源）/ manual 长按打断（外放推荐） |
+| bargeInMode | detect | detect：开机探测本机原生 AEC，生效则自动打断，未生效自动落 manual；manual 长按打断（外放推荐）；`auto` 为旧值（src/index.ts:205 真源） |
 | echoGateDb | 6 | 打断要求 peak 高于 floor 此 dB；打不断降 3-4、噪音误打断升 8-10 |
 | interruptLevel | 0 | 确认帧数 3/2/1，越低越稳越慢 |
 | mode / silenceMs / shortcut / autoResume | toggle/1500/Ctrl+Shift+V/false | 交互/静音断句/快捷键/切回自动恢复 |
 | senseITN | true | 批 2 P0：SenseVoice 逆文本归一化（数字/日期规范化；默认开） |
 | captionFontSize | 0 | 批 3 P0：字幕字号档位 0=12px/1=14px/2=18px/3=24px（默认 0 与现状字节等价） |
 | captionMaxWidth | 1 | 批 3 P0：字幕宽度档位 0=50vw/1=70vw/2=90vw；视口 <686px 窄于 480px、≈686px 接近、>686px 宽于 480px |
-| backchannelYield | true | 批 5 P1：让位语义（ADR-0008）；朗读期说「嗯/对」自动让位 1.5s + 真要说走 hardBreak。I10 豁免（默认开是产品决策；体例同 bargeInMode 批 7O 豁免，R2 称半句已有） |
+| backchannelYield | true | 让位语义（ADR-0008）；朗读期说「嗯/对」自动让位 1.5s + 真要说走 hardBreak。默认开是产品决策 |
 
 ## 诊断
 
@@ -89,10 +89,13 @@ DSH 语音双工插件：进入语音模式 → 流式识别入草稿 → 静音
 
 - 原生 AEC 失效兜底（耳机无原生 AEC / Safari）：自研 AEC 的 delay 对齐需 FDLMS+RES；
   该场景**尚无真机数据**，也是回声地板棘轮唯一还可能发作的一格
-- ADR-0006 第一级探测**部分实现**：第一级自动落 manual 探测未做（批 7O 登记）；bargeInMode='manual' 闸门已于 8278097 接通；二级探测阈值可用 fixture verdict 数据标定
+- ADR-0006：第一级探测**已实现**（asr.ts:948-950 / client.tsx:1779-1790，探测到原生 AEC 失效即落 manual 并提示）；未做的是二级探测，阈值可用 fixture verdict 数据标定。
+  副作用：manual 下待机态拿不到音频，唤醒词不触发（设置面板已声明「hold / 手动打断下不生效」）——无原生 AEC 的浏览器（Safari）+ 唤醒词 = 持续聆听等于关闭
 - Ctrl 强制发送在「已停顿但草稿有累积」时不 flush（Minor，需处理 in-flight 定稿竞态）
 - 松手恰在 30s 滚段边界（~1-3s 窗口）的竞态（Rare，需给 hold 引入待发块队列）
-- 发布流程见 ~/.dsh/docs/RELEASE-MEMO.md（git push + npm publish + tag + GitHub release）
+- **2026-10-15 静态审计登记（未真机复核，发版前不盲改引擎）**：① `stop()` 落在 getUserMedia 之后、active=true 之前（resume/addModule 窗口）时麦克风不被清理（asr.ts:935-980、1086-1092）；② `stop()` 后紧跟 `start()` 时旧 stopRecorder 收尾会清掉新 audioCtx 引用（asr.ts:1038-1044，`void stop()` 调用点有风险）；③ toggle 下 Ctrl 取消 hold（endHeld(true)）不清 uploadedSamples/不 reset host 流，下一段开头丢一小段（asr.ts:1153-1163）；④ 回声地板棘轮：外放音量调大后 doubleTalk 持续为真，地板冻结在旧低值（asr.ts:753-756）；⑤ NLMS 权重一旦 NaN 永久输出 0（aec.ts:92/101）；⑥ 句切分：小数点落在 delta 边界会被拆句、跨 chunk 的 ``` 代码块会被朗读（segmenter.ts:173/195）
+- **host 侧待核对（依赖宿主 Host/Origin 前置防护）**：DNS rebinding（`sameOriginRequest` 只比 Origin 与 Host，不校验 Host 白名单；dsh 以 `--trusted-host` 启动时宿主已拦）；经 HTTPS 反代时回环判定与限流键都取 remoteAddress（所有用户共享一个桶）；`toggle:${sessionId}` 限流键先于会话存在性校验，可被任意构造占满 maxKeys；SSE `/stream` 无 Origin 校验、tabId/sessionId 可见；`/models/status` 经 `queue.status()` 透出本地引擎 engineError 原文
+- 发布流程见维护者本机文档（git push + npm publish + tag + GitHub release；`docs/RELEASE-WORKFLOW.md` 与 `scripts/release.sh`、`check-dsh-version.sh` 按 publication-policy 不入库）
 
 ## 声学基准与录制（ADR-0005）
 
@@ -107,4 +110,4 @@ DSH 语音双工插件：进入语音模式 → 流式识别入草稿 → 静音
 
 ## 关键源文件
 
-src/asr.ts（采集/门控/打断引擎）· fixture-recorder.ts（真机录制，默认关）· client.tsx（播放/参考池/手势/UI）· aec.ts（NLMS）· asr-host.ts（host ASR/检测通道）· index.ts（路由/SSE/owner）· tts-local.ts（本地 TTS VITS/Kokoro + 精度）· tts-queue.ts（逐会话队列/epoch 打断）· settings-form.tsx（设置面板）；tts-runtime.ts（Electron 宿主下 Kokoro 子进程的真 Node 选择，ADR-0011 后续）· settings-store.ts / settings-http-scope.ts（≥0.1.7 设置自持久化，ADR-0009）· i18n.ts / strings.ts / error-text.ts / errors.ts（国际化，ADR-0010）。测试装置：scripts/smoke-runtime.sh（已安装形态/Electron 宿主/桌面外壳 DSHVM_ELECTRON/语音链路 DSHVM_VOICE_CHAIN）、scripts/full-e2e.sh（DSHVM_VOICE_LOOP 真 LLM 闭环）、scripts/verify-install.sh（安装门禁）
+src/asr.ts（采集/门控/打断引擎）· fixture-recorder.ts（真机录制，默认关）· client.tsx（播放/参考池/手势/UI）· aec.ts（NLMS）· asr-host.ts（host ASR/检测通道）· index.ts（路由/SSE/owner）· tts-local.ts（本地 TTS VITS/Kokoro + 精度）· tts-queue.ts（逐会话队列/epoch 打断）· settings-form.tsx（设置面板）；tts-runtime.ts（Electron 宿主下 Kokoro 子进程的真 Node 选择，ADR-0011 后续）· settings-store.ts / settings-http-scope.ts（≥0.1.7 设置自持久化，ADR-0009）· i18n.ts / strings.ts / error-text.ts / errors.ts（国际化，ADR-0010）。测试装置：scripts/smoke-runtime.sh（已安装形态/Electron 宿主/桌面外壳 DSHVM_ELECTRON/语音链路 DSHVM_VOICE_CHAIN）、scripts/full-e2e.sh（DSHVM_VOICE_LOOP 真 LLM 闭环）、scripts/verify-install.sh（安装门禁）；test/host-hardening.test.mjs（/models/retry 仅同源 POST、模型树路径校验、错误原文不下行的守卫）

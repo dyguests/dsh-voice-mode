@@ -118,6 +118,12 @@ t('成功从 bundle 提取并执行真实 classifyPreviewError', () => {
 // --------------------------------------------------------------------------
 console.log('② network 归类（Edge 云端不可达 / DNS / 超时）')
 
+t('云端服务拒绝握手（Edge 403）归 network，不落 unknown', () => {
+  for (const m of ['Edge TTS WebSocket error: Unexpected server response: 403']) {
+    assert.equal(classifyPreviewError(m), 'network', `"${m}" 应归 network`)
+  }
+})
+
 t('网络类正例：fetch failed / ECONN / ENOTFOUND / ETIMEDOUT / socket hang up', () => {
   for (const m of ['fetch failed', 'ECONNREFUSED', 'getaddrinfo ENOTFOUND', 'ETIMEDOUT', 'socket hang up']) {
     assert.equal(classifyPreviewError(m), 'network', `"${m}" 应归 network`)

@@ -1,0 +1,25 @@
+name: Edge TTS live probe
+
+# 目的：默认朗读引擎 Edge 依赖微软在线服务，其握手/端点会不经通知变化（2026-10-15 即发生：msedge-tts ≤2.0.9 一律 403，
+# v0.7.23 及更早版本默认朗读整体无声）。本 workflow 每日用「发布包内联的 lib/msedge-tts.cjs」真实合成一句话，
+# 失败即红灯（GitHub 会通知仓库所有者），把「服务端悄悄变了」变成可见信号。
+# 探针依赖外网，故独立于 CI（push/PR 不跑），也不进 npm test。
+
+on:
+  schedule:
+    - cron: '23 3 * * *' # 每日 03:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Synthesize one sentence via the shipped lib/msedge-tts.cjs
+        run: node plugin/dsh-voice-mode/scripts/probe-edge-tts.mjs

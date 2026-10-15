@@ -117,6 +117,26 @@ await t('成功句不触发 onSkip（不误报）', async () => {
   assert.deepEqual(skipped, [], '正常句不应触发 onSkip')
 })
 
+console.log('C4 连续多句失败要能被识别（云端整体不可用 ≠ 偶发网络抖动）')
+
+await t('onSkip 带连续失败计数：连续失败递增，成功一句后清零', async () => {
+  const engine = makeStubEngine(['坏1', '坏2', '坏3', '坏4'])
+  const streaks = []
+  const frames = []
+  const q = new TtsQueue({ engine, onError: () => {}, onSkip: (_sid, _text, streak) => streaks.push(streak) })
+  q.subscribe((f) => frames.push(f))
+  q.enqueue('s1', '坏1')
+  q.enqueue('s1', '坏2')
+  q.enqueue('s1', '坏3')
+  assert.ok(await waitFor(() => streaks.length === 3, 8000), `应跳过 3 句（实际 ${streaks.length}）`)
+  assert.deepEqual(streaks, [1, 2, 3], '连续失败计数应为 1,2,3')
+  q.enqueue('s1', '好句')
+  assert.ok(await waitFor(() => frames.some((f) => f.final && f.text === '好句')), '成功句应出帧')
+  q.enqueue('s1', '坏4')
+  assert.ok(await waitFor(() => streaks.length === 4, 8000), '第 4 次跳过未触发')
+  assert.equal(streaks[3], 1, '成功一句后计数应清零重新从 1 计')
+})
+
 // ---------------- C2/C3：源码结构守卫 ----------------
 console.log('C2/C3 客户端结构守卫（防修复被误删）')
 
@@ -125,10 +145,12 @@ const queueSrc = readFileSync(join(here, '..', 'src', 'tts-queue.ts'), 'utf8')
 const indexSrc = readFileSync(join(here, '..', 'src', 'index.ts'), 'utf8')
 
 await t('C1 链：tts-queue 通知 → index 广播 tts-skip → 客户端提示', () => {
-  assert.ok(/this\.onSkip\?\.\(sessionId, item\.text\)/.test(queueSrc), 'tts-queue 缺 onSkip 调用')
+  assert.ok(/this\.onSkip\?\.\(sessionId, item\.text, q\.failStreak\)/.test(queueSrc), 'tts-queue 缺 onSkip 调用')
   assert.ok(/broadcast\('tts-skip'/.test(indexSrc), 'index 缺 tts-skip 广播')
   assert.ok(/addEventListener\('tts-skip'/.test(clientSrc), '客户端缺 tts-skip 处理')
   assert.ok(/t\('ttsSkipNotice'\)/.test(clientSrc), '客户端缺 ttsSkipNotice 文案引用')
+  assert.ok(/streak/.test(indexSrc), 'index 的 tts-skip 广播应携带 streak')
+  assert.ok(/t\('ttsUnavailableNotice'\)/.test(clientSrc), '客户端缺 ttsUnavailableNotice（连续失败的可行动提示）')
 })
 
 await t('C2 坏句丢弃留诊断（tts-drop-sentence）', () => {

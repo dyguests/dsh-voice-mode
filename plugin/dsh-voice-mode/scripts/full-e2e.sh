@@ -135,6 +135,12 @@ EOF
 # 且无 `--no-open`，此时传 BOOT_ARGS="--profile web --port $PORT --host 127.0.0.1"）。
 echo "== boot dsh 核心（port $PORT）=="
 # shellcheck disable=SC2086
+# DSHVM_TTS_DOWN=1：负面路径——预加载夹具让 Edge TTS 域名一律连接失败，验证「云端朗读整体不可用」时用户能看到可行动提示
+#（此模式下不要求朗读帧；只要求语音闭环里的失败提示断言通过）。
+if [ -n "${DSHVM_TTS_DOWN:-}" ]; then
+  export NODE_OPTIONS="--require $(cd "$(dirname "$0")" && pwd)/fixtures/block-edge-tts.cjs ${NODE_OPTIONS:-}"
+  echo "   [tts-down] 已预加载 block-edge-tts 夹具（NODE_OPTIONS）"
+fi
 DSH_HOME="$DSH_HOME" setsid node "$BIN" ${BOOT_ARGS:-web --port "$PORT" --host 127.0.0.1 --no-open} >"$BOOTLOG" 2>&1 &
 NODE_PID=$!
 
@@ -155,8 +161,8 @@ echo "   boot 成功: $URL"
 BASE="http://127.0.0.1:$PORT"
 READY=""
 for _ in $(seq 1 60); do
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$BASE/voice-mode" 2>/dev/null || echo "000")
-  if [ "$CODE" != "000" ]; then READY=1; break; fi
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$BASE/voice-mode" 2>/dev/null || true)
+  if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then READY=1; break; fi
   if ! kill -0 "$NODE_PID" 2>/dev/null; then
     echo "✗ dsh 在就绪等待期退出"; tail -30 "$BOOTLOG"; exit 1
   fi
@@ -230,7 +236,12 @@ RPC_TTS_ERR="${RPC_TTS_ERR:-0}"
 # DSHVM_VOICE_LOOP=1：语音完整闭环（真实语音→识别→自动发送→真 LLM 回复→朗读帧到达客户端；需本机已缓存 VITS/zipformer 模型）
 if [ -n "${DSHVM_VOICE_LOOP:-}" ]; then
   echo "== 语音完整闭环（真 LLM）=="
-  node "$(dirname "$0")/smoke-voice-chain.mjs" "$URL" --loop || fail=1
+  node "$(dirname "$0")/smoke-voice-chain.mjs" "$URL" --loop ${DSHVM_TTS_DOWN:+--tts-down} || fail=1
+fi
+
+if [ -n "${DSHVM_TTS_DOWN:-}" ]; then
+  [ "$fail" -eq 0 ] && { echo "✓ full-e2e(tts-down) PASS: 云端朗读整体不可用时，客户端给出可行动提示"; exit 0; }
+  echo "✗ full-e2e(tts-down) FAIL"; exit 1
 fi
 
 [ "$fail" -eq 0 ] && [ "$RPC_SSE" -ge 1 ] && [ "$RPC_TTS_ERR" -eq 0 ] && {

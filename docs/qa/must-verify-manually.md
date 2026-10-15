@@ -1,6 +1,6 @@
 # 必须人工复核最小清单
 
-> **定位**：AI 已自动验证 372 项 npm test（曾记 245/254/281/325/354/355/362/371 已过时；实测 = 批 7O 后 325 基线 + issue #10 唤醒词批（wakeword 11→38、新增 wake-standby 11 + wake-flow 9：假浏览器+假 host 驱动真引擎的唤醒流程台架））+ tsc 0 错 + verify:dual 4 版（锚点/typecheck/host 3 端点/client mic/console）+ 不变量 I1-I10 + `/voice-mode/config` 4 字段全 non-null（senseITN/captionFontSize/captionMaxWidth/backchannelYield）。仅剩「AI 无法验证」项需人工。
+> **定位**：AI 已自动验证全部 `npm test`（当前 440 项 / 34 套件，数字以 `npm test` 与 `docs/qa/TEST-SYSTEM.md` 为准，不在此处维护）；本清单只列**必须真机/人工**才能确认的少数项。
 > **基线**：HEAD = `5e2d34f`（批 7O 代码块收口，src+lib 一致；其后块 3 纯文档/资产 commit 不改代码态）；**完整 4 项必过**＝精简自原 21 项 + 批 7N 新增 manual 项（批 1 热词 / 批 2 锁语种已砍，详见 `real-machine-acceptance-checklist.md` 头部删项说明 + `docs/competitive/backlog.md`「已落地对照区」节）。
 > **纪律**：每项单点验证；失败即停发版，回滚对应 commit。
 > **批 7M 🔴 砍 + 批 7N 🟡 重做 落地注记（2026-09-16）**：4 项砍除（`recognitionLanguage` / `asrHotwords`+`asrHotwordsScore`+模块 / `docs/qa/user-experience-flow.md`）+ 5 项重做（`bargeInMode='manual'` 接通 / echoGateDb+autoResume 描述对齐 / 端到端补测 3 项 / ADR-0003+0004 重命名 / autoResume 文案统一）；本清单「4 项必过」已对齐砍后 src/ 现状。

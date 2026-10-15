@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases)](https://github.com/qishuilalala/dsh-voice-mode/releases)
 [![npm version](https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange)](https://www.npmjs.com/package/dsh-voice-mode)
-[![Tests: 433 passing](https://img.shields.io/badge/tests-433%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
+[![Tests: 440 passing](https://img.shields.io/badge/tests-440%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
 
 DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边出字的流式识别 → 停顿自动发送 → 最终答复按句流式朗读 + 实时字幕，开口即可打断（真 barge-in）。无需 API Key，识别模型在本地宿主端推理。
 
@@ -15,7 +15,7 @@ DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边�
 
 ![语音模式真实录制：流式转写 → 自动发送 → 按句朗读 + 实时字幕](https://raw.githubusercontent.com/qishuilalala/dsh-voice-mode/HEAD/plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
 
-> **运行时变更（最近一批：v0.7.17 ~ v0.7.19，2026-10-02）**：① **设置面全版本打通**——dsh 0.1.7+ 上设置页与持久化修复（Settings → 语音模式 专属页、写入与重启保留）；② **国际化重做**——界面语言跟随 dsh 官方语言设置，中/英文完整一致、切换无需刷新；③ **修复 npm/pnpm 全新安装失败与 dsh ≥0.1.7 已安装形态「failed to import」**（0.7.17 及更早版本受影响，请升级到 ≥0.7.18）；④ **官方桌面端（Electron）下本地 Kokoro 修复**——需系统 PATH 上有 Node.js ≥18（见下文「桌面端提示」）。此前批次（v0.7.10：输出链路静默丢音根治等）与完整历史见 [`CHANGELOG.md`](https://github.com/qishuilalala/dsh-voice-mode/blob/main/CHANGELOG.md)。
+> **运行时变更（最近：v0.7.18 ~ v0.7.24）**：① **设置面全版本打通**——dsh 0.1.7+ 上设置页与持久化修复（Settings → 语音模式 专属页、写入与重启保留）；② **国际化重做**——界面语言跟随 dsh 官方语言设置，中/英文完整一致、切换无需刷新；③ **修复 npm/pnpm 全新安装失败与 dsh ≥0.1.7 已安装形态「failed to import」**（0.7.17 及更早版本受影响，请升级到 ≥0.7.18）；④ **官方桌面端（Electron）下本地 Kokoro 修复**——需系统 PATH 上有 Node.js ≥18（或设 `DSHVM_NODE`）；⑤ **v0.7.24：恢复 Edge 云端朗读**——微软服务端自 2026-10-15 起拒绝旧版握手（v0.7.23 及更早的默认 Edge 朗读无声，本地 VITS / Kokoro 不受影响），内联的 msedge-tts 升到 2.1.0；朗读**连续失败时**会提示切换本地引擎；另有 host 加固（`/models/retry` 仅同源 POST、模型树路径校验、错误原文不下行）。兼容 dsh 至 0.2.1-alpha.3（其设置入口移入侧栏「More」菜单，本插件两处入口仍有效）。
 
 ---
 
@@ -45,15 +45,15 @@ DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边�
   - `toggle`（默认）持续聆听：RMS VAD 分段 → zipformer2 流式识别（边说边出字，实时字幕预览）→ 静音约 1500 毫秒断句进草稿，连续多段拼成一条消息，再静音约 1500 毫秒（合计约 3 秒）自动发送；按住 `Ctrl` 强制立即发送
   - `hold` 按住说话：短按进入/退出，**按住麦克风按钮说话、松手即发**（滑出取消、`Esc`/失焦放弃本段）；按住期间停顿不断句（上限 10 分钟）；`Ctrl` 按住即录、松开即发
 - **唤醒词（可选，默认关）**：设置 `wakeWord` 后进入待机态，说出唤醒词才开始识别（如「你好小D」）。**可直接与命令连说**（「你好小D，帮我查天气」）——唤醒词会在定稿/字幕里自动剥掉、不进消息；匹配带容错（同音字替换「小莫→小墨」、首字错、前置语气词「呃/喂/我说」），建议 3-4 字；待机态状态条实时显示「说『x』开始 · 它听到的转写」，唤醒成败可自查。边界（重要）：**仅 `toggle` 模式生效**（`hold` / 手动打断下唤醒词静默失效）；**说完整一句后回到待机态需重说唤醒词**（只喊唤醒词、还没说命令时保持聆听，可停顿想好再说）；**朗读期说唤醒词不触发**（打断由 VAD 开口即触发，与唤醒词无关）
-- **字幕档位**（批 3）：`captionFontSize` 4 档（0=12px / 1=14px / 2=18px / 3=24px）+ `captionMaxWidth` 3 档（0=50vw / 1=70vw / 2=90vw），窄屏自适应
-- **让位语义**（批 5 / ADR-0008）：`backchannelYield` 默认开（I10 豁免）—— 朗读期用户插话「嗯/对」自动让位 1.5s，真要说走硬打断；让 LLM 主动让出话轮（人格层让位）；关掉恢复改造前行为
+- **字幕档位**：`captionFontSize` 4 档（0=12px / 1=14px / 2=18px / 3=24px）+ `captionMaxWidth` 3 档（0=50vw / 1=70vw / 2=90vw），窄屏自适应
+- **让位语义**（ADR-0008）：`backchannelYield` 默认开—— 朗读期用户插话「嗯/对」自动让位 1.5s，真要说走硬打断；让 LLM 主动让出话轮（人格层让位）；关掉恢复改造前行为
 - **输出链路**：只朗读最终答复的 `text-delta`（reasoning/工具调用不读），按句流式朗读（默认 Edge 云端；可切本地 VITS/Kokoro，中英混读选 Kokoro）+ 右下角实时字幕浮层；工具调用触发提示音；全文照常写入聊天记录；口语化提示词（设置 `spokenFormat`，默认开）让回复为自然短句、不带 Markdown 排版符号
 - **开口打断（barge-in）**：服务端 Silero VAD 帧级检测 + 回声门控（echoGateDb）三档灵敏度 → 本地静音 + host 合成队列作废 + 正在运行的回合取消（保留半截并自然续入新消息）；朗读中自动切超灵敏档。开启唤醒词后打断**仍是开口即打断**（打断门控是 VAD，不是唤醒词；打断后回待机态）
 - **模型懒加载与进度**：首次使用自动下载识别/合成模型（`.part` 断点续传），状态条实时显示进度；可用 `npm run prefetch` 预下载
 - **设置**：入口随 dsh 版本而不同（见下方「设置」），可调朗读引擎/音色/语速/打断灵敏度/静音停顿/空闲超时/模型镜像/自动发送/交互模式/唤醒词/口语化提示词/字幕档位/让位语义；**音色可试听**（按当前音色+语速即时合成预览，自定义 ShortName 亦可）
 - **界面语言**：跟随 dsh 的语言设置（设置 → 通用 → 语言），**切换即时生效、无需刷新**——设置页、语音状态条、字幕、音色名称/性别/口音、错误提示全部随之变化；LLM 口语化提示词也按界面语言选中/英文版。插件词典注册在 dsh 官方 locale 服务的 `voice-mode` 命名空间，社区语言包可据此补充其它语言，缺失的语言回落英文。插件名称与描述在「插件」页同样按语言显示。
 - **容错**：麦克风被拒红点提示、模型下载失败可见提示、TTS 连接失败状态条提示（自动退避重试）、提交失败文字留在草稿、SSE 断线自动重连
-- **空闲退出**：5 分钟无活动自动退出并释放麦克风（**正在朗读计为活动**，长朗读不会中途下线；批 J 已微调默认 10→5）
+- **空闲退出**：5 分钟无活动自动退出并释放麦克风（**正在朗读计为活动**，长朗读不会中途下线）
 
 ---
 
@@ -102,12 +102,12 @@ bundle 插件安装后需重启 dsh 生效（Linux：`systemctl restart dsh`；�
 | `ttsEngine` | `edge` | 朗读引擎：`edge` 微软云端（默认，快）/ `vits` 本地中文 / `kokoro` 本地中英；**即时生效** |
 | `kokoroModel` | `int8` | Kokoro 模型精度：`int8`（默认，109MB，纯 CPU/低带宽推荐）/ `fp32`（311MB，音质更好，独显/大内存推荐）；两档共用 103 音色，**即时生效** |
 | `voice` | 按引擎 | 音色：VITS 五说话人；Kokoro 103 个（下拉+◀▶，62 深沉/68 浑厚/75 清亮/76 磁性置顶）；Edge 进入时自动加载全量 322 个。行内「试听」可即时预览 |
-| `rate` | `1.1` | 朗读语速倍率（0.5 慢速 ～ 2.0 快速），**即时生效**（批 J 1.0→1.1） |
+| `rate` | `1.1` | 朗读语速倍率（0.5 慢速 ～ 2.0 快速），**即时生效** |
 | `interruptLevel` | `0` | 发声打断灵敏度（服务端 VAD 帧级检测 + 回声门控）：0 高门槛（3 帧）/ 1 中（2 帧）/ 2 低（1 帧） |
 | `bargeInMode` | `detect` | 打断方式：`detect` 自动探测本机原生回声消除状态（默认；未生效时切为长按打断）/ `auto` 强制开口即打断（耳机、安静环境推荐）/ `manual` 长按打断（外放推荐）。批 7O 默认，I10 豁免（ADR-0006） |
 | `echoGateDb` | `6` | 回声门控阈值（dB）：自动打断要求残差高于回声地板此值。**原生 AEC 生效时此门控闲置**（Safari / 耳机等无原生 AEC 环境才兜底生效）；打不断降 3-4，噪音误打断升 8-10。**不要为「打不断」调它**（详见 ADR-0006） |
 | `silenceMs` | `1500` | 说完整一句的静音停顿毫秒数 |
-| `idleTimeoutMinutes` | `5` | 无活动自动退出语音模式的分钟数（朗读计为活动；批 J 10→5） |
+| `idleTimeoutMinutes` | `5` | 无活动自动退出语音模式的分钟数（朗读计为活动） |
 | `modelHost` | 默认源 | 模型下载源（国内网络填 `https://hf-mirror.com`） |
 | `autoSend` | `true` | 静音到点自动发送（连续多段拼成一条消息）；关闭则只进草稿（按住 `Ctrl` / hold 松手仍会发送） |
 | `autoResume` | `false` | 切回上次语音会话时自动恢复语音模式（默认关）。开启后：下次进入语音会话即自动进入语音模式 + 恢复上次会话；关闭则需手动按 `Ctrl+Shift+V` 重新进入 |
@@ -116,11 +116,11 @@ bundle 插件安装后需重启 dsh 生效（Linux：`systemctl restart dsh`；�
 | `wakeWord` | 空（关） | 唤醒词（如「你好小D」）：进入后先说唤醒词激活，避免误触；空 = 关闭。**可与命令连说**，词头自动剥掉不进消息；匹配带容错（编辑距离 ≤1 + 前 3 字符前导窗口，吸收同音字/语气词）；**建议 3-4 字**——单字词无容错、2 字词的容错会连带吸收所有同首字的 2 字词（如「小莫」也会唤醒「小张」），介意误唤醒用 3 字以上；每句断句或打断后回待机需重说；**仅 toggle 模式生效**（hold / 手动打断下不生效）；朗读期说唤醒词不触发 |
 | `toolBeep` | `false` | 工具调用提示音（默认关）：开启后 AI 调用工具时「滴」一声；关闭则全程静默 |
 | `spokenFormat` | `true` | 语音会话注入口语化提示词：开启后**仅当前语音会话**的回复被注入「口语化短句、不用 Markdown 排版符号」提示词（朗读更顺），**即时生效** |
-| `senseITN` | `true` | 批 2 P0：SenseVoice 逆文本归一化（数字/日期/货币规范化；默认开） |
+| `senseITN` | `true` | SenseVoice 逆文本归一化（数字/日期/货币规范化；默认开） |
 | `senseVoice` | `true` | 定稿是否用 SenseVoice 重译（带标点 + 数字归一化，更准；默认开）。**关闭可省 ~228MB 模型**，只走流式识别（更快、精度下降） |
-| `captionFontSize` | `0` | 批 3 P0：字幕字号档位 0=12px / 1=14px / 2=18px / 3=24px（默认 0 与现状字节等价） |
-| `captionMaxWidth` | `1` | 批 3 P0：字幕宽度档位 0=50vw / 1=70vw / 2=90vw（视口 <686px 接近 480px，>686px 宽于 480px） |
-| `backchannelYield` | `true` | 批 5 P1：让位语义（ADR-0008）；朗读期说「嗯/对」自动让位 1.5s + 真要说走硬打断。I10 豁免（默认开是产品决策）；关 = 行为等同改造前 |
+| `captionFontSize` | `0` | 字幕字号档位 0=12px / 1=14px / 2=18px / 3=24px（默认 0 与现状字节等价） |
+| `captionMaxWidth` | `1` | 字幕宽度档位 0=50vw / 1=70vw / 2=90vw（视口 <686px 接近 480px，>686px 宽于 480px） |
+| `backchannelYield` | `true` | 让位语义（ADR-0008）；朗读期说「嗯/对」自动让位 1.5s + 真要说走硬打断；关 = 行为等同改造前 |
 | `yieldMs` | `1500` | 让位窗口时长（ms，500-3000）：`backchannelYield` 命中后 TTS 丢帧持续时长；窗口内用户真要说则由原 `hardBreak` 接管，窗口到点自动恢复播放 |
 
 生效范围：`voice`/`rate`/`ttsEngine`/`kokoroModel`/`spokenFormat` **立即生效**；其余设置下次进入语音模式时生效。设置项默认值由插件配置（`base` 层）提供。
@@ -161,10 +161,10 @@ bundle 插件安装后需重启 dsh 生效（Linux：`systemctl restart dsh`；�
     cacheDir: ~/.cache/dsh-voice-mode/models   # 可覆盖；否则用平台默认
     # 以下为设置项播种的默认值（设置面板优先级更高，面板是权威源）：
     voice: zh-CN-XiaoxiaoNeural
-    rate: 1.1                     # 批 J 1.0→1.1
+    rate: 1.1
     interruptLevel: 0
     silenceMs: 1500
-    idleTimeoutMinutes: 5         # 批 J 10→5
+    idleTimeoutMinutes: 5
     modelHost: https://huggingface.co
 ```
 
@@ -253,7 +253,6 @@ flowchart LR
 | 多语种 | 英文为主 | **SenseVoice 自动识别（zh/en/ja/ko/yue）+ ITN** |
 | 朗读引擎 | 云端 TTS | **Edge 云端 + 本地 VITS/Kokoro** 三选一 |
 | 打断检测 | 基础 VAD | **三档灵敏度 + 回声门控 + 让位语义** |
-| 热词偏置 | 无 | 无（已移除，详见 v0.7.7 文档说明） |
 | 字幕 a11y | 无 | **4 档字号 + 3 档宽度 + 主题跟随** |
 | 唤醒词 | 无 | **轻量流式匹配 + 前缀语气词白名单** |
 | 兼容 dsh | — | **0.1.1-rc.2 起全版本（含 0.2.1-alpha.3）** |
@@ -285,6 +284,7 @@ flowchart LR
 
 ## 🚧 已知限制
 
+- **云端朗读（Edge）依赖微软在线服务**：服务端可能随时调整握手/限流（2026-10-15 即发生过，见 CHANGELOG 0.7.24）；若连续多句朗读失败，状态条/弹出提示会建议切换本地 VITS / Kokoro，设置面板可一键切换
 - 发声打断依赖浏览器回声消除（`echoCancellation`）；扬声器音量过大时可能漏声到麦克风
 - `Ctrl+Shift+V` 会覆盖浏览器「粘贴纯文本」快捷键（普通粘贴仍可用 `Ctrl+V`）
 - 识别质量受环境噪声影响；zipformer2 中文流式 + SenseVoice 多语（中英日韩粤）定稿
@@ -308,7 +308,7 @@ flowchart LR
 | --- | --- |
 | 点麦克风无反应，状态条红字 | 浏览器拒绝麦克风：地址栏（iOS 为 设置 → Safari → 麦克风）开启后重试 |
 | 状态条「正在加载模型… x%」卡住 | 检查网络；模型较大可先 `npm run prefetch`；国内网络 `modelHost` 配 `https://hf-mirror.com` |
-| 朗读无声音/无字幕 | 本地引擎首次合成需加载模型；若持续失败查看状态条提示（自动退避重试）；确认页面前台且未静音 |
+| 朗读无声音/无字幕 | **默认 Edge 云端朗读依赖微软在线服务**：连续多句失败会提示「云端朗读暂不可用」，到设置把朗读引擎切到本地 VITS / Kokoro；v0.7.23 及更早版本在 2026-10-15 起整体无声，请升级到 ≥0.7.24。 本地引擎首次合成需加载模型；若持续失败查看状态条提示（自动退避重试）；确认页面前台且未静音 |
 | AI 回复**偶尔不朗读**（某句没声/整条没声） | 已定位三类原因并修（v0.7.10）：① 云端 TTS 偶发超时——单句自动重试 3 次，仍失败会**跳过该句并在状态条提示**「有一句朗读失败，已跳过」（此前是静默丢句）；② 浏览器挂起 AudioContext（切到后台标签页/长时间静音后回来）——播放被调度但无声、UI 却显示朗读中；现在每次入队与**任意点击/按键**都会自动恢复；③ SSE 断线丢帧导致整句不完整——按设计丢弃该句（避免播坏音频），可开 `localStorage['dsh-voice-mode.telemetry']='1'` 看 `tts-drop-sentence` 诊断 |
 | 语音模式进不去 | 检查插件 `enabled`；多标签页时确认当前会话为活动会话 |
 | 识别到但不是我要说的 | 环境噪声或唤醒词误判：降低音量、提高 `interruptLevel`（高门槛）或启用 `wakeWord` |
@@ -341,7 +341,7 @@ flowchart LR
 
 ```sh
 pnpm install && pnpm build    # esbuild：lib/index.js（host）+ lib/client.js（browser）
-pnpm test                     # segmenter/wakeword 单测 + 发布前自检（无需网络）
+pnpm test                     # 34 个测试文件串联：单测 + 台架（假浏览器驱动真引擎）+ 结构守卫 + 发布前自检（无需网络）
 systemctl restart dsh         # 本机加载新 host 代码；其他平台重启 dsh 进程
 ```
 
@@ -354,7 +354,9 @@ src/models.ts        host：模型下载/校验（SHA256 固定 + 域名白名�
 src/security.ts      host：限流器与安全守卫
 src/tts-local.ts     host：本地 TTS 引擎（VITS WASM / Kokoro 原生 addon，子进程管理）
 src/tts-vits-worker.ts 子进程：合成执行（base64 IPC，空文本静音守卫）
-src/tts-queue.ts     host：逐会话 TTS 队列 + epoch 打断机制
+src/tts-queue.ts     host：逐会话 TTS 队列 + epoch 打断 + 连续失败计数（云端整体不可用时给出可行动提示）
+src/tts-runtime.ts   host：Electron 宿主下 Kokoro 子进程的真 Node 选择
+src/settings-store.ts / settings-http-scope.ts  host：≥0.1.7 设置自持久化（覆盖层文件 + 端点，ADR-0009）
 src/segmenter.ts     host：句子切分 + 文本消毒（markdown 剥离 + 噪声字符剔除）
 src/asr.ts           client：音频采集、VAD 分段、增量识别、唤醒词、按住说门控
 src/client.tsx       client：麦克风按钮 + 模式切换按钮 + 状态条 + 字幕浮层 + 打断

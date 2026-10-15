@@ -22,12 +22,13 @@
 |---|---|---|
 | 每周一 CI（`dsh-version-check.yml`） | 本机脚本 `bash scripts/check-dsh-version.sh`（本地专用、不入库）与 CI 内联逻辑：dist-tags vs 默认矩阵比对；EXIT 1 自动开 issue | CI 自动 |
 | dsh 上游发新版本（release notes / dist-tag 变化） | 同上，手动再跑一次确认 | 维护者 |
-| 每次改 `src/` | `npm run typecheck` + `npm test`（33 套件 / 433 项 exit 0）+ `node build.mjs` | 提交者 |
+| 每次改 `src/` | `npm run typecheck` + `npm test`（34 套件 / 440 项 exit 0）+ `node build.mjs` | 提交者 |
 | 每次推送 / PR（CI） | `ci.yml`：`test` job（npm test + build）与 `install` job（Node 18/22 下对打包产物做 pnpm+npm 全新安装并 import） | CI 自动 |
 | **发版前** | L5 安装形态门禁（见上）；全矩阵冒烟用 `link:` 与 `DSHVM_SPEC` 两种形态各跑一遍 | 发版者 |
 | **发版前（桌面端等价）** | 以 Electron RunAsNode 作宿主复跑已安装形态冒烟：`npm i electron@44 && node node_modules/electron/install.js`，`DSHVM_HOST_CMD="env ELECTRON_RUN_AS_NODE=1 <electron> --expose-internals" DSHVM_TTS_SMOKE=1 bash scripts/smoke-runtime.sh <bin> <port>`；并可用 `node` 垫片在 Electron 下跑 `npm test` | 发版者 |
 | **发版前（桌面端外壳）** | `DSHVM_ELECTRON=<electron> DSHVM_HOST_CMD=… bash scripts/smoke-runtime.sh <bin> <port>`：真 Electron + Xvfb 按官方桌面端机制（`dsh-app://` 特权协议、`forwardWebRequest`、麦克风权限策略、ws 头改写）加载 dsh，断言转发/SSE/麦克风/AudioWorklet（`scripts/smoke-desktop-shell.mjs`；<0.1.7 自动跳过） | 发版者 |
 | **发版前（语音闭环）** | `DSHVM_VOICE_LOOP=1 bash scripts/full-e2e.sh <bin> <port>`：真实语音（本地 VITS 合成的 wav 作假麦克风）→ 采集 → worklet → `/asr` → host 识别 → 自动发送 → **真 LLM** 回复 → 朗读音频帧到达客户端、tts-error=0（`scripts/smoke-voice-chain.mjs --loop`）；`DSHVM_VOICE_CHAIN=1 bash scripts/smoke-runtime.sh …` 为无 LLM 凭据的「说话→识别」半程，可同时在桌面端外壳内跑 | 发版者 |
+| **发版前（朗读失败路径）** | `DSHVM_VOICE_LOOP=1 DSHVM_TTS_DOWN=1 bash scripts/full-e2e.sh <bin> <port>`：预加载 `scripts/fixtures/block-edge-tts.cjs` 让 Edge 域名一律连接失败，断言 host 连续跳过计数 ≥2、客户端出现「云端朗读暂不可用」提示、无音频帧（`smoke-voice-chain.mjs --tts-down`）；另有定时 CI `edge-tts-probe`（`scripts/probe-edge-tts.mjs`）每日用发布包内联库真实合成一句，微软服务端悄悄改握手时红灯预警 | 发版者 / CI |
 | **发版前（依赖安全）** | `pnpm audit --audit-level high`（CI `audit` job 同款）：被内联进 `lib/msedge-tts.cjs` 的 axios/ws 等漏洞即发布物漏洞；修复用 `pnpm-workspace.yaml` 的 `overrides` 后重新内联并重生成 `THIRD_PARTY_NOTICES.md` | 发版者 / CI |
 | 每次改兼容面脚本 | 对应脚本 `--help`/语法检查 + 至少一版实跑 | 提交者 |
 

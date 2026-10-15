@@ -363,3 +363,21 @@
 - 只能真机验证（均为 OS 层，已无法再用 Linux 缩小）：macOS 的系统麦克风授权（`systemPreferences`）、Windows 安装器与 PATH 行为、真实硬件独占行为。
 - CONTEXT.md「已知待办」长期遗留项：原生 AEC 失效兜底（耳机/Safari 无真机数据）、ADR-0006 第一级探测部分实现、Ctrl 强制发送在已停顿但草稿有累积时不 flush、松手恰在 30s 滚段边界的竞态。
 - 本机 `git` 报 `dubious ownership`：脚本一律用 `GIT_CONFIG_COUNT/KEY/VALUE` 环境变量临时绕过，未改全局配置；永久解决需维护者自行 `git config --global --add safe.directory /mnt/dsh-voice-mode`。
+
+---
+
+## 任务：v0.7.24 —— Edge 云端朗读失效修复 + dsh 0.2.1-alpha.2/3 兼容 + 全面核查 —— **已发布（2026-10-15）**
+
+### 结果
+
+- **根因与修复**：微软 Edge TTS 服务端自 2026-10-15 起对 msedge-tts ≤2.0.9 的握手一律 403（2.1.0 改用端点 `api.msedgeservices.com`），默认朗读引擎整体无声；内联依赖升 2.1.0 并重建。
+- **朗读失败可见性**：`tts-queue` 记连续失败计数 → host `tts-skip` 带 `streak` → 客户端连续 ≥2 句失败给出「云端朗读暂不可用，可切本地引擎」（toast + 状态条）；此前只有「网络抖动，可重发」且常被遮蔽。反向验证（旧 lib）两条断言变红。
+- **host 加固**：`/models/retry` 仅同源 POST；模型树条目路径校验（`isSafeModelRel`）；`asr-error` 下行不带原始错误串；设置面板不直出 host 原文；预览 `WebSocket error` 归网络类。新增 `test/host-hardening.test.mjs`（单测 440 项 / 34 套件）。
+- **兼容**：15 版锚点 + 15 版 typecheck + 12 核心冒烟全绿；真 LLM 语音闭环在 0.2.1-alpha.3 / 线上 0.2.0-rc.2 / 0.1.7-rc.2 通过；Electron 44 桌面端外壳冒烟（含 Edge 音频解码）通过。alpha.3 起设置入口在侧栏 More 菜单，冒烟脚本已适配。详见 compat-contract §17–§18。
+- **测试装置**：`smoke-runtime.sh`/`full-e2e.sh` 修就绪等待（`curl -w … || echo 000` 失败时输出 `000000` 的老缺陷）；`ensure-core.sh` 自动打 0.1.x HMR 夹具；新增 `DSHVM_TTS_DOWN` 负面路径、`scripts/fixtures/block-edge-tts.cjs`、定时 CI `edge-tts-probe`（每日真实合成预警）。
+- **文档/配图**：中英 README 对齐（设置表 23 项、去批次术语、依赖/结构/已知限制重写）、架构图 SVG 重绘；`CHANGELOG` 0.7.24。
+
+### 剩余（均不阻塞发版）
+
+- 引擎层静态审计登记项（stop/start 竞态、hold 取消丢头、回声地板棘轮、NLMS NaN、切分器边界）与 host 侧待核对项（DNS rebinding、反代限流键、SSE 归属）见 CONTEXT.md「已知待办」；需真机/宿主前置防护确认后再改。
+- 本机维护者文档（`docs/RELEASE-WORKFLOW.md`、`scripts/release.sh`、`scripts/check-dsh-version.sh`）按 publication-policy 不入库。

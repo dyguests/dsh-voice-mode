@@ -12,12 +12,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue" alt="License: MIT"></a>
   <a href="https://github.com/qishuilalala/dsh-voice-mode/releases"><img src="https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases" alt="Latest release"></a>
   <a href="https://www.npmjs.com/package/dsh-voice-mode"><img src="https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange" alt="npm version"></a>
-  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-433%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 433 passing"></a>
+  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-440%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 440 passing"></a>
 </p>
 
 ![dsh-voice-mode 全双工语音对话](assets/hero-banner.png)
 
-> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-alpha.3，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§18）。433 项测试全绿（33 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
+> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-alpha.3，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§18）。440 项测试全绿（34 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
 
 ---
 
@@ -25,7 +25,7 @@
 
 在 DeepSeek Harness 的会话里，点一下麦克风就能用语音完成整轮对话：
 
-- 🎤 **你说** —— 一边说一边**实时出字**（流式识别），停顿约 **1500ms 自动发送**；
+- 🎤 **你说** —— 一边说一边**实时出字**（流式识别），停顿约 **1500ms 断句进草稿**，再静音约 1500ms 自动发送；
 - 🔊 **它答** —— 最终回复**按句朗读**，全程实时字幕跟随；
 - ⏸️ **随时打断** —— AI 还在朗读时**开口即打断**，你的话直接被听见。
 
@@ -71,7 +71,7 @@ systemctl restart dsh   # Linux；其他平台重启 dsh 进程
 **第一次用**：
 
 1. 进入任一会话，按 `Ctrl+Shift+V`（或点输入区麦克风按钮）进入语音模式，状态条显示「聆听中…」；
-2. 说一句完整的话（如「帮我看看今天的天气」）→ 实时字幕立即出现，停顿后自动发送；
+2. 说一句完整的话（如「帮我看看今天的天气」）→ 实时字幕立即出现，停顿后断句进草稿、再静音片刻自动发送；
 3. AI 回复开始朗读时，**开口说话 → 朗读即刻停止，你的话被听见**（这就是 barge-in）。
 
 ### 操作手势
@@ -79,7 +79,7 @@ systemctl restart dsh   # Linux；其他平台重启 dsh 进程
 | 手势 | 作用 |
 | --- | --- |
 | `Ctrl+Shift+V` | 进入 / 退出语音模式 |
-| 直接说话（toggle） | 边说边出字，停顿 1500ms 自动发送；按住 `Ctrl` 强制立即发送 |
+| 直接说话（toggle） | 边说边出字，停顿约 1500ms 断句进草稿、再静音约 1500ms 自动发送；按住 `Ctrl` 强制立即发送 |
 | 按住麦克风按钮（hold） | 松手发送；短按退出；滑出 / `Esc` / 失焦放弃本段 |
 | 点输入框旁模式按钮 | 在「持续聆听 ⇄ 按住说」间切换（保存到设置） |
 | AI 朗读时开口说话 | 打断朗读并取消当前回合 |
@@ -112,11 +112,13 @@ systemctl restart dsh   # Linux；其他平台重启 dsh 进程
 
 > 字段名保持向后兼容，旧 `~/.dsh/settings.yaml` 可直接沿用。
 
-完整 19 项设置表见 [plugin/dsh-voice-mode/README.md](plugin/dsh-voice-mode/README.md#%E8%AE%BE%E7%BD%AE%E8%AE%BE%E7%BD%AE--plugins--%E6%8F%92%E4%BB%B6%E9%85%8D%E7%BD%AE--%E8%AF%AD%E9%9F%B3%E6%A8%A1%E5%BC%8F)。
+完整 23 项设置表见 [使用说明 · 设置](plugin/dsh-voice-mode/README.md)。
 
 ---
 
 ## 🏛️ 架构（Architecture）
+
+![dsh-voice-mode 语音双工数据流](plugin/dsh-voice-mode/assets/architecture.svg)
 
 ```mermaid
 flowchart LR
@@ -168,7 +170,7 @@ flowchart LR
 | --- | --- |
 | 点麦克风无反应，状态条红字 | 浏览器拒绝麦克风：地址栏（iOS 为 设置 → Safari → 麦克风）开启后重试 |
 | 状态条「正在加载模型… x%」卡住 | 检查网络；模型较大可先 `npm run prefetch`；国内网络 `modelHost` 配 `https://hf-mirror.com` |
-| 朗读无声音 / 无字幕 | 本地引擎首次合成需加载模型；若持续失败看状态条提示（自动退避重试）；确认页面前台且未静音 |
+| 朗读无声音 / 无字幕 | 本地引擎首次合成需加载模型；若持续失败看状态条提示（自动退避重试）；确认页面前台且未静音。**默认的 Edge 云端朗读依赖微软在线服务**：若连续多句失败，会提示「云端朗读暂不可用」——到设置里把朗读引擎切到本地 VITS / Kokoro 即可（v0.7.23 及更早版本在 2026-10-15 起因服务端拒绝握手而整体无声，升级到 ≥0.7.24） |
 | 语音模式进不去 | 检查插件 `enabled`；多标签页时确认当前会话为活动会话 |
 | 识别到但不是我要说的 | 环境噪声：降低音量或提高 `interruptLevel`（高门槛） |
 | 打不断（朗读中开口无反应） | 调高 `interruptLevel`（更敏感档）或检查麦克风权限；**不要**调 `echoGateDb`——原生 AEC 生效时它从未被执行（详见 ADR-0006） |
@@ -186,7 +188,7 @@ flowchart LR
 完整 backlog（43 项 P0-P3）见 [`docs/competitive/backlog.md`](docs/competitive/backlog.md)。
 
 - ✅ **已完成（v0.7.7）**：字幕档位 / 让位语义 / 模型预热 / 默认值微调等
-- ✅ **已完成（v0.7.18 ~ v0.7.23）**：安装形态修复（`msedge-tts` 内联）、桌面端 Electron 下 Kokoro 可用、权限与数据流/兼容声明与 `SECURITY.md`、国际化（官方 `ctx.locale`）、内联 axios 升级与第三方披露、语音全链路/闭环冒烟
+- ✅ **已完成（v0.7.18 ~ v0.7.24）**：安装形态修复（`msedge-tts` 内联）、桌面端 Electron 下 Kokoro 可用、权限与数据流/兼容声明与 `SECURITY.md`、国际化（官方 `ctx.locale`）、内联 axios 升级与第三方披露、语音全链路/闭环冒烟、**v0.7.24 恢复 Edge 云端朗读 + 朗读失败可见提示 + host 加固**
 - 🚧 **P0（近期）**：ADR-0003 VAD 下沉 / ADR-0006 第一级探测接通 manual / F1 emotion DSL 全量上线
 - 📋 **P1（中期）**：MCP `voice_*` 工具集 / 卡片表单 draft validate / 状态条 idle 优化
 - 💡 **P2（远期）**：声音克隆（用户已决定推迟）/ ADR-0004 WebSocket transport
@@ -201,7 +203,7 @@ flowchart LR
 | [完整使用说明（中文）](plugin/dsh-voice-mode/README.md) | 功能 / 手势 / 设置 / 配置 / 已知限制 / 故障排查 |
 | [English docs](plugin/dsh-voice-mode/README.en.md) | Same, in English |
 | [docs/ 索引](docs/README.md) | 架构决策 / 实施计划 / 真机验收 / 规则 / 调研 / 竞品 |
-| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 433 项） |
+| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 440 项） |
 | [CHANGELOG.md](CHANGELOG.md) | Keep a Changelog 格式 |
 | [RELEASE-NOTES.md](RELEASE-NOTES.md) | 60 天时间线 |
 

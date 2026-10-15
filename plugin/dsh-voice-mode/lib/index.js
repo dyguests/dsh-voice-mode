@@ -205,7 +205,8 @@ async function ensureModelFile(opts) {
       lastError = String(e);
     }
   }
-  broadcast("asr-error", { file: spec.file, reason: "checksum_or_download_failed", detail: lastError });
+  if (lastError) console.warn(`[dsh-voice-mode] model download failed: ${spec.file}: ${lastError}`);
+  broadcast("asr-error", { file: spec.file, reason: "checksum_or_download_failed" });
   return false;
 }
 async function downloadVerified(opts) {
@@ -267,6 +268,11 @@ async function downloadVerified(opts) {
   await rename(partPath, localPath);
   return true;
 }
+function isSafeModelRel(rel, subdir) {
+  if (!rel.startsWith(subdir + "/")) return false;
+  if (rel.includes("\\") || rel.includes("\0")) return false;
+  return !rel.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
+}
 async function ensureModelTree(opts) {
   const { repo, repoDir, subdir, primaryHost, allowCustomHost, broadcast } = opts;
   const hosts = [...new Set([primaryHost, HOST_PRIMARY, HOST_FALLBACK].filter(Boolean))];
@@ -278,7 +284,7 @@ async function ensureModelTree(opts) {
       const res = await fetch(host + "/api/models/" + repo + "?blobs=true", { headers: { "user-agent": "dsh-voice-mode" } });
       if (res.ok) {
         const j = await res.json();
-        tree = (j.siblings ?? []).map((s) => s.rfilename ?? "").filter((f) => f.startsWith(subdir + "/") && f.length > 0);
+        tree = (j.siblings ?? []).map((s) => s.rfilename ?? "").filter((f) => isSafeModelRel(f, subdir));
         if (tree.length > 0) break;
       }
     } catch {
@@ -1181,7 +1187,7 @@ var TtsQueue = class {
   enqueue(sessionId, text) {
     let q = this.queues.get(sessionId);
     if (!q) {
-      q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0 };
+      q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 };
       this.queues.set(sessionId, q);
     }
     if (q.pending.length >= 500) {
@@ -1234,10 +1240,12 @@ var TtsQueue = class {
         }
         if (item.epoch !== q.epoch) continue;
         if (buf === null) {
-          this.onSkip?.(sessionId, item.text);
+          q.failStreak++;
+          this.onSkip?.(sessionId, item.text, q.failStreak);
           continue;
         }
         q.errorNotified = false;
+        q.failStreak = 0;
         q.backoff = 0;
         const sentenceId = q.seq++;
         const mime = this.engine.mime;
@@ -1942,7 +1950,8 @@ var RateLimiter = class {
 var en = {
   stateVoiceMode: "Voice Mode",
   ttsNoticeFail: "Read-aloud connection failed: retrying\u2026",
-  ttsSkipNotice: "One sentence failed to read and was skipped (cloud TTS network hiccup \u2014 resend the message to retry)",
+  ttsSkipNotice: "One sentence failed to read and was skipped (resend the message to retry)",
+  ttsUnavailableNotice: "Read-aloud keeps failing: cloud TTS is unavailable. Try again later, or switch the read-aloud engine to local VITS / Kokoro in settings",
   enterFail: "Failed to enter voice mode",
   disabled: "Voice mode disabled (plugin enabled=false)",
   sendFailKept: "Send failed; text kept in draft",
@@ -2295,7 +2304,7 @@ function readLegacyVoiceSettings(dir, keys) {
 var name = "voice-mode";
 var NS_VOICE_MODE = "voice-mode";
 var BASE_PATH = "/voice-mode";
-var PREVIEW_NETWORK_PATTERN = /fetch failed|ECONN|ENOTFOUND|getaddrinfo|ETIMEDOUT|EAI_AGAIN|network|unreachable|socket hang up|aborted/i;
+var PREVIEW_NETWORK_PATTERN = /fetch failed|ECONN|ENOTFOUND|getaddrinfo|ETIMEDOUT|EAI_AGAIN|network|unreachable|socket hang up|aborted|WebSocket error/i;
 var PREVIEW_ENGINE_PATTERN = /model download|model verify|init failed|child exited|tts child|local TTS|prepare|sherpa|local Kokoro/i;
 var PREVIEW_TEXT_PATTERN = /empty or invalid audio|invalid audio|invalid text|too long|truncat/i;
 function classifyPreviewError(msg) {
@@ -2663,7 +2672,8 @@ function apply(ctx, config) {
     engine: makeEngine(engineKind),
     onError: (sessionId) => broadcast("tts-error", { sessionId }),
     // 单句重试耗尽被跳过：显式下行（客户端提示 + 诊断），不再静默丢句。
-    onSkip: (sessionId, text) => broadcast("tts-skip", { sessionId, text: text.slice(0, 80) })
+    // streak = 连续被跳过的句数：客户端据此区分偶发抖动与「云端整体不可用」（如服务端拒绝握手）。
+    onSkip: (sessionId, text, streak) => broadcast("tts-skip", { sessionId, text: text.slice(0, 80), streak })
   });
   queue.updateVoice(vset.voice, vset.rate);
   const unsubscribe = queue.subscribe((frame) => broadcast("audio", frame));
@@ -2951,6 +2961,13 @@ function apply(ctx, config) {
       path: `${base}/models/retry`,
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("allow", "POST");
+          res.end();
+          return;
+        }
+        if (denyCrossOrigin(req, res)) return;
         if (!config.enabled) {
           respondJson2(res, 403, { code: "voice_disabled", error: "voice mode disabled" });
           return;

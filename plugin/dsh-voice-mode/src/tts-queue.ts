@@ -184,6 +184,8 @@ interface SessionQueue {
   epoch: number
   /** TTS 不可达已通知过（去重，直到下一帧成功才复位）。 */
   errorNotified: boolean
+  /** 连续被跳过的句数（任一句合成成功即清零）：区分「偶发抖动」与「云端整体不可用」。 */
+  failStreak: number
   /** 错误退避毫秒（成功后清零）。 */
   backoff: number
 }
@@ -195,12 +197,12 @@ export class TtsQueue {
   /** TTS 全体不可达通知（每会话去重，成功后复位）。 */
   private readonly onError?: (sessionId: string) => void
   /** 单句合成重试耗尽被跳过通知（每句一次；此前是静默丢句——真机「回复偶尔不朗读」根因之一）。 */
-  private readonly onSkip?: (sessionId: string, text: string) => void
+  private readonly onSkip?: (sessionId: string, text: string, streak: number) => void
 
   constructor(options: {
     engine: TtsEngine
     onError?: (sessionId: string) => void
-    onSkip?: (sessionId: string, text: string) => void
+    onSkip?: (sessionId: string, text: string, streak: number) => void
   }) {
     this.engine = options.engine
     this.onError = options.onError
@@ -260,7 +262,7 @@ export class TtsQueue {
   enqueue(sessionId: string, text: string): void {
     let q = this.queues.get(sessionId)
     if (!q) {
-      q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0 }
+      q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 }
       this.queues.set(sessionId, q)
     }
     // 队列上限（防病理性积压失控）。20 → 500：长回复流式文本比 Edge 合成快时，
@@ -329,10 +331,12 @@ export class TtsQueue {
         if (buf === null) {
           // 重试耗尽：跳过该句（不阻塞队列），但**显式通知**调用方——静默丢句在真机上
           // 表现为「AI 回复偶尔整条/某句不朗读」，用户无从判断是网络还是功能坏了。
-          this.onSkip?.(sessionId, item.text)
+          q.failStreak++
+          this.onSkip?.(sessionId, item.text, q.failStreak)
           continue
         }
         q.errorNotified = false // 有帧成功：复位不可达提示
+        q.failStreak = 0
         q.backoff = 0 // 成功后退避清零，防下次失败时退避窗口无限递增
         const sentenceId = q.seq++
         const mime = this.engine.mime

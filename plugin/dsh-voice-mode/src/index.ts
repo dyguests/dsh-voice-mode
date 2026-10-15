@@ -65,7 +65,7 @@ const BASE_PATH = '/voice-mode'
  */
 type PreviewErrorCategory = 'network' | 'engine' | 'text' | 'unknown'
 
-const PREVIEW_NETWORK_PATTERN = /fetch failed|ECONN|ENOTFOUND|getaddrinfo|ETIMEDOUT|EAI_AGAIN|network|unreachable|socket hang up|aborted/i
+const PREVIEW_NETWORK_PATTERN = /fetch failed|ECONN|ENOTFOUND|getaddrinfo|ETIMEDOUT|EAI_AGAIN|network|unreachable|socket hang up|aborted|WebSocket error/i
 const PREVIEW_ENGINE_PATTERN = /model download|model verify|init failed|child exited|tts child|local TTS|prepare|sherpa|local Kokoro/i
 const PREVIEW_TEXT_PATTERN = /empty or invalid audio|invalid audio|invalid text|too long|truncat/i
 
@@ -696,7 +696,8 @@ export function apply(ctx: Context, config: Config): void {
     engine: makeEngine(engineKind),
     onError: (sessionId) => broadcast('tts-error', { sessionId }),
     // 单句重试耗尽被跳过：显式下行（客户端提示 + 诊断），不再静默丢句。
-    onSkip: (sessionId, text) => broadcast('tts-skip', { sessionId, text: text.slice(0, 80) }),
+    // streak = 连续被跳过的句数：客户端据此区分偶发抖动与「云端整体不可用」（如服务端拒绝握手）。
+    onSkip: (sessionId, text, streak) => broadcast('tts-skip', { sessionId, text: text.slice(0, 80), streak }),
   })
   // fork 修复：启动时把当前设置的音色/语速应用到引擎——
   // 此前引擎默认硬编码为素映雪，朗读直到"设置变化"才更新（重启后朗读一直女声的根因）。
@@ -1067,6 +1068,15 @@ export function apply(ctx: Context, config: Config): void {
       path: `${base}/models/retry`,
       handler: (req: IncomingMessage, res: ServerResponse) => {
         if (denyNonLoopback(req, res)) return
+        // 只接受同源 POST：跨站 <img src> 的 GET 不带 Origin，sameOriginRequest 会放行，
+        // 仅靠跨源校验挡不住「别的网页让本机悄悄下载 ~388MB」，故先要求 POST。
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          res.setHeader('allow', 'POST')
+          res.end()
+          return
+        }
+        if (denyCrossOrigin(req, res)) return
         // 镜像切换/下载失败后手动重试（设置面板按钮）。禁用态不得触发 ~388MB 下载。
         if (!config.enabled) {
           respondJson(res, 403, { code: 'voice_disabled', error: 'voice mode disabled' })

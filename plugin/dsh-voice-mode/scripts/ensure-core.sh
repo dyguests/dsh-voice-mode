@@ -71,4 +71,20 @@ else
 fi
 
 [ -f "$BIN" ] || { echo "✗ 安装后仍找不到 $BIN"; exit 1; }
+
+# 0.1.0-* / 0.1.1-*：dsh-app-boot 无条件 watch 用户补丁层，最小 profile 无 Cordis HMR 服务即启动崩溃
+# （compat-contract §11.4 R15）。对测试核心的 profile-boot-*.js 打环境变量门控补丁：DSH_TEST_SKIP_HMR_WATCH=1 时跳过 watchUserPatches。
+# pnpm 的文件常与 store 硬链接共享：先 cp 出新 inode 再 mv 覆盖（不改 store 里的原文件）；补丁只存在于 /tmp 测试核心。
+case "$VER" in
+  0.1.0-*|0.1.1-*)
+    for f in "$DIR"/node_modules/.pnpm/@deepseek-ai+dsh@"$VER"_*/node_modules/@deepseek-ai/dsh/lib/profile-boot-*.js; do
+      [ -f "$f" ] || continue
+      grep -q 'watchUserPatches(ctx' "$f" || continue
+      grep -q DSH_TEST_SKIP_HMR_WATCH "$f" && continue
+      tmp="$f.patching"; cp "$f" "$tmp"
+      sed -i 's/^\(\t*\)await watchUserPatches(ctx, {/\1if (!process.env.DSH_TEST_SKIP_HMR_WATCH) await watchUserPatches(ctx, {/' "$tmp"
+      mv "$tmp" "$f"
+      echo "(i) 已为 $VER 打 HMR 跳过夹具（运行冒烟时需 DSH_TEST_SKIP_HMR_WATCH=1）" >&2
+    done ;;
+esac
 echo "$BIN"

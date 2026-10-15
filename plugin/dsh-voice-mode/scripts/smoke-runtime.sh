@@ -120,6 +120,17 @@ done
 [ -z "$URL" ] && { echo "✗ 60s 内未等到 URL"; tail -20 "$BOOTLOG"; exit 1; }
 echo "   boot 成功: $URL"
 
+# 就绪等待：URL 打印 ≠ 端口已接受连接（旧核心如 0.1.1-rc.2 先打印后监听；curl 连接被拒会因 set -e 以 exit 7 误杀）。
+# 与 full-e2e.sh 的同名等待一致：任何 HTTP 码都算活着，000 才算没好。
+READY=""
+for _ in $(seq 1 60); do
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:$PORT/voice-mode" 2>/dev/null || true)
+  if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then READY=1; break; fi
+  if ! kill -0 "$NODE_PID" 2>/dev/null; then echo "✗ dsh 在就绪等待期退出"; tail -20 "$BOOTLOG"; exit 1; fi
+  sleep 1
+done
+[ -z "$READY" ] && { echo "✗ 60s 内服务未就绪（URL 已打印但无响应）"; tail -20 "$BOOTLOG"; exit 1; }
+
 fail=0
 ORIGIN="http://127.0.0.1:$PORT"
 check() {  # name, url, expect_substr

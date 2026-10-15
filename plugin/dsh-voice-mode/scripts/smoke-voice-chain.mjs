@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url'
 
 const url = process.argv[2]
 const loop = process.argv.includes('--loop')
+// --tts-down：负面路径——云端朗读整体不可用（配合 scripts/fixtures/block-edge-tts.cjs）时，用户必须看到可行动的提示
+const ttsDown = process.argv.includes('--tts-down')
 if (!url) { console.error('用法: node scripts/smoke-voice-chain.mjs <宿主启动 URL>'); process.exit(2) }
 const here = dirname(fileURLToPath(import.meta.url))
 const cache = process.env.DSHVM_MODEL_CACHE || join(homedir(), '.cache', 'dsh-voice-mode', 'models')
@@ -70,13 +72,14 @@ if (process.env.DSHVM_ELECTRON) {
 }
 // 统计客户端自己的 SSE 流上收到的朗读音频帧与 tts-error（包装 EventSource；--loop 用）
 await page.addInitScript(() => {
-  window.__vc = { audio: 0, ttsError: 0 }
+  window.__vc = { audio: 0, ttsError: 0, skip: 0, skipMax: 0 }
   const ES = window.EventSource
   window.EventSource = function (u, o) {
     const e = new ES(u, o)
     if (String(u).includes('/voice-mode/stream')) {
       e.addEventListener('audio', () => { window.__vc.audio++ })
       e.addEventListener('tts-error', () => { window.__vc.ttsError++ })
+      e.addEventListener('tts-skip', (ev) => { try { const s = Number(JSON.parse(ev.data).streak) || 1; window.__vc.skip++; window.__vc.skipMax = Math.max(window.__vc.skipMax, s) } catch {} })
     }
     return e
   }
@@ -130,7 +133,20 @@ for (let i = 0; i < 40 && !heard; i++) {
 console.log('  识别文本片段:', JSON.stringify([...new Set(texts)].slice(-4)))
 heard ? ok(`真实语音经 采集→worklet→/asr→host 识别：命中关键词「${WANT.join('」「')}」`) : bad(`未识别到关键词（/asr 状态码：${[...new Set(asrStatus)].join(',') || '无请求'}）`)
 asrStatus.length && asrStatus.every((s) => s === 200) ? ok(`/voice-mode/asr 请求全部 200（${asrStatus.length} 次）`) : bad(`/asr 出现非 200：${[...new Set(asrStatus)].join(',')}`)
-if (loop && heard) {
+if (ttsDown && heard) {
+  // 负面路径：LLM 回复的每一句都合成失败 → host 连续 tts-skip（streak 递增）→ 客户端必须出现可行动提示
+  const NOTICE = /Read-aloud keeps failing|朗读连续失败/
+  let seen = false
+  let vc = { audio: 0, skip: 0, skipMax: 0 }
+  for (let i = 0; i < 240 && !(seen && vc.skipMax >= 2); i++) {
+    await page.waitForTimeout(500)
+    vc = await page.evaluate(() => window.__vc)
+    if (!seen) seen = await page.evaluate((src) => new RegExp(src).test(document.body.innerText), NOTICE.source)
+  }
+  vc.skipMax >= 2 ? ok(`host 连续跳过计数到达 ${vc.skipMax}（tts-skip ×${vc.skip}）`) : bad(`90s 内连续失败计数未达 2（skipMax=${vc.skipMax}）——失败被静默了？`)
+  seen ? ok('客户端出现「云端朗读暂不可用」可行动提示（状态条/toast）') : bad('连续失败后客户端没有出现可行动提示（用户只会觉得没声音）')
+  vc.audio === 0 ? ok('无朗读音频帧（符合云端不可用的前提）') : bad(`夹具未生效：仍收到 ${vc.audio} 帧音频`)
+} else if (loop && heard) {
   // 识别定稿后插件自动发送给 LLM → 回复按句朗读：客户端 SSE 上应出现音频帧
   let vc = { audio: 0, ttsError: 0 }
   for (let i = 0; i < 90 && vc.audio < 1; i++) { await page.waitForTimeout(1000); vc = await page.evaluate(() => window.__vc) }

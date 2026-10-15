@@ -1396,7 +1396,8 @@ var import_react = require("react");
 var zh = {
   stateVoiceMode: "\u8BED\u97F3\u6A21\u5F0F",
   ttsNoticeFail: "\u6717\u8BFB\u8FDE\u63A5\u5931\u8D25\uFF1A\u6B63\u5728\u91CD\u8BD5\u2026",
-  ttsSkipNotice: "\u6709\u4E00\u53E5\u6717\u8BFB\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7\uFF08\u4E91\u7AEF\u6717\u8BFB\u7F51\u7EDC\u6296\u52A8\uFF0C\u53EF\u91CD\u53D1\u8FD9\u6761\u6D88\u606F\uFF09",
+  ttsSkipNotice: "\u6709\u4E00\u53E5\u6717\u8BFB\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7\uFF08\u53EF\u91CD\u53D1\u8FD9\u6761\u6D88\u606F\uFF09",
+  ttsUnavailableNotice: "\u6717\u8BFB\u8FDE\u7EED\u5931\u8D25\uFF1A\u4E91\u7AEF\u6717\u8BFB\u6682\u4E0D\u53EF\u7528\u3002\u53EF\u7A0D\u540E\u518D\u8BD5\uFF0C\u6216\u5728\u8BBE\u7F6E\u91CC\u628A\u6717\u8BFB\u5F15\u64CE\u5207\u6362\u4E3A\u672C\u5730 VITS / Kokoro",
   enterFail: "\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u5931\u8D25",
   disabled: "\u8BED\u97F3\u6A21\u5F0F\u5DF2\u7981\u7528\uFF08\u63D2\u4EF6 enabled=false\uFF09",
   sendFailKept: "\u53D1\u9001\u5931\u8D25\uFF0C\u5DF2\u4FDD\u7559\u5728\u8349\u7A3F",
@@ -1631,7 +1632,8 @@ var zh = {
 var en = {
   stateVoiceMode: "Voice Mode",
   ttsNoticeFail: "Read-aloud connection failed: retrying\u2026",
-  ttsSkipNotice: "One sentence failed to read and was skipped (cloud TTS network hiccup \u2014 resend the message to retry)",
+  ttsSkipNotice: "One sentence failed to read and was skipped (resend the message to retry)",
+  ttsUnavailableNotice: "Read-aloud keeps failing: cloud TTS is unavailable. Try again later, or switch the read-aloud engine to local VITS / Kokoro in settings",
   enterFail: "Failed to enter voice mode",
   disabled: "Voice mode disabled (plugin enabled=false)",
   sendFailKept: "Send failed; text kept in draft",
@@ -2751,7 +2753,7 @@ function EngineStatusInline() {
         children: acting ? acting === "clean" ? t("ttsDeleting") : t("ttsDownloading") : action === "clean" ? t("ttsDelete") : t("ttsDownload")
       }
     ),
-    tts.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary)", flexBasis: "100%" }, children: tts.errorCode === "kokoro_needs_node" ? t("errKokoroNeedsNode") : tts.error })
+    tts.error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary)", flexBasis: "100%" }, children: tts.errorCode === "kokoro_needs_node" ? t("errKokoroNeedsNode") : t("engineError") })
   ] });
 }
 function ModelStatusView() {
@@ -3101,7 +3103,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "2b278a6";
+var BUILD_TAG = "dd04cc3";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3696,9 +3698,20 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
       try {
         const p = JSON.parse(e.data);
         if (p.sessionId !== activeSessionId) return;
-        ui.ttsNotice = t("ttsSkipNotice");
+        const down = (p.streak ?? 1) >= 2;
+        const msg = down ? t("ttsUnavailableNotice") : t("ttsSkipNotice");
+        ui.ttsNotice = msg;
+        if (down && p.streak === 2) {
+          ui.error = msg;
+          setTimeout(() => {
+            if (ui.error === msg) {
+              ui.error = null;
+              notify();
+            }
+          }, 8e3);
+        }
         notify();
-        debugLog("tts-skip", { text: (p.text ?? "").slice(0, 40) });
+        debugLog("tts-skip", { text: (p.text ?? "").slice(0, 40), streak: p.streak });
       } catch {
       }
     });
