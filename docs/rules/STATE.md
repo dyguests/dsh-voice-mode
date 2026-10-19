@@ -411,7 +411,8 @@
 2. **批 2（运行中 steer 直提交）已入库且门禁闭环** `b1b7947`+`e55fc8a`：steer-submit.ts 纯模块（五态）+ bus.steerSubmit（ctx.sessions 同源）+ submitDraftNow 分流（直达成功清草稿防双发，失败回退队列）；PoC 结论入待核 #4（0.1.1-rc.2 子包 E404→known-unknown，0.1.2-rc.1+ 16/17 版签名实证，防御式兜底）。**独立审查 fail（唯一 Important=测试保真度）→ 全修**：wiring 锁改顺序锁（三突变反向实证抓红：删 return/删 .then 回退/无条件回退均 exit=1）+ 用户改写守卫（M-1）+ .catch 兜底（M-2）+ 保守交付判据（OQ-1：未显式 ok:false 即交付，防老宿主双发）+ 测试卫生（M-3）。461 全绿。修复窄域复审进行中。
 3. 批 2 审查 verdict 回收 → 放行批 3（partial 实时回填草稿：committed/live 分离+wake 门控+onSegment 替换尾部）。
 4. **批 3（partial 实时回填）已入库且门禁闭环** `91f940a`+`3d106f9`（+复审 Minor 修补进行中）：初审 fail（I-1 wake 续段 autoSend 定时器不取消→半成品外发+命令重复；I-2 提交在途窗口回写已提交文本；I-3 测试口径）→ 全修（cancelAutoSend+submitInFlightRef 三处置/检/清+锁）；**复审 pass-with-minor**（无 Blocker/Important，六突变内存重放全抓红）→ Minor 修补：抢占路径同口径清标记（真 bug）、空 partial 早退防闪烁、锁加强（放行判据+跳过分支同在窗口）；473→477 全绿（批 4a 已先行入库 4d720c3）。
-5. 批 4（快速/准确模式语义化+定稿耗时显示+final 超时 10s→25s 对齐 + LLM 纠错 /correct）前置：ctx.llm PoC 剩余面（stream(GenerateOptions) 签名已核：provider+model+messages+system 单参；运行时可用性待批 4 实操）。
+5. **批 4 已入库** `4d720c3`（4a：final 超时 25s 对齐 host 20s race+senseVoice 快速/准确语义化+定稿耗时显示）+ `9488613`（4b：llm-correct.ts 纯模块+/correct 路由+设置十一站+correctDraft 纠错预步，492 全绿）+ `45d5b92`（真机项登记）。**ctx.llm 运行时 PoC 收敛为 mock 单测+真机项**（本地 dsh.service 是生产宿主不可重启实证）；批 4 独立审查进行中。
+6. 批 5（autoSend 延迟解耦：scheduleAutoSend 计时从 silenceMs 改客户端常量 1200ms，silenceMs 端点语义不变）——批 4 verdict 回收后开工。
 3. 每批门禁（主会话执行+四连 → 审查 subagent 审 diff → 主会话裁决）；批 1 I10 豁免见 ADR-0012（bargeInSalvage 布尔默认 true + PRE_ROLL_MS=2000 常量）。
 4. 批 1 真机验收项已登记 docs/qa/must-verify-manually.md（外放/耳机 × salvage 纯度 + 纯「嗯」不发送 + 逃逸关口）。
 5. issue #15 回复稿与发版（v0.7.26 先例）在收口批，待用户拍板。
