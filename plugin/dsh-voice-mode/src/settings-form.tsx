@@ -596,6 +596,44 @@ function Row({ name, desc, children }: { name: string; desc: string; children: R
   )
 }
 
+/** Issue #15 批 6：「下次进入语音模式生效」的字段清单（§2.D 实测语义：其余字段或即时
+ *  热生效——ttsEngine/kokoroModel/voice/rate，或懒重建——senseITN/senseVoice，或段级
+ *  ——silenceMs，均不在此列）。 */
+const NEXT_ENTRY_FIELDS: { key: string; label: string; fmt?: (v: unknown) => string }[] = [
+  { key: 'interruptLevel', label: 'interruptLevelLabel' },
+  { key: 'bargeInMode', label: 'bargeInModeLabel' },
+  { key: 'echoGateDb', label: 'echoGateDbLabel', fmt: (v) => `${v} dB` },
+  { key: 'autoSend', label: 'autoSendLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
+  { key: 'autoResume', label: 'autoResumeLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
+  { key: 'mode', label: 'modeLabel' },
+  { key: 'wakeWord', label: 'wakeWordLabel', fmt: (v) => (v ? tr('valueQuoted').replace('{value}', String(v)) : tr('valueOff')) },
+  { key: 'toolBeep', label: 'toolBeepLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
+  { key: 'captionFontSize', label: 'captionFontSizeLabel' },
+  { key: 'captionMaxWidth', label: 'captionMaxWidthLabel' },
+  { key: 'backchannelYield', label: 'backchannelYieldLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
+  { key: 'yieldMs', label: 'yieldMsLabel', fmt: (v) => `${v} ms` },
+  { key: 'bargeInSalvage', label: 'bargeInSalvageLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
+  { key: 'llmCorrect', label: 'llmCorrectLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
+]
+
+/** 生效提示块：列出「已保存但未生效」的字段及其运行态当前值。 */
+function EffectivePending({ effective, value }: { effective: Record<string, unknown> | null; value: Record<string, unknown> }): React.ReactElement | null {
+  if (!effective) return null
+  const pending = NEXT_ENTRY_FIELDS.filter((f) => effective[f.key] !== undefined && effective[f.key] !== value[f.key])
+  if (pending.length === 0) return null
+  const items = pending
+    .map((f) => {
+      const eff = f.fmt ? f.fmt(effective[f.key]) : String(effective[f.key])
+      return tr('effectiveItem').replace('{label}', tr(f.label as TKey)).replace('{value}', eff)
+    })
+    .join(tr('effectiveItemSep'))
+  return (
+    <div data-dshvm-settings="effective-pending" style={{ fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '8px 2px 4px', lineHeight: 1.6 }}>
+      {tr('effectivePending').replace('{count}', String(pending.length)).replace('{items}', items)}
+    </div>
+  )
+}
+
 /** 设置分组：小标题 + 上分隔线，把罗列字段梳理成块。 */
 function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
   return (
@@ -914,6 +952,23 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
       alive = false
     }
   }, [engine])
+  // Issue #15 批 6：运行态生效值探针——拉一次 host /voice-mode/config（回环+同源已守卫）。
+  // 「下次进入语音模式生效」的字段，saved（设置 scope 值）≠ effective（运行态）时在卡片
+  // 顶部列出「当前生效值」——设置生效反馈（问题⑧：用户改完以为没生效）。探针失败静默
+  // （附加信息，不阻断设置面板）。
+  const [effective, setEffective] = useState<Record<string, unknown> | null>(null)
+  useEffect(() => {
+    let alive = true
+    void fetch(location.origin + BASE_PATH + '/config')
+      .then((res) => (res.ok ? (res.json() as Promise<Record<string, unknown>>) : null))
+      .then((data) => {
+        if (alive && data && typeof data === 'object') setEffective(data)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
   const voiceOptions =
     engine === 'edge'
       ? edgeRaw
@@ -948,6 +1003,7 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
 
       {!collapsed && (
         <div id="dshvm-settings-card-body" style={setBody}>
+          <EffectivePending effective={effective} value={value} />
           <div style={{ marginTop: 4 }}>
             <Section title={tr('secRead')}>
             <Row name="ttsEngine" desc={tr('descTtsEngine')}>
