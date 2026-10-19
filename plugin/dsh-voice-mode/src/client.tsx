@@ -1592,15 +1592,19 @@ export function MicButton({
     if (sid && shouldSteerSubmit(runningRef.current, draftSnapshot)) {
       void bus.steerSubmit(sid, draftSnapshot).then((delivered) => {
         if (delivered) {
-          try {
-            actions?.setDraft?.('')
-          } catch {
-            // 清草稿失败不阻断——消息已直达
+          // 用户改写守卫（与队列重试循环同口径，审查 M-1）：RPC 在途期间用户改写了
+          // 草稿 → 不清（消息已直达，用户的改写留给用户）。
+          if (draftRef.current.trim() === draftSnapshot) {
+            try {
+              actions?.setDraft?.('')
+            } catch {
+              // 清草稿失败不阻断——消息已直达
+            }
           }
           return
         }
         submitViaQueue()
-      })
+      }).catch(() => submitViaQueue()) // 审查 M-2：兜底 promise rejection（理论不可达）
       return
     }
     submitViaQueue()

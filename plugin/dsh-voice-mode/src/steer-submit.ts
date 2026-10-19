@@ -34,12 +34,18 @@ export function shouldSteerSubmit(running: boolean, draft: string): boolean {
  * 尝试 steer 直提交。true=已直达（调用方清草稿、跳过重试与 submit() 防双发）；
  * false=调用方回退队列路径。任何异常都吞掉返回 false（老宿主无 mode 参数/
  * 抛错时安全降级）。
+ *
+ * 交付判据取**保守口径**：prompt resolve 且未显式 ok:false 即视为已交付。宿主契约
+ * 返回 RemoteResult 判别联合（{ok:true,value}|{ok:false,error}，0.1.2-rc.1+ 实证）；
+ * 0.1.1-rc.2 的 api-session-controller 子包未发布（npm E404）、返回形状未知——若其
+ * 成功却返回非 RemoteResult（如 undefined），严判（仅 ok:true 算交付）会回退队列造成
+ * **双发**；宁可以「未显式失败即交付」承受假想的信息丢失，也不双发（审查 OQ-1）。
  */
 export async function trySteerSubmit(session: SteerSession | undefined, text: string): Promise<boolean> {
   if (typeof session?.prompt !== 'function') return false
   try {
     const r = await session.prompt([{ type: 'text', text }], 'steer')
-    return r?.ok === true
+    return !(r && r.ok === false)
   } catch {
     return false
   }

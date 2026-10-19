@@ -2043,7 +2043,7 @@ async function trySteerSubmit(session, text) {
   if (typeof session?.prompt !== "function") return false;
   try {
     const r = await session.prompt([{ type: "text", text }], "steer");
-    return r?.ok === true;
+    return !(r && r.ok === false);
   } catch {
     return false;
   }
@@ -3212,7 +3212,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "cd0a159";
+var BUILD_TAG = "c245c4b";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4281,14 +4281,16 @@ function MicButton({
     if (sid && shouldSteerSubmit(runningRef.current, draftSnapshot)) {
       void bus.steerSubmit(sid, draftSnapshot).then((delivered) => {
         if (delivered) {
-          try {
-            actions?.setDraft?.("");
-          } catch {
+          if (draftRef.current.trim() === draftSnapshot) {
+            try {
+              actions?.setDraft?.("");
+            } catch {
+            }
           }
           return;
         }
         submitViaQueue();
-      });
+      }).catch(() => submitViaQueue());
       return;
     }
     submitViaQueue();
