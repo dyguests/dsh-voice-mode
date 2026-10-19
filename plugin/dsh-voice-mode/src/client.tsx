@@ -240,6 +240,11 @@ const SAMPLE_RATE_16K = 16000
  * 归零后由 NLMS 的 160ms 全窗口自适应学习任意路径延迟（合成模型：2~150ms 全路径一致消除）。
  */
 const ECHO_DELAY_MS = 0
+/** Issue #15 批 5：自动发送附加窗（ms）——与端点静音阈值 silenceMs **解耦**的固定值。
+ *  原实现直接用 bootNow().silenceMs：用户按问题⑦调低 silenceMs 会连带压缩「断句后
+ *  再等一会儿才发」的窗口 → 长句在自然停顿处被切成多条发出（碎片化回归）。端点语义
+ *  （多快算说完）仍由 silenceMs 独占，本常量只决定「说完之后额外等多久」。 */
+const AUTO_SEND_EXTRA_MS = 1200
 /** playing 从 true→false 后的回声尾音宽限（扬声器残响/硬件缓冲仍会被麦克风采到）。
  *  此窗口内 isPlaying 仍判 true，防「句播完瞬间的残响」漏入 ASR → 自聊/多重声音。 */
 const ECHO_TAIL_MS = 400
@@ -1672,11 +1677,10 @@ export function MicButton({
     runSubmit(draftSnapshot)
   }
 
-  /** 累积模式：静音到「发送阈值」（断句已等一个 silenceMs，再额外等一个）才发；
+  /** 累积模式：断句（端点已等一个 silenceMs）后再等一个固定附加窗才发；
    *  期间再开口由 onState('speech') → cancelAutoSend 取消，继续累积。 */
   const scheduleAutoSend = (): void => {
     cancelAutoSend()
-    const delay = bootNow().silenceMs
     autoSendTimerRef.current = setTimeout(() => {
       autoSendTimerRef.current = null
       const eng = engineRef.current
@@ -1686,7 +1690,7 @@ export function MicButton({
       if (bus.ui.playing) return
       if (bootNow().autoSend === false) return
       submitDraftNow()
-    }, delay)
+    }, AUTO_SEND_EXTRA_MS)
   }
 
   const exitMode = async (_reason: 'manual' | 'idle' | 'typing'): Promise<void> => {

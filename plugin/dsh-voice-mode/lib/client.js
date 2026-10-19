@@ -3235,7 +3235,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "faf4914";
+var BUILD_TAG = "2264228";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3266,6 +3266,7 @@ function playToolBeep() {
 }
 var SAMPLE_RATE_16K = 16e3;
 var ECHO_DELAY_MS = 0;
+var AUTO_SEND_EXTRA_MS = 1200;
 var ECHO_TAIL_MS = 400;
 var HOLD_CLEAR_FRAMES = 2;
 var WAVE_BARS = 14;
@@ -4367,7 +4368,6 @@ function MicButton({
   };
   const scheduleAutoSend = () => {
     cancelAutoSend();
-    const delay = bootNow().silenceMs;
     autoSendTimerRef.current = setTimeout(() => {
       autoSendTimerRef.current = null;
       const eng = engineRef.current;
@@ -4375,7 +4375,7 @@ function MicButton({
       if (bus.ui.playing) return;
       if (bootNow().autoSend === false) return;
       submitDraftNow();
-    }, delay);
+    }, AUTO_SEND_EXTRA_MS);
   };
   const exitMode = async (_reason) => {
     if (localRef.current === "off") return;
