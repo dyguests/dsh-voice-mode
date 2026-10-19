@@ -19,6 +19,14 @@
  *     静音块不产字），并按 LAG_MS 模拟流式解码滞后（收到足量后续音频才吐出该字）。
  *
  * 不变量：本测试只读 src/，不改任何源码。
+ *
+ * Issue #15 批 1（2026-10-19，ADR-0012）扩展——打断语音抢救（修「打断吃句」）：
+ *   播放期用户语音只进 detectChunks 检测通道、不进识别段（asr.ts:774/828-837）；
+ *   hardBreak 后 /cancel asr.reset + discardSegment 双清场 → 打断前说的话全丢。
+ *   修复：AEC 后墙钟预录环（PRE_ROLL_MS=2000）+ hardBreak 弃段时把「VAD 首真
+ *   （detect 请求 sentAt 口径）-250ms」起的音频并入新识别段（absorbPreRoll）。
+ *   本文件新增装置×4：vadOnly 响应可编程+detect 延迟 dial / hardBreak 序列注入 /
+ *   reset 延迟档 / salvage 段纯 backchannel 弃段守卫（「嗯」不得作为消息发出）。
  */
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
@@ -49,6 +57,17 @@ const ECHO_AMP = 0.3 // >0.2 → AI 朗读（回声）
 const CMD_AMP = 0.1 // 0.08~0.2 → 命令语音（与唤醒词可区分）
 const SPEECH_AMP = 0.06 // 唤醒词语音（超门限）
 const SIL_AMP = 0.0005 // 静音（低于门限）
+// Issue #15 批 1：backchannel 频段（0.03~0.05，夹在静音门限与命令/唤醒频段之间，
+// 不影响既有幅度分工）——假 host 转写为「嗯」，供 salvage 段弃段守卫测试。
+const BC_AMP = 0.04
+const BC_CHAR = '嗯'
+// Issue #15 批 1：两个延迟 dial（台架装置，可复零）。
+//   detect 延迟：vadOnly 响应延迟（模拟检测通道 RTT，证 onset 锚 sentAt 不受响应到达影响）。
+//   reset 延迟：reset=1 响应延迟（模拟 host 清场慢，证 absorb 同步 seed 无 offset 错位）。
+let DETECT_DELAY_MS = 0
+let RESET_DELAY_MS = 0
+const setDetectDelay = (ms) => { DETECT_DELAY_MS = ms }
+const setResetDelay = (ms) => { RESET_DELAY_MS = ms }
 const AI_PHRASE = '我明白了'
 const WAKE = '你好小李'
 const COMMAND = '给我说一百个字'
@@ -142,10 +161,15 @@ function feed(epoch, offset, samples, final, padMs = 0) {
       const block = pull(st, blockN)
       if (!block) break
       const endMs = (st.fedPos - st.qLen) / SR * 1000
+      // 频段按**块均值**判定：小块需含足量某频段样本才产字（32ms 的相位小尾巴不产字——
+      // max 判会让它产字污染唤醒词文本，D5 命令窗用例实测抓红）。Issue #15 批 1：backchannel
+      // 频段加宽到 [0.015, 0.05)——静音→backchannel 混合块（如 100ms 嗯 + 100ms 静音，
+      // 均值≈0.02）落本频段产「嗯」而非落唤醒频段产「你」杂字；纯静音（0.0005）不产字。
       const amp = meanAbs(block)
       let ch = ''
       if (amp > 0.2) ch = AI_PHRASE[st.aiIdx++ % AI_PHRASE.length]
       else if (amp >= 0.08) ch = COMMAND[st.cmdIdx++ % COMMAND.length]
+      else if (amp >= 0.015 && amp < 0.05) ch = BC_CHAR
       else if (amp >= SPEECH_RMS) ch = WAKE[st.wakeIdx++ % WAKE.length]
       st.pending.push({ endMs, ch })
     }
@@ -171,13 +195,21 @@ globalThis.fetch = async (url, init = {}) => {
   const final = p.get('final') === '1'
   if (p.get('reset') === '1') {
     hostLog.resets++
+    // Issue #15 批 1：reset 延迟 dial（模拟 host 清场慢）。
+    if (RESET_DELAY_MS > 0) await sleep(Math.ceil(RESET_DELAY_MS / 64))
     streams.clear()
     return new Response(JSON.stringify({ ok: true }), { status: 200 })
   }
   const raw = init.body ? new Float32Array(init.body) : new Float32Array(0)
   if (p.get('vadOnly') === '1') {
     hostLog.detects++
-    return new Response(JSON.stringify({ isSpeech: false }), { status: 200 })
+    // Issue #15 批 1：vadOnly 响应可编程 + detect 延迟 dial。忠实真机 fixture 语义：
+    // Silero 检测 VAD 不被纯回声触发（0/937 帧，CONTEXT.md:59），故回声段（>0.2）回
+    // false；用户语音段（0.03~0.2）回 true。onset 由引擎锚请求 sentAt（不受本延迟影响）。
+    if (DETECT_DELAY_MS > 0) await sleep(Math.ceil(DETECT_DELAY_MS / 64))
+    const amp = meanAbs(raw)
+    const isSpeech = amp >= 0.03 && amp < 0.2
+    return new Response(JSON.stringify({ isSpeech }), { status: 200 })
   }
   if (final) {
     hostLog.finals++
@@ -233,7 +265,7 @@ const sleep = async (ms) => {
   }
 }
 
-function makeEngine({ wakeWord = WAKE, isPlaying = () => false } = {}) {
+function makeEngine({ wakeWord = WAKE, isPlaying = () => false, bargeInSalvage } = {}) {
   streams.clear()
   hostLog.partials = hostLog.resets = hostLog.detects = hostLog.finals = 0
   let state = 'idle'
@@ -248,6 +280,8 @@ function makeEngine({ wakeWord = WAKE, isPlaying = () => false } = {}) {
       wakeWord,
       isPlaying,
       onIsPlaying: undefined,
+      // Issue #15 批 1：bargeInSalvage 透传（不传 = 默认开，与 I10 豁免口径一致）。
+      ...(bargeInSalvage !== undefined ? { bargeInSalvage } : {}),
     },
     'sess-test',
   )
@@ -424,6 +458,119 @@ await t('朗读期检测通道仍工作（barge-in 不受自聊守卫影响）',
   await h.engine.start()
   await say(ECHO_AMP, 1000)
   assert.ok(hostLog.detects > 0, `朗读期应走 vadOnly 检测通道（实际 ${hostLog.detects} 次）`)
+  await h.engine.stop()
+})
+
+// ---------------------------------------------------------------- Issue #15 批 1：打断语音抢救（ADR-0012）
+console.log('Issue #15 批 1：打断语音抢救（preRoll + absorbPreRoll）')
+const countOccur = (s, sub) => s.split(sub).length - 1
+
+await t('打断吃句修复：朗读期开口说的话经抢救进入定稿（absorbPreRoll）', async () => {
+  let playing = true
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
+  await h.engine.start()
+  await say(ECHO_AMP, 800) // AI 朗读中（回声）
+  await say(CMD_AMP, 1000) // 用户开口打断（命令频段——打断生效前说的全在预录环里）
+  await sleep(300) // 让 detect 轮询把 isSpeech 送上来（onset 记录）
+  playing = false // hardBreak：停播
+  await h.engine.discardSegment() // client.tsx hardBreak 时序的引擎侧等价（ salvage 在此发生）
+  await say(SPEECH_AMP, 600) // 打断后把话说完（唤醒频段——与打断前可区分）
+  await say(SIL_AMP, 2500) // 静音断句 → 定稿
+  assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）`)
+  assert.ok(
+    h.segments[0].includes('给我说'),
+    `定稿应含打断前说的话（实际 "${h.segments[0]}"）——absorbPreRoll 未生效即「打断吃句」回归`,
+  )
+  assert.ok(h.segments[0].includes('一百'), `定稿应含打断前全部命令（实际 "${h.segments[0]}"）——句首/中段被切`)
+  assert.ok(h.segments[0].includes('你好'), `定稿应含打断后说的话（实际 "${h.segments[0]}"）`)
+  await h.engine.stop()
+})
+
+await t('bargeInSalvage=false 逃生口：丢弃打断前语音（回退 issue 现状）', async () => {
+  let playing = true
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: false })
+  await h.engine.start()
+  await say(ECHO_AMP, 800)
+  await say(CMD_AMP, 1000)
+  await sleep(300)
+  playing = false
+  await h.engine.discardSegment()
+  await say(SPEECH_AMP, 600)
+  await say(SIL_AMP, 2500)
+  assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条）`)
+  assert.ok(
+    !h.segments[0].includes('给我说'),
+    `关抢救应丢弃打断前语音（实际 "${h.segments[0]}"）——逃生口失效`,
+  )
+  await h.engine.stop()
+})
+
+await t('detect 响应延迟（RTT p99≈430ms）不切句首（锚请求体起点，非 sentAt/响应到达）', async () => {
+  setDetectDelay(430)
+  try {
+    let playing = true
+    const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
+    await h.engine.start()
+    await say(ECHO_AMP, 800)
+    await say(CMD_AMP, 1000)
+    await sleep(900) // detect 轮询 + 430ms 模拟 RTT
+    playing = false
+    await h.engine.discardSegment()
+    await say(SPEECH_AMP, 600)
+    await say(SIL_AMP, 2500)
+    assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条）`)
+    assert.ok(
+      h.segments[0].includes('给我说'),
+      `RTT 延迟下句首不得被切（实际 "${h.segments[0]}"）——onset 误锚响应到达时刻会切掉句首`,
+    )
+    await h.engine.stop()
+  } finally {
+    setDetectDelay(0)
+  }
+})
+
+await t('reset 延迟档（host 清场慢 1s）下 absorb 不错位（无重复字符）', async () => {
+  setResetDelay(1000)
+  try {
+    let playing = true
+    const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
+    await h.engine.start()
+    await say(ECHO_AMP, 800)
+    await say(CMD_AMP, 1000)
+    await sleep(300)
+    playing = false
+    await h.engine.discardSegment() // reset=1 响应被延迟 1s（台架 dial）
+    await say(SPEECH_AMP, 600)
+    await say(SIL_AMP, 2500)
+    assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条）`)
+    assert.ok(h.segments[0].includes('给我说'), `reset 延迟下抢救仍应生效（实际 "${h.segments[0]}"）`)
+    assert.equal(
+      countOccur(h.segments[0], '给我说'),
+      1,
+      `抢救内容不得重复上行（实际 "${h.segments[0]}"）——seed 与 host 清场次序错乱会重复`,
+    )
+    await h.engine.stop()
+  } finally {
+    setResetDelay(0)
+  }
+})
+
+await t('salvage 段纯 backchannel（「嗯」）→ engine 侧弃段，不作为消息发出', async () => {
+  let playing = true
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
+  await h.engine.start()
+  await say(ECHO_AMP, 800) // AI 朗读
+  await say(SIL_AMP, 600) // 句间安静（种子锚点=请求体起点-250ms 落在这里——不拖 AI 尾音）
+  await say(BC_AMP, 200) // 用户打断只说了「嗯」（backchannel 频段；≤2 个「嗯」必在词表内）
+  await sleep(300)
+  playing = false
+  await h.engine.discardSegment() // 抢救「嗯」
+  await say(SIL_AMP, 2500) // 静音 → 定稿（守卫失效则会发出「嗯嗯」）
+  assert.deepEqual(
+    h.segments,
+    [],
+    `纯 backchannel 抢救段不得作为消息发出（实际 ${JSON.stringify(h.segments)}）——修打断吃句不能顺带制造幽灵消息`,
+  )
   await h.engine.stop()
 })
 

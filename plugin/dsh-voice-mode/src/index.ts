@@ -182,6 +182,10 @@ export interface VoiceSettingsValue {
   /** 批 5 / ADR-0008 Phase 1：让位语义 backchannel（默认 true = 朗读期用户说「嗯/对」自动跳过当前句）。
    *  关 = 不挂 onBackchannel 回调（行为等同改造前）。I10 豁免：默认开是产品决策，ADR-0008 已接受。 */
   backchannelYield: boolean
+  /** Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true = hardBreak 时把播放期预录环
+   *  「语音起始-250ms」起的音频并入新识别段，修「打断吃句」）。关 = 回退丢句现状
+   *  （外放+无原生 AEC 等回声劣化环境的逃生口）。I10 有意豁免见 ADR-0012。 */
+  bargeInSalvage: boolean
   /** 批 G 任务 3：让位窗口时长（ms，500-3000，默认 1500）。
    *  onBackchannel 命中后 TTS 丢帧持续时间；hold 期内用户真要说则原 hardBreak 接管。 */
   yieldMs: number
@@ -216,6 +220,8 @@ const VOICE_SETTINGS_DEFAULTS: VoiceSettingsValue = {
   captionMaxWidth: 1,
   // 批 5：backchannel 默认 true（产品决策；关 = 不挂 onBackchannel 回调，行为等同改造前）。
   backchannelYield: true,
+  // Issue #15 批 1 / ADR-0012：打断抢救默认开（I10 有意豁免：默认体验破损=本 issue 存在原因）。
+  bargeInSalvage: true,
   // 批 G 任务 3：让位窗口默认 1500ms（与改造前批 5 行为字节等价；用户可调 500-3000ms）。
   yieldMs: 1500,
 }
@@ -247,6 +253,7 @@ const DESC = {
   captionFontSize: en.descCaptionFontSize,
   captionMaxWidth: en.descCaptionMaxWidth,
   backchannelYield: en.descBackchannelYield,
+  bargeInSalvage: en.descBargeInSalvage,
   yieldMs: en.descYieldMs,
 } as const
 
@@ -340,6 +347,13 @@ export function createVoiceSettingsSchema(defs?: Partial<VoiceSettingsValue>): z
       .description(
         DESC.backchannelYield,
       ),
+    // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
+    bargeInSalvage: z
+      .boolean()
+      .default(d.bargeInSalvage)
+      .description(
+        DESC.bargeInSalvage,
+      ),
     yieldMs: z
       .number()
       .min(500)
@@ -410,6 +424,8 @@ export interface Config {
   captionMaxWidth: 0 | 1 | 2
   /** 批 5 / ADR-0008：让位语义 backchannel（默认 true）。 */
   backchannelYield: boolean
+  /** Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true；透传 asr.ts AsrConfig.bargeInSalvage）。 */
+  bargeInSalvage: boolean
   /** 批 G：让位窗口时长（ms，500-3000，默认 1500）。 */
   yieldMs: number
 }
@@ -447,6 +463,8 @@ export const Config: z<Config> = z.object({
   captionFontSize: z.union([z.const(0), z.const(1), z.const(2), z.const(3)]).default(0),
   captionMaxWidth: z.union([z.const(0), z.const(1), z.const(2)]).default(1),
   backchannelYield: z.boolean().default(true),
+  // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
+  bargeInSalvage: z.boolean().default(true),
   yieldMs: z.number().default(1500),
 })
 
@@ -459,13 +477,13 @@ function voiceSettingsFromConfig(config: Config): VoiceSettingsValue {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
     idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, bargeInMode,
     echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
-    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs,
+    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage,
   } = config
   return {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
     idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, bargeInMode,
     echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
-    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs,
+    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage,
   }
 }
 
@@ -864,6 +882,7 @@ export function apply(ctx: Context, config: Config): void {
             captionFontSize: vset.captionFontSize,
             captionMaxWidth: vset.captionMaxWidth,
             backchannelYield: vset.backchannelYield,
+            bargeInSalvage: vset.bargeInSalvage,
             yieldMs: vset.yieldMs,
             senseITN: vset.senseITN,
             cacheDir: config.cacheDir,

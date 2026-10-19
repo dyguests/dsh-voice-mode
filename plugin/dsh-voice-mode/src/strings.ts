@@ -111,6 +111,9 @@ export const zh = {
   skipReading: '跳过当前朗读',
   backchannelYield: '短应答让位',
   descBackchannelYield: '朗读期用户说「嗯/对」等短应答时自动让位（跳过当前 TTS 句 + 短暂丢帧 1.5s；真要说则原 hardBreak 接管；关 = 不让位，行为等同改造前）',
+  // Issue #15 批 1 / ADR-0012：打断语音抢救。
+  bargeInSalvage: '打断语音抢救',
+  descBargeInSalvage: 'AI 朗读时你开口打断：自动保留从开口到打断生效之间你说的话，并入识别继续发送（修「打断吃句」；关 = 丢弃打断前语音——仅外放且无回声消除的环境建议关）',
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: '让位窗口',
   descYieldMs: '让位语义触发后等待时长（毫秒，500-3000，默认 1500；窗口内用户真要说则原 hardBreak 接管，窗口到点自动恢复播放）',
@@ -175,6 +178,8 @@ export const zh = {
   captionFontSizeLabel: '字幕字号',
   captionMaxWidthLabel: '字幕宽度',
   backchannelYieldLabel: '短应答让位',
+  // Issue #15 批 1 / ADR-0012：打断语音抢救（*Label 镜像键）。
+  bargeInSalvageLabel: '打断语音抢救',
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: '让位窗口',
   // 批 G 任务 2：空闲预警 + 退出提示文案。
@@ -346,6 +351,9 @@ export const en: Record<keyof typeof zh, string> = {
   skipReading: 'Skip current reading',
   backchannelYield: 'Short-reply yielding',
   descBackchannelYield: 'When the user says a short answer like "mm-hmm/right" while the agent is reading aloud, yield automatically (skip the current TTS sentence + drop frames for 1.5s; if the user really wants to speak, the existing hardBreak takes over; off = no yielding, behavior matches pre-batch-5)',
+  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage.
+  bargeInSalvage: 'Barge-in speech salvage',
+  descBargeInSalvage: 'When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)',
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: 'Yield window',
   descYieldMs: 'How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires)',
@@ -404,6 +412,8 @@ export const en: Record<keyof typeof zh, string> = {
   captionFontSizeLabel: 'Caption size',
   captionMaxWidthLabel: 'Caption width',
   backchannelYieldLabel: 'Short-reply yielding',
+  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (*Label mirror key).
+  bargeInSalvageLabel: 'Barge-in speech salvage',
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: 'Yield window',
   // 批 G 任务 2：空闲预警 + 退出提示文案。

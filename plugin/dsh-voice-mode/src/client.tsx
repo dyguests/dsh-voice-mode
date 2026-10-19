@@ -626,6 +626,8 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     captionFontSize: 0,
     captionMaxWidth: 1,
     backchannelYield: true,
+    // Issue #15 批 1 / ADR-0012：打断语音抢救默认 true（与 VOICE_SETTINGS_DEFAULTS 对齐）。
+    bargeInSalvage: true,
     yieldMs: 1500,
     // 批 B：5 ASR 字段默认值，与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐（plan §12 批 B 周全修复）。
     senseITN: true,
@@ -1273,6 +1275,8 @@ interface VoiceBootConfig {
   captionMaxWidth: 0 | 1 | 2
   /** 批 5 / ADR-0008 Phase 1：让位语义 backchannel 开关（默认 true = 朗读期说「嗯/对」自动让位）。 */
   backchannelYield: boolean
+  /** Issue #15 批 1 / ADR-0012：打断语音抢救开关（默认 true = hardBreak 时并入播放期预录，修「打断吃句」）。 */
+  bargeInSalvage: boolean
   /** 批 G 任务 3：让位窗口时长（ms，500-3000，默认 1500）。onBackchannel 命中后 TTS 丢帧持续时间。 */
   yieldMs: number
   /** 批 B：ITN（逆文本规范化：口语数字 → 书面数字；默认 true）。 */
@@ -1364,6 +1368,8 @@ export function MicButton({
       captionFontSize: 0,
       captionMaxWidth: 1,
       backchannelYield: true,
+      // Issue #15 批 1 / ADR-0012：打断语音抢救默认 true。
+      bargeInSalvage: true,
       yieldMs: 1500,
       // 批 B：5 ASR 字段默认值，与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐（plan §12 批 B 周全修复）。
       senseITN: true,
@@ -1415,6 +1421,8 @@ export function MicButton({
         captionMaxWidth: c.captionMaxWidth === 0 || c.captionMaxWidth === 2 ? c.captionMaxWidth : 1,
         // 批 5：同模式（plan §7.2 表漏列 fetchConfig 字段透传，类批 3 captionFontSize 集成层补丁）
         backchannelYield: c.backchannelYield !== false,
+        // Issue #15 批 1 / ADR-0012：打断语音抢救透传（同 backchannelYield 模式）。
+        bargeInSalvage: c.bargeInSalvage !== false,
         // 批 G 任务 3：让位窗口时长（500-3000ms）；类型校验严格 + 默认值兜底。
         yieldMs: typeof c.yieldMs === 'number' && c.yieldMs >= 500 && c.yieldMs <= 3000 ? c.yieldMs : 1500,
         // 批 B：5 ASR 字段透传（host /config handler 在 c2120d9 已透传 4 字段，本批补 senseVoice + 客户端白名单对齐）。
@@ -1813,6 +1821,8 @@ export function MicButton({
             : undefined,
           // 批 F：传 backchannelYield 给 ASR 引擎，让 asr.ts:379 守卫短路 matchBackchannel。
           backchannelYield: cfg.backchannelYield,
+          // Issue #15 批 1 / ADR-0012：打断语音抢救透传给 ASR 引擎（预录环+hardBreak 并入）。
+          bargeInSalvage: cfg.bargeInSalvage,
         },
         sid,
       )

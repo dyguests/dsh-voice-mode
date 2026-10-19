@@ -112,6 +112,11 @@ export interface AsrConfig {
    *  批 7O（ADR-0006）：detect = 第一级自动探测（getUserMedia 后读 echoCancellation），
    *  false → 运行时落 manual、true → auto。 */
   bargeInMode?: 'auto' | 'manual' | 'detect'
+  /** Issue #15 批 1（ADR-0012）：打断语音抢救。播放期维护 AEC 后墙钟预录环，
+   *  hardBreak 弃段时把「语音起始-250ms」起的音频并入新识别段（修「打断吃句」）。
+   *  缺省视为 true（I10 有意豁免：默认体验破损=本 issue 存在原因，见 ADR-0012）；
+   *  false = 关，回退丢句现状（外放+无原生 AEC 等回声劣化环境的逃生口）。 */
+  bargeInSalvage?: boolean
 }
 
 export interface SegmentMeta {
@@ -158,6 +163,10 @@ const MAX_SEGMENT_MS = 30000
 /** 最小语音时长（P1-3）：不足视为短促噪声，静音到点后放弃本段不发送。 */
 const MIN_SPEECH_MS = 250
 const PRE_PAD_MS = 250
+/** Issue #15 批 1（ADR-0012）：播放期预录环长（打断抢救种子）。推导见计划 §6：
+ *  覆盖「VAD 首真→hardBreak 确认」全窗（confirm 252~597ms + 检测往返 p99≈430ms）≈1.1s
+ *  量级，2000ms≈1.8× 覆盖；并入起点锚定语音起始时刻，环长只决定极端慢确认的丢失上界。 */
+const PRE_ROLL_MS = 2000
 /** P1-4：partial / 检测通道轮询节拍 100ms（墙钟衡量，帧长无关；阶段二降低 isSpeech 帧级检测延迟）。 */
 const PARTIAL_INTERVAL_MS = 100
 /** partial 预览下限/上限（流式模型代价低，上限放宽）。 */
@@ -251,6 +260,23 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
   /** 检测通道代际：每次重置（弃段/退出/进入/新段开始）递增，作废在途 vadOnly 响应，
    *  防「重置后旧响应推进 detectSent 水位」的毒化竞态（对抗审查 Important#1）。 */
   let detectGeneration = 0
+  // --- Issue #15 批 1（ADR-0012）：播放期预录环（打断抢救）---
+  /** 打断抢救总闸（默认开=I10 有意豁免；false=关回退丢句现状）。 */
+  const salvageEnabled = config.bargeInSalvage !== false
+  /** AEC 后墙钟预录环：与 detectChunks 同条件同帧入环（播放期、非 hold）。 */
+  let preRoll: Float32Array[] = []
+  /** 环内累计音频毫秒（裁剪到 PRE_ROLL_MS）。 */
+  let preRollMs = 0
+  /** 环首帧对应的墙钟（seek 切割点换算用）。 */
+  let preRollStartWall = 0
+  /** 抢救种子起点墙钟（VAD 首真请求体起点-250ms，requestDetect 内记录；null=未记录）。
+   *  锚请求体起点而非 sentAt：VAD 首真只证明语音在请求窗内，RTT 大时 sentAt 滞后语音
+   *  起点多达一个窗长会切句首（台架 detect 延迟档实测抓红）；无记录时弃段退环起点兜底。 */
+  let preRollSeedWall: number | null = null
+  /** 播放态边沿跟踪（播放入口重置种子记录）。 */
+  let wasPlaying = false
+  /** 当前段是否抢救段（定稿时 backchannel 弃段守卫用）。 */
+  let salvagedSegment = false
 
   const asrUrl = (final: boolean, offset?: number, epoch?: number): string =>
     `${location.origin}${config.basePath.replace(/\/+$/, '')}/asr?sessionId=${encodeURIComponent(sessionId)}&final=${final ? 1 : 0}` +
@@ -461,6 +487,8 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     detectInFlight = true
     // fixture 录制：分离「往返耗时」与「客户端没排上」——停顿归因的唯一依据。
     const sentAt = Date.now()
+    // Issue #15 批 1（ADR-0012）：请求体起始墙钟（抢救种子锚点用，见下方 isSpeech 处理）。
+    const reqBodyStartWall = sentAt - (samples.length / SAMPLE_RATE) * 1000
     let rttMs = -1
     try {
       const res = await fetch(asrUrl(false, detectSent, epoch) + '&vadOnly=1', {
@@ -475,6 +503,12 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       const out = (await res.json()) as { isSpeech?: boolean }
       if (epoch !== segmentEpoch || gen !== detectGeneration) return
       if (out.isSpeech !== undefined) config.onIsSpeech?.(out.isSpeech)
+      // Issue #15 批 1（ADR-0012）：VAD 首真 → 记录抢救种子起点。锚**请求体起点-250ms**
+      // （非 sentAt/响应到达）：VAD 首真只证明「语音在本次请求窗内」，窗内位置不定；RTT 大时
+      // 在途抑制把 cadence 拉长（p99≈430ms → 窗≈430ms），sentAt 滞后语音起点多达一个窗长，
+      // 锚 sentAt 会切句首（台架 detect 延迟档实测抓红）。锚窗头保证永不切，代价是多带
+      // ≤一个检测窗的 AI 尾音——由 AEC 残差水平与 bargeInSalvage 逃生口兜底。
+      if (out.isSpeech === true && preRollSeedWall === null) preRollSeedWall = reqBodyStartWall - 250
       detectSent += samples.length
       // 释放已消费帧（长朗读下防缓冲无界增长）。
       while (detectChunks.length > 0 && detectSent >= detectChunks[0].length) {
@@ -573,6 +607,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     // 本段若消费过唤醒词（连说「你好小李+命令」），定稿时剥掉文本头部唤醒词再进草稿。
     const consumedWake = wakeConsumed
     wakeConsumed = false
+    // Issue #15 批 1（ADR-0012）：抢救段标记快照（弃段守卫用；随本段消费）。
+    const wasSalvaged = salvagedSegment
+    salvagedSegment = false
     forcePending = false
     speechMs = 0 // P1-3：新段重新起算纯语音时长
     uploadedSamples = 0
@@ -672,6 +709,12 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         const rawText = out.text ?? ''
         const finalText = consumedWake ? stripWakePrefix(rawText, wakeWord) : rawText
         if (finalText) {
+          // Issue #15 批 1（ADR-0012）回归守卫：抢救段整段命中 backchannel 词表 → 弃段。
+          // 播放期说「嗯/对」打断后，若不拦会经 salvage→定稿→autoSend 作为消息发出
+          // （现状是静默丢弃，修打断吃句不能顺带制造幽灵消息）。**engine 侧弃段**而非
+          // 「跳过 submit」：累积草稿语义下只跳 submit 会让「嗯」留草稿并随后续定稿段
+          // 的 autoSend 发出（复审 Important#1）。范围严格限抢救段+整段命中。
+          if (wasSalvaged && matchBackchannel(finalText)) return
           emit(transcriptListeners, finalText, meta)
         } else if (consumedWake && active && !speechActive && !holdActive) {
           // D5：本段只说了唤醒词（剥完为空）→ **不关命令窗口**，保持聆听等用户补命令。
@@ -771,7 +814,29 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       })
     }
     // hold 模式打断走显式手势（按住），不走 VAD 检测通道；toggle 模式保留检测通道。
-    if (playingNow && !holdActive && config.mode !== 'hold') detectChunks.push(data)
+    if (playingNow && !holdActive && config.mode !== 'hold') {
+      detectChunks.push(data)
+      // Issue #15 批 1（ADR-0012）：同帧入预录环（打断抢救种子）。与 detectChunks
+      // 同信号（AEC 后 data）、同条件；hardBreak 时取「语音起始-250ms」起并入新段。
+      if (salvageEnabled) {
+        if (preRoll.length === 0) preRollStartWall = Date.now()
+        preRoll.push(data)
+        preRollMs += durationMs
+        while (preRollMs > PRE_ROLL_MS && preRoll.length > 1) {
+          const dropped = preRoll.shift() as Float32Array
+          const droppedMs = (dropped.length / SAMPLE_RATE) * 1000
+          preRollMs -= droppedMs
+          preRollStartWall += droppedMs
+        }
+      }
+    }
+    // 播放入口重置 onset 记录（上一播放窗的起始对本次打断无意义）。
+    if (playingNow && !wasPlaying) {
+      wasPlaying = true
+      preRollSeedWall = null
+    } else if (!playingNow && wasPlaying) {
+      wasPlaying = false
+    }
 
     if (holdActive) {
       // hold：按压区间全部保留（绕过 VAD 门控与静音切句），仅段长上限兜底。
@@ -1015,6 +1080,13 @@ const startRecorder = async (): Promise<void> => {
     detectChunks = [] // 打断根治：退出清检测通道
     detectSent = 0
     detectGeneration++
+    // Issue #15 批 1（ADR-0012）：退出清预录环（防跨会话残留抢救种子）。
+    preRoll = []
+    preRollMs = 0
+    preRollStartWall = 0
+    preRollSeedWall = null
+    wasPlaying = false
+    salvagedSegment = false
     utteranceEndAt = null // P1-5：会话结束清除说完标记
     try {
       processor?.disconnect()
@@ -1072,6 +1144,13 @@ const startRecorder = async (): Promise<void> => {
       detectChunks = [] // 打断根治：进入清检测通道
       detectSent = 0
       detectGeneration++
+      // Issue #15 批 1（ADR-0012）：进入清预录环与抢救标记。
+      preRoll = []
+      preRollMs = 0
+      preRollStartWall = 0
+      preRollSeedWall = null
+      wasPlaying = false
+      salvagedSegment = false
       // 配置了唤醒词（且非 hold 模式）→ 先进 wake 待机态；否则直接聆听。
       setState(wakeEnabled ? 'wake' : 'listening')
       try {
@@ -1142,9 +1221,44 @@ const startRecorder = async (): Promise<void> => {
       utteranceEndAt = null
       forcePending = false
       lastPollAt = 0
+      // Issue #15 批 1（ADR-0012）：打断语音抢救——把播放期预录环「语音起始-250ms」起的
+      // 音频并入新识别段（修「打断吃句」：hardBreak 确认窗前用户说的话原本随 /cancel
+      // asr.reset + discardSegment 双清场全丢）。时序（对抗审查 I-1）：seed 同步完成
+      // （segment 在 seed 前保持空 → 无 partial 插入窗口）；reset 仍走 resetGate——
+      // requestPartial 本就 await resetGate，host 清场必先于首次上行落地，新段不用旧流。
+      let salvaged = false
+      if (salvageEnabled && preRoll.length > 0) {
+        const seedFromWall = Math.max(preRollSeedWall ?? preRollStartWall, preRollStartWall)
+        // 环内墙钟 seek：找第一个「帧结束时刻 > seedFromWall」的帧，其起点即切割点。
+        let acc = 0
+        let i = 0
+        for (; i < preRoll.length; i++) {
+          const frameMs = (preRoll[i].length / SAMPLE_RATE) * 1000
+          if (preRollStartWall + acc + frameMs > seedFromWall) break
+          acc += frameMs
+        }
+        const seeded = preRoll.slice(i)
+        const seededMs = seeded.reduce((n, c) => n + (c.length / SAMPLE_RATE) * 1000, 0)
+        if (seeded.length > 0 && seededMs > 0) {
+          for (const c of seeded) segment.push(c)
+          segmentMs = seededMs
+          speechMs = seededMs // 抢救音频即真实语音：过 MIN_SPEECH_MS 短噪声门
+          silenceMs = 0
+          speechActive = true
+          uploadedSamples = 0 // host 流已清（/cancel asr.reset）：从 0 全量上行，fed 去重兼容
+          salvagedSegment = true
+          salvaged = true
+          // 唤醒配置下抢救段视为唤醒后语音：定稿剥词头（防「朗读期喊唤醒词+命令」泄漏词头）。
+          if (wakeEnabled) wakeConsumed = true
+        }
+      }
+      preRoll = []
+      preRollMs = 0
+      preRollStartWall = 0
+      preRollSeedWall = null
       // Fix：等待 host 流重置完成后再恢复状态（防新段使用旧流）
       return resetHostStream().then(() => {
-        if (active) setState(wakeEnabled ? 'wake' : 'listening')
+        if (active) setState(salvaged ? 'speech' : (wakeEnabled ? 'wake' : 'listening'))
       })
     },
     endHeld(cancel = false) {

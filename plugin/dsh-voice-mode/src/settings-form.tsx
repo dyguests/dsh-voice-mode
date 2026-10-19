@@ -1088,6 +1088,10 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
             <Row name="backchannelYield" desc={tr('descBackchannelYield')}>
               <input type="checkbox" checked={value.backchannelYield !== false} onChange={(e) => void scope.set('backchannelYield', e.target.checked)} />
             </Row>
+            {/* Issue #15 批 1 / ADR-0012：打断语音抢救（显式 Row，非数据驱动）。 */}
+            <Row name="bargeInSalvage" desc={tr('descBargeInSalvage')}>
+              <input type="checkbox" checked={value.bargeInSalvage !== false} onChange={(e) => void scope.set('bargeInSalvage', e.target.checked)} />
+            </Row>
             <Row name="yieldMs" desc={tr('descYieldMs')}>
               <NumberField score={scope} field="yieldMs" value={value.yieldMs ?? 1500} min={500} max={3000} step={100} />
             </Row>
