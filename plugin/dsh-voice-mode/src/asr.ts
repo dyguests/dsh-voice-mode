@@ -638,7 +638,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         const body = useFull ? (sliceChunks(recoverySegment, 0).buffer as ArrayBuffer) : (samples.buffer as ArrayBuffer)
         let res: Response
         try {
-          res = await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(10000),
+          res = await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
             method: 'POST',
             headers: { 'content-type': 'application/octet-stream' },
             body,
@@ -654,7 +654,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
             setTimeout(async () => {
               try {
                 resolve(
-                  await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(10000),
+                  await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
                     method: 'POST',
                     headers: { 'content-type': 'application/octet-stream' },
                     body,
@@ -678,7 +678,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
             // I2 修复：re-enter 已 asr.reset 清空 host 流，从 0 全量重发（恢复段引用），
             // 否则 host 只收到尾巴、定稿缺前半句（确定性丢首段）。
             try {
-              res = await fetch(asrUrl(true, 0, epochSnapshot), { signal: AbortSignal.timeout(10000),
+              res = await fetch(asrUrl(true, 0, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
                 method: 'POST',
                 headers: { 'content-type': 'application/octet-stream' },
                 body: sliceChunks(recoverySegment, 0).buffer as ArrayBuffer,

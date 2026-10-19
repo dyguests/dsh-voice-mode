@@ -95,7 +95,8 @@ export const zh = {
   // 批 7N 重做 5/5：明确「开启后下次进入语音会话即生效」——消除「点完为何不立即恢复」的预期差。
   descAutoResume: '切换回上次语音会话时自动恢复语音模式（默认关；开启后下次进入语音会话即生效——自动进入语音模式 + 恢复上次会话；关闭则需手动按 Ctrl+Shift+V 重新进入）',
   descSpokenFormat: '语音会话注入口语化提示词（回复口语化、短句、不用 Markdown 排版符号，朗读更顺更快；默认开，改动即时生效）',
-  descSenseVoice: '定稿用 SenseVoice 重译（带标点 + 数字归一化、识别更准；默认开。关闭可省 228MB 模型，只走流式识别）',
+  descSenseVoice: '识别模式：开 = 准确模式（SenseVoice 定稿，带标点+数字归一化，长句在 CPU 上可能等数秒）；关 = 快速模式（流式结果直接定稿，不等 228MB 重译模型，准确度略降）',
+  recognizingSec: '识别中… {sec}s',
   descToolBeep: '工具调用提示音（默认关）：AI 思考/调用工具时"滴"一声；嫌吵就保持关闭',
   senseITN: '逆文本归一化',
   descSenseITN: 'SenseVoice 数字/日期/格式规范化（默认开；关闭后输出更接近口语原文）',
@@ -335,7 +336,8 @@ export const en: Record<keyof typeof zh, string> = {
   // 批 7N 重做 5/5：clarify that toggling takes effect on next session entry (not the current one).
   descAutoResume: 'Auto-resume voice mode when switching back to the last voice session (default off; takes effect on next session entry — auto-enters voice mode and restores the last session; when disabled, you must press Ctrl+Shift+V to re-enter)',
   descSpokenFormat: 'Inject spoken-format prompt into voice replies (colloquial, short sentences, no Markdown; default on, live)',
-  descSenseVoice: 'Re-transcribe the finalized utterance with SenseVoice (punctuation + ITN, more accurate; default on — turn off to skip the 228 MB model and keep streaming only)',
+  descSenseVoice: 'Recognition mode: on = accurate mode (SenseVoice finalization with punctuation + ITN; long utterances may take seconds on CPU); off = fast mode (streaming result finalized directly, skips the 228 MB re-transcription model, slightly less accurate)',
+  recognizingSec: 'Recognizing… {sec}s',
   descToolBeep: 'Tool-call beep (default off): beep when the agent is thinking/calling tools; keep off if it annoys you',
   senseITN: 'Inverse text normalization',
   descSenseITN: 'SenseVoice number/date/format normalization (default on; turn off to keep raw spoken form)',

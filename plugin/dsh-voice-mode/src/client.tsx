@@ -2604,11 +2604,26 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
   const isActive = b.active === sessionId
   if (!isActive) return <></>
 
+  // Issue #15 批 4：定稿耗时（transcribing 持续秒数）——SenseVoice 定稿在 CPU 上慢时
+  // 让用户看到「仍在工作」，避免以为卡死（问题④用户感知面）。<2s 不显示（快定稿
+  // 无意义，防闪烁）。
+  const [transcribingSec, setTranscribingSec] = useState(0)
+  useEffect(() => {
+    if (b.ui.state !== 'transcribing') {
+      setTranscribingSec(0)
+      return
+    }
+    const id = setInterval(() => setTranscribingSec((s) => s + 1), 1000)
+    return () => clearInterval(id)
+  }, [b.ui.state])
+
   const stateText =
     b.ui.state === 'loading-model'
       ? t('loadingModel')
       : b.ui.state === 'transcribing'
-        ? t('recognizing')
+        ? transcribingSec >= 2
+          ? t('recognizingSec').replace('{sec}', String(transcribingSec))
+          : t('recognizing')
         : b.ui.state === 'wake'
           ? t('sayWake').replace('{wake}', b.ui.wakeWord || t('wakeWord'))
           : b.ui.state === 'speech'

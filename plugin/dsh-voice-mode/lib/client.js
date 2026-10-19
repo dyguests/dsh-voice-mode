@@ -761,7 +761,8 @@ function createAsrEngine(config, sessionId) {
         let res;
         try {
           res = await fetch(asrUrl(true, off, epochSnapshot), {
-            signal: AbortSignal.timeout(1e4),
+            signal: AbortSignal.timeout(25e3),
+            // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
             method: "POST",
             headers: { "content-type": "application/octet-stream" },
             body
@@ -778,7 +779,8 @@ function createAsrEngine(config, sessionId) {
               try {
                 resolve(
                   await fetch(asrUrl(true, off, epochSnapshot), {
-                    signal: AbortSignal.timeout(1e4),
+                    signal: AbortSignal.timeout(25e3),
+                    // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
                     method: "POST",
                     headers: { "content-type": "application/octet-stream" },
                     body
@@ -799,7 +801,8 @@ function createAsrEngine(config, sessionId) {
           if (recovered && segmentEpoch === epochSnapshot + 1) {
             try {
               res = await fetch(asrUrl(true, 0, epochSnapshot), {
-                signal: AbortSignal.timeout(1e4),
+                signal: AbortSignal.timeout(25e3),
+                // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
                 method: "POST",
                 headers: { "content-type": "application/octet-stream" },
                 body: sliceChunks(recoverySegment, 0).buffer
@@ -1566,7 +1569,8 @@ var zh = {
   // 批 7N 重做 5/5：明确「开启后下次进入语音会话即生效」——消除「点完为何不立即恢复」的预期差。
   descAutoResume: "\u5207\u6362\u56DE\u4E0A\u6B21\u8BED\u97F3\u4F1A\u8BDD\u65F6\u81EA\u52A8\u6062\u590D\u8BED\u97F3\u6A21\u5F0F\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5F00\u542F\u540E\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u4F1A\u8BDD\u5373\u751F\u6548\u2014\u2014\u81EA\u52A8\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F + \u6062\u590D\u4E0A\u6B21\u4F1A\u8BDD\uFF1B\u5173\u95ED\u5219\u9700\u624B\u52A8\u6309 Ctrl+Shift+V \u91CD\u65B0\u8FDB\u5165\uFF09",
   descSpokenFormat: "\u8BED\u97F3\u4F1A\u8BDD\u6CE8\u5165\u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u56DE\u590D\u53E3\u8BED\u5316\u3001\u77ED\u53E5\u3001\u4E0D\u7528 Markdown \u6392\u7248\u7B26\u53F7\uFF0C\u6717\u8BFB\u66F4\u987A\u66F4\u5FEB\uFF1B\u9ED8\u8BA4\u5F00\uFF0C\u6539\u52A8\u5373\u65F6\u751F\u6548\uFF09",
-  descSenseVoice: "\u5B9A\u7A3F\u7528 SenseVoice \u91CD\u8BD1\uFF08\u5E26\u6807\u70B9 + \u6570\u5B57\u5F52\u4E00\u5316\u3001\u8BC6\u522B\u66F4\u51C6\uFF1B\u9ED8\u8BA4\u5F00\u3002\u5173\u95ED\u53EF\u7701 228MB \u6A21\u578B\uFF0C\u53EA\u8D70\u6D41\u5F0F\u8BC6\u522B\uFF09",
+  descSenseVoice: "\u8BC6\u522B\u6A21\u5F0F\uFF1A\u5F00 = \u51C6\u786E\u6A21\u5F0F\uFF08SenseVoice \u5B9A\u7A3F\uFF0C\u5E26\u6807\u70B9+\u6570\u5B57\u5F52\u4E00\u5316\uFF0C\u957F\u53E5\u5728 CPU \u4E0A\u53EF\u80FD\u7B49\u6570\u79D2\uFF09\uFF1B\u5173 = \u5FEB\u901F\u6A21\u5F0F\uFF08\u6D41\u5F0F\u7ED3\u679C\u76F4\u63A5\u5B9A\u7A3F\uFF0C\u4E0D\u7B49 228MB \u91CD\u8BD1\u6A21\u578B\uFF0C\u51C6\u786E\u5EA6\u7565\u964D\uFF09",
+  recognizingSec: "\u8BC6\u522B\u4E2D\u2026 {sec}s",
   descToolBeep: '\u5DE5\u5177\u8C03\u7528\u63D0\u793A\u97F3\uFF08\u9ED8\u8BA4\u5173\uFF09\uFF1AAI \u601D\u8003/\u8C03\u7528\u5DE5\u5177\u65F6"\u6EF4"\u4E00\u58F0\uFF1B\u5ACC\u5435\u5C31\u4FDD\u6301\u5173\u95ED',
   senseITN: "\u9006\u6587\u672C\u5F52\u4E00\u5316",
   descSenseITN: "SenseVoice \u6570\u5B57/\u65E5\u671F/\u683C\u5F0F\u89C4\u8303\u5316\uFF08\u9ED8\u8BA4\u5F00\uFF1B\u5173\u95ED\u540E\u8F93\u51FA\u66F4\u63A5\u8FD1\u53E3\u8BED\u539F\u6587\uFF09",
@@ -1805,7 +1809,8 @@ var en = {
   // 批 7N 重做 5/5：clarify that toggling takes effect on next session entry (not the current one).
   descAutoResume: "Auto-resume voice mode when switching back to the last voice session (default off; takes effect on next session entry \u2014 auto-enters voice mode and restores the last session; when disabled, you must press Ctrl+Shift+V to re-enter)",
   descSpokenFormat: "Inject spoken-format prompt into voice replies (colloquial, short sentences, no Markdown; default on, live)",
-  descSenseVoice: "Re-transcribe the finalized utterance with SenseVoice (punctuation + ITN, more accurate; default on \u2014 turn off to skip the 228 MB model and keep streaming only)",
+  descSenseVoice: "Recognition mode: on = accurate mode (SenseVoice finalization with punctuation + ITN; long utterances may take seconds on CPU); off = fast mode (streaming result finalized directly, skips the 228 MB re-transcription model, slightly less accurate)",
+  recognizingSec: "Recognizing\u2026 {sec}s",
   descToolBeep: "Tool-call beep (default off): beep when the agent is thinking/calling tools; keep off if it annoys you",
   senseITN: "Inverse text normalization",
   descSenseITN: "SenseVoice number/date/format normalization (default on; turn off to keep raw spoken form)",
@@ -3225,7 +3230,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "6537d00";
+var BUILD_TAG = "3d106f9";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -5065,7 +5070,16 @@ function VoiceStatusBar({ bus, sessionId }) {
   }, [b.active, sessionId]);
   const isActive = b.active === sessionId;
   if (!isActive) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
-  const stateText = b.ui.state === "loading-model" ? t("loadingModel") : b.ui.state === "transcribing" ? t("recognizing") : b.ui.state === "wake" ? t("sayWake").replace("{wake}", b.ui.wakeWord || t("wakeWord")) : b.ui.state === "speech" ? b.ui.mode === "hold" ? t("holdDots") : t("listening") : b.ui.playing ? t("reading") : b.ui.turn === "agent-speaking" ? t("thinking") : b.ui.mode === "hold" ? t("barHold") : t("barListening");
+  const [transcribingSec, setTranscribingSec] = (0, import_react3.useState)(0);
+  (0, import_react3.useEffect)(() => {
+    if (b.ui.state !== "transcribing") {
+      setTranscribingSec(0);
+      return;
+    }
+    const id = setInterval(() => setTranscribingSec((s) => s + 1), 1e3);
+    return () => clearInterval(id);
+  }, [b.ui.state]);
+  const stateText = b.ui.state === "loading-model" ? t("loadingModel") : b.ui.state === "transcribing" ? transcribingSec >= 2 ? t("recognizingSec").replace("{sec}", String(transcribingSec)) : t("recognizing") : b.ui.state === "wake" ? t("sayWake").replace("{wake}", b.ui.wakeWord || t("wakeWord")) : b.ui.state === "speech" ? b.ui.mode === "hold" ? t("holdDots") : t("listening") : b.ui.playing ? t("reading") : b.ui.turn === "agent-speaking" ? t("thinking") : b.ui.mode === "hold" ? t("barHold") : t("barListening");
   const bars = Array.from({ length: WAVE_BARS }, (_, i) => b.ui.levels[i] ?? 0);
   const botBars = Array.from({ length: WAVE_BARS }, (_, i) => b.ui.botLevels[i] ?? 0);
   const telParts = [];
