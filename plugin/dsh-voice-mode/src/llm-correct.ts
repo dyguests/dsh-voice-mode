@@ -51,12 +51,13 @@ export function correctionSystem(lang: 'zh' | 'en'): string {
  *  R2/R3/R4 误伤取舍（多轮演证后定稿）：
  *  ① zh 动词表去掉「修改」——「修改：把接口改成异步的」是真实用户指令，命中=白丢一次
  *     纠错（方向安全但误伤）；保留 修正/纠正/更正/纠错 四个强信号。
- *  ② R2 曾给双语加「冒号要求」防误伤；R3 验真轮发现该放宽放过三类元叙述（无冒号
- *     "Correction applied to your text" / 动词后句点阻断 "Corrected. Here it is:" /
- *     冒号超 20 字窗 "Corrected the typo …: …"）——失败方向正是 I-3 要防的静默替换，
- *     R4 回退「前缀即命中」（回退实现落在 R4，commit 4916bd8）。代价：「纠正一下：…」
- *     这类以纠正动词开头的真实指令会被误伤（丢一次纠错、发原文）——安全方向（不漏拦），
- *     验真评估后接受。
+ *  ② 冒号要求的分轮归因（git 实证）：zh 冒号要求 R2 引入（6995ae7，随前言护栏落地），
+ *     en 冒号要求 R3 补齐（c11d311，为对齐 zh 补的 `[^.\n]{0,20}[：:]`）；三类逃逸
+ *     形态均为 en（无冒号 "Correction applied to your text" / 动词后句点阻断
+ *     "Corrected. Here it is:" / 冒号超 20 字窗 "Corrected the typo …: …"）——失败方向
+ *     正是 I-3 要防的静默替换，R4 回退双语均不要求冒号（回退实现落在 R4，commit 4916bd8）。
+ *     代价：「纠正一下：…」这类以纠正动词开头的真实指令会被误伤（丢一次纠错、发原文）
+ *     ——安全方向（不漏拦），验真评估后接受。
  *  ③ en 大小写不敏感（/i）：句首 "corrected"/"CORRECTED" 均收。 */
 const CORRECTION_PREAMBLE_RE =
   /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i

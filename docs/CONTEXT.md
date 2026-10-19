@@ -2,7 +2,7 @@
 
 > **本文件角色**：跨文档索引 + 项目心智模型；状态变化改对应链接/锚点，不追加流水账。
 > **真源层级**：根 `CONTEXT.md`（开发者上下文，重写式 ~60 行）/ `docs/rules/STATE.md`（唯一恢复点）/ `docs/adr/`（决策）。
-> **基准 HEAD**：`2b28539`（Issue #15 R5 收口——fix 批 `0763966` + lib TAG 对齐 `2b28539`；本基线随收口批滚动更新）。lib BUILD_TAG 应为 HEAD 短哈希（build-then-commit 工作流下可能指向同源父 commit），以 `node build.mjs` 重建后实测为准，本文不写具体值。历史基线 `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）保留备查。
+> **基准 HEAD**：`2b28539`（Issue #15 R5 收口——fix 批 `0763966` + lib TAG 对齐 `2b28539`；本基线随收口批滚动更新，取**代码+lib 批**——docs-only 提交不滚动基线）。lib BUILD_TAG 应为 HEAD 短哈希（build-then-commit 工作流下可能指向同源父 commit），以 `node build.mjs` 重建后实测为准，本文不写具体值。历史基线 `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）保留备查。
 > **批 7M 🔴 砍落地（2026-09-16）**：4 项砍除——`recognitionLanguage`（4532b48）/ `asrHotwords`+`asrHotwordsScore`+模块（e3423ef）/ `docs/qa/user-experience-flow.md`（6bed6d4）；本文件设置键表砍 3 行（识别热词 / 热词偏置分 / 识别语种）后剩 7 个数据行。
 > **批 7N 🟡 重做落地（2026-09-16）**：5 项重做——`bargeInMode='manual'` 接通（8278097）/ echoGateDb + autoResume 描述对齐（d667ffb+5b6019b）/ 端到端补测 3 项（58f6d77+b0e45fe+ee4312b）/ ADR-0003+0004 重命名（0564a51+0cacd88）/ autoResume 文案统一（f883b35）；详见下方设置键表。
 

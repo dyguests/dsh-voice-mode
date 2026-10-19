@@ -26,7 +26,7 @@ dsh-voice-mode 当前的"让位"仅有两个层：
 调研证据（来源 `docs/findings/2026-09-15-yield-semantics-research.md`）：
 
 - **真机空闲让位 = 0** — 一旦用户说完一句，LLM 立刻把"剩余句子"都说出来，**不留思考停顿窗口**
-- **真机让位指令 = 0** — `src/prompts.ts:31` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts:72-76` `VOICE_SPOKEN_PROMPT` 迁入）只注入 4 句口语化规则，无任何让位指令
+- **让位指令已落地（#2 Phase 1）** — `src/prompts.ts:31` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts:72-76` `VOICE_SPOKEN_PROMPT` 迁入）= 基础 4 句口语化 + ADR-0008 #2 让位段（Phase 1 已落地，见 :199；该段自批 5 `7f1a09f` 起即存在于提示词，git `-S` 实证）。**勘误（2026-10-20）**：原「真机让位指令 = 0」系 propagated 旧态——#2 段先于 2026-09-15 调研已落地，原判断不成立；本 ADR #2 决策与落地内容一致，不受影响
 - **真机 backchannel 检测 = 0** — 用户插嘴"嗯/对/so"，模型继续说完所有句子（`src/asr.ts:125-127` 的 wakeEnabled 仅在 `/stay wake/` 时启用，与让位不同维度）
 - **真机 silence 主动续话 = 0** — 用户停 6 秒，模型**不会主动 break silence**（这点和 Notion / Spokenly MCP 相反）
 - **硬打断 hardBreak 真机在 `src/client.tsx:1427`**（`const hardBreak = async () => ...`）—— 注意 hardBreak 走**取消路由**（`bus.skipAudio() + bus.cancelTurn()`），是物理层的硬让；本 ADR 提出的 **pauseAtBoundary** 与其正交，走 epoch 通道不做取消
@@ -115,7 +115,7 @@ YIELDING (let the user interrupt)
 
 ## 依据
 
-- `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts:72-76` `VOICE_SPOKEN_PROMPT` 迁入；当前 4 句口语化，无让位指令）
+- `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts:72-76` `VOICE_SPOKEN_PROMPT` 迁入；基础 4 句口语化 + ADR-0008 #2 让位段，Phase 1 已落地，见 :199）
 - `src/index.ts:470-477`（system-prompt/assemble 注入点，可扩展）
 - `src/asr.ts:546-617`（echoFloor/echoPeak 跨区 + ADR-0006 真机结论）
 - `src/asr.ts:125-127`（wakeEnabled 强制关闭模式逻辑可参考）

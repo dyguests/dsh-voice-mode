@@ -520,9 +520,13 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 5. CHANGELOG [Unreleased] 缺 R2 条目；
 6. asr.ts 12 项修复仅 2 项有抓红测试（I1-I4 无行为测试锁定）+ start() 漏世代守卫 + worklet 回退路径漏复检。
 
+**轮次标签口径约定**：轮次标签按**验真轮发现**归标签（如 host-fixes 的两个异步用例落 R3 commit `c11d311`，但按 R2 验真轮发现归 R2 标签）——与 commit 落地轮次可能差一轮，以 `git log` 为最终事实。
+
+**B1 审计数字更正注记（2026-10-20）**：R5 commit message（`0763966`，git 历史不可改）中「54 个 test/*.mjs：21 async t + 26 sync t + 3 手动」不可复现（自身算术 21+26+3=50≠54）；独立复验实测 **53 个 test 文件 = 20 个 async t（全部 `await t(`）+ 30 个 sync t（无 async t 体）+ 3 个链外手动脚本**（integration-fork / verify-bazong-path / verify-preview-loop；`scripts.test` 链 50 个）。commit message 数字不可改，以本注记为准；其结论「B1 残留为零」经独立复验属实（含 finalize-ux.test.mjs:61 抽验为已 await）。
+
 **R3 修复轮已落库**（`c11d311`+`6ddfb09`，已 push）：6 Important 全修（sweep finalizing 判定/纠错周期令牌/回填窗收移/短输入护栏/start 世代守卫+worklet 回退/5xx 连败）+ host-fixes 退出崩溃三层修法 + correct-cycle-behavior 9 项行为测试；npm test 603/49。
 **R3 验真轮结论（4 只读代理）**：**无 Blocker**；R3 修复本体 6/7 关闭+1 部分关闭（仅 tts-queue B1 注释行号）；新增 6 个 Important 转 R4：①host-fixes 同步 t 复辟 R2-B1 反模式（两个代理独立发现）②双发防护腿缺行为级锁（移位置后全绿）③**modules R3 的 en 前言放宽引入不安全方向漏拦**（三类元叙述形态穿过护栏且被测试固化——R3 修法的副作用）④lib BUILD_TAG 指向 dangling commit（13b9252 被 amend 掉）⑤文档计数 15 处过期（583/48→603/49）+缺 R3 CHANGELOG 条目+基线未滚 ⑥sweep loop1 守卫零有效锁（mutD 单废 loop1 全套件绿）。
-**R4 修复轮已落库**（`4916bd8`，已 push；`ad824b4` 为 amend 前同树哈希、未 push，以 `4916bd8` 为准——docs commit `07e7542` message 里的旧哈希同此，git 历史不可改）：fix-test（t 改 async+双发腿行为锁+loop1 两段式毒链+asr 生命周期行为锁 asr-lifecycle 5 项）/fix-modules（en 前言回退严格形态+测试固化修正+注释数字）/fix-client（机制注释+矛盾注释）/fix-docs（611/50 计数+R3/R4 CHANGELOG+基线 6ddfb09+行号终态 sync）/fix-host（unref 表述）。计数终态 611 ✓/50 文件；R4 验真轮（只读）启动。
+**R4 修复轮已落库**（`4916bd8`，已 push；`ad824b4` 为 amend 前同树哈希、未 push，以 `4916bd8` 为准——docs commit `07e7542` 的提交内容（CHANGELOG:94 与 STATE:525）里的旧哈希同此、R5 已改，git 历史不可改）：fix-test（t 改 async+双发腿行为锁+loop1 两段式毒链+asr 生命周期行为锁 asr-lifecycle 5 项）/fix-modules（en 前言回退严格形态+测试固化修正+注释数字）/fix-client（机制注释+矛盾注释）/fix-docs（611/50 计数+R3/R4 CHANGELOG+基线 6ddfb09+行号终态 sync）/fix-host（unref 表述）。计数终态 611 ✓/50 文件；R4 验真轮（只读）启动。
 
 **产品待决项（R3 验真轮实测数据支撑，待用户拍板）**：
 1. **LLM 纠错相似度护栏**：验真代理实测归一化 Levenshtein ≥0.5 区分度干净——合法纠错 0.75-0.95（「现再几点」→「现在几点」0.75、「帮我差一下天气」→「帮我查一下天气」0.86）vs 作答/复述形态 0.11-0.43（「现在几点」→「现在是下午三点。」0.38）；约 15 行无依赖，误报方向安全（回退原文）。当前长度护栏够不到「与原文等长的简短作答」（已实测复证）。建议上车，待用户确认。
