@@ -1518,6 +1518,7 @@ export function MicButton({
         clearBreakTimer()
         setHolding(false) // 对抗审查 Important#2：被抢占退出时复位录音态红色
         isSpeechTrueCount = 0 // 打断根治：任何 host 驱动退出（状态条退出/被抢占/跨 tab 让出）都复位计数
+        submitInFlightRef.current = false // 批 3 复审 Minor-1：抢占路径直接退出不经 exitMode，须同口径清在途标记（防陈旧 true 跨 enterMode 存活致回填静默失效）
         breakRef.current = null
         manualHoldRef.current = false
         holdCtrlRef.current = false // 复位 Ctrl 按住态（防抢占后残留致下次手势错乱）
@@ -1910,6 +1911,9 @@ export function MicButton({
       })
       engine.onPartial((text) => {
         bus.setUi({ partial: text })
+        // 空 partial（刚起口未解出字）直接返回——不剥 live 尾（批 3 复审 OQ-2：剥了下一拍
+        // 又补回，输入框可见闪烁；host partial 为段内累计，空即当前段尚无文本）。
+        if (!text) return
         // Issue #15 批 3（审查 I-2）：提交在途窗口——submitDraftNow 后宿主清草稿/
         // re-render 有时窗，期间新 partial 不得以未清草稿为基（会把已提交文本写回
         // 草稿，steer 的改写守卫还会跳过清草稿 → 残留无自愈）。宿主清草稿落地

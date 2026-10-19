@@ -3230,7 +3230,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "3d106f9";
+var BUILD_TAG = "4d720c3";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4240,6 +4240,7 @@ function MicButton({
         clearBreakTimer();
         setHolding(false);
         isSpeechTrueCount = 0;
+        submitInFlightRef.current = false;
         breakRef.current = null;
         manualHoldRef.current = false;
         holdCtrlRef.current = false;
@@ -4551,6 +4552,7 @@ function MicButton({
       });
       engine.onPartial((text) => {
         bus.setUi({ partial: text });
+        if (!text) return;
         if (submitInFlightRef.current) {
           if (draftRef.current === "") submitInFlightRef.current = false;
           else return;

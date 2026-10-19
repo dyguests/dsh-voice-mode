@@ -84,9 +84,28 @@ t('wiring（审查 I-2）：onPartial 起始处必须检 submitInFlightRef（提
   const idx = clientSrc.indexOf('engine.onPartial(')
   const win = clientSrc.slice(idx, idx + 1600)
   assert.ok(win.includes('submitInFlightRef.current'), 'onPartial 缺提交在途检查——已提交文本会被写回草稿')
+  // 复审 Minor-4：不能只查字样（onSegment 的清标记会满足 includes）——放行判据与
+  // 跳过分支必须同在窗口内。
+  assert.ok(win.includes("draftRef.current === ''"), '缺放行判据（宿主清草稿落地才放行）')
+  assert.ok(win.includes('else return') || win.includes('else\n          return'), '缺跳过分支（未落地时跳过回写）')
   const checkIdx = win.indexOf('submitInFlightRef.current')
   const gateIdx = win.indexOf('shouldWritePartial(')
   assert.ok(checkIdx < gateIdx, '在途检查必须在 wake 门控之前（窗口内任何态都不回写）')
+})
+
+t('wiring（复审 Minor-1）：抢占退出路径同口径清 submitInFlightRef', () => {
+  const idx = clientSrc.indexOf('if (bus.activeSessionId !== sid)')
+  assert.ok(idx >= 0, '缺抢占退出分支')
+  const win = clientSrc.slice(idx, idx + 1200)
+  assert.ok(win.includes('submitInFlightRef.current = false'), '抢占路径未清在途标记——陈旧 true 跨 enterMode 存活致回填静默失效')
+})
+
+t('wiring（复审 OQ-2）：空 partial 不剥 live 尾（防输入框闪烁）', () => {
+  const idx = clientSrc.indexOf('engine.onPartial(')
+  const win = clientSrc.slice(idx, idx + 1600)
+  assert.ok(win.includes('if (!text) return'), '空 partial 未早退——剥尾又补回可见闪烁')
+  const guardIdx = win.indexOf('if (!text) return')
+  assert.ok(guardIdx < win.indexOf('composeDraft('), '空 partial 早退必须在 composeDraft 之前')
 })
 
 t('wiring（审查 I-2）：submitDraftNow 置在途标记 + onSegment/exitMode 清标记', () => {
