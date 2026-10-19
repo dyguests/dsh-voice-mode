@@ -58,7 +58,7 @@ const BASE_PATH = '/voice-mode'
 /**
  * /preview 错误归类（批 I 任务 4/4）：把引擎/网络/合成失败分成三档，
  * 透传用户友好的归类提示而不暴露 errMsg / 模型路径等内部细节。
- * 诊断上下文走 console.warn，结构与 tts-queue.ts:357 pump catch 批 A 一致。
+ * 诊断上下文走 console.warn，结构与 tts-queue.ts:418-422 pump catch 批 A 一致。
  *
  * 网络错误：Edge 云端不可达 / DNS / 超时
  * 引擎错误：本地模型下载/校验失败 / 子进程 init 失败 / 子进程崩溃
@@ -1032,7 +1032,7 @@ export function apply(ctx: Context, config: Config): void {
             buf = await queue.synthesize(sample, { voice, rate })
           } catch (e) {
             // 批 I 任务 4/4：错误归类 + 诊断上下文（model 状态 / sample 长度 / attempt）；
-            // 模式与 tts-queue.ts:357 pump catch（批 A：补 sessionId + err）一致——日志含上下文，UI 只拿归类提示。
+            // 模式与 tts-queue.ts:418-422 pump catch（批 A：补 sessionId + err）一致——日志含上下文，UI 只拿归类提示。
             const errMsg = e instanceof Error ? e.message : String(e)
             const category = classifyPreviewError(errMsg)
             const engineName = currentEngine()
@@ -1086,7 +1086,7 @@ export function apply(ctx: Context, config: Config): void {
           // 反代取键）——全局键下任一人点满 10 次，其余人的纠错全部静默回退原文。
           // 语义分流（审查 M6 续）：enabled=false = 功能停用，是确定性的 403
           // voice_disabled；打太猛才是 429 rate_limited。但两者对**用户可见行为**完全
-          // 相同——client.tsx:1697 是 `if (!r.ok) return text`，不读 code、不弹提示，
+          // 相同——client.tsx:1712 是 `if (!r.ok) return text`，不读 code、不弹提示，
           // 一律静默回退原文（纠错是纯附加层，不得阻断发送）。故 403/429 分流的价值在
           // **服务端可观测性**（日志/诊断能区分「停用」与「限流」）；早年注释宣称
           // 「客户端 errorText 给出语音模式已关闭」与实现不符，已更正。

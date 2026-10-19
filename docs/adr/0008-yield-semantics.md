@@ -26,7 +26,7 @@ dsh-voice-mode 当前的"让位"仅有两个层：
 调研证据（来源 `docs/findings/2026-09-15-yield-semantics-research.md`）：
 
 - **真机空闲让位 = 0** — 一旦用户说完一句，LLM 立刻把"剩余句子"都说出来，**不留思考停顿窗口**
-- **真机让位指令 = 0** — `src/index.ts:72-76` 的 `VOICE_SPOKEN_PROMPT` 只注入 4 句口语化规则，无任何让位指令
+- **真机让位指令 = 0** — `src/prompts.ts:31` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts:72-76` `VOICE_SPOKEN_PROMPT` 迁入）只注入 4 句口语化规则，无任何让位指令
 - **真机 backchannel 检测 = 0** — 用户插嘴"嗯/对/so"，模型继续说完所有句子（`src/asr.ts:125-127` 的 wakeEnabled 仅在 `/stay wake/` 时启用，与让位不同维度）
 - **真机 silence 主动续话 = 0** — 用户停 6 秒，模型**不会主动 break silence**（这点和 Notion / Spokenly MCP 相反）
 - **硬打断 hardBreak 真机在 `src/client.tsx:1427`**（`const hardBreak = async () => ...`）—— 注意 hardBreak 走**取消路由**（`bus.skipAudio() + bus.cancelTurn()`），是物理层的硬让；本 ADR 提出的 **pauseAtBoundary** 与其正交，走 epoch 通道不做取消
@@ -74,7 +74,7 @@ YIELDING (let the user interrupt)
    - **同步改 `src/asr-host.ts` / `src/sense-worker.ts` / `src/settings-form.tsx`** 接收 + 暴露 2 个新字段
    - 真机当前 grep 0 命中（K-2 已知 — backlog 锚点 `index.ts:224-227` 是错的）
 2. **第二步（4 层模板粘贴）**：
-   - 把第 6 轮 `scan-system-prompt-design-2026-09.md` 的 4 层（身份 + 行为 + tools + runtime）拷到 `src/index.ts:72` 附近替换 `VOICE_SPOKEN_PROMPT` 单段
+   - 把第 6 轮 `scan-system-prompt-design-2026-09.md` 的 4 层（身份 + 行为 + tools + runtime）拷到 `src/prompts.ts` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts:72` 一带 `VOICE_SPOKEN_PROMPT` 迁入）附近替换单段
    - 7 个 `ctx.systemPrompt.variable()` 注册（实测已可达，第五轮 peer 实证）
    - host `inject` 加 `'systemPrompt'`（第五轮已确认**与 client.inject 9 锚点正交**，零兼容性风险）
 3. **第三步（YIELDING 信号源接通）**：Backchannel detector + `pauseAtBoundary()`
@@ -115,7 +115,7 @@ YIELDING (let the user interrupt)
 
 ## 依据
 
-- `src/index.ts:72-76`（当前 4 句口语化，无让位指令）
+- `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts:72-76` `VOICE_SPOKEN_PROMPT` 迁入；当前 4 句口语化，无让位指令）
 - `src/index.ts:470-477`（system-prompt/assemble 注入点，可扩展）
 - `src/asr.ts:546-617`（echoFloor/echoPeak 跨区 + ADR-0006 真机结论）
 - `src/asr.ts:125-127`（wakeEnabled 强制关闭模式逻辑可参考）
@@ -196,7 +196,7 @@ YIELDING (let the user interrupt)
 | 决策项 | 落地位置 | 状态 |
 |---|---|---|
 | #1 Backchannel detector + 半双工暂停 | `src/asr.ts` 顶层 `matchBackchannel` 纯函数 + 词表 16 项（中文 11 + 英文 5，其中 `right` 5 字符因超 ≤4 长度上限被滤）；`src/client.tsx` `bus.setBackchannelHold(now+1500)` + 帧回调入口丢帧守卫（`backchannelHoldUntil` 闭包变量） | ✅ |
-| #2 让位 prompt 注入（Layer 2 YIELDING） | `src/index.ts:77` `VOICE_SPOKEN_PROMPT` 追加 YIELDING 段（中文，与现有 4 句同风格） | ✅ |
+| #2 让位 prompt 注入（Layer 2 YIELDING） | `src/prompts.ts` `spokenPrompt` 追加 YIELDING 段（中文，与现有 4 句同风格；符号 2026-10-02 自 `src/index.ts:77` `VOICE_SPOKEN_PROMPT` 迁入） | ✅ |
 | #3 Inattentive silence break | 推迟（决策推迟） | ⏸ |
 | #4 End-of-turn probability 让位 | 推迟（依赖 ADR-0003） | ⏸ |
 | #5 让位历史记忆 | 不立项（决策取消） | ❌ |

@@ -687,8 +687,8 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
     //
     // R2 验真轮（Important 回归修复）：判定必须同时排除 finalizing 在途定稿。
     // finalize 入口同步摘段（:581-582）后，整个 senseP 窗口（≤~21s）内
-    // segments.has(sid) 恒为 false，而 finalizing 在 :654 同步登记、:641/:647/:761
-    // （reset 内 delete(sessionId)）/ :797（clear()）清除——是精确的在途信号。若只判
+    // segments.has(sid) 恒为 false，而 finalizing 在 :654 同步登记、:641/:647/:762
+    // （reset 内 delete(sessionId)）/ :798（clear()）清除——是精确的在途信号。若只判
     // segments，30s 一扫约 70% 概率落入窗口，resetGen.delete 使代际计数器可复用：
     // 进模式(gen=1)→首句定稿在途→sweep 删条目→barge-in（reset 后 gen 回到 1）→
     // 旧定稿写回守卫 1===1 通过(:626)→陈旧文本写入新会话 epoch 0 缓存→下一句 final

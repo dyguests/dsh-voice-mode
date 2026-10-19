@@ -112,7 +112,7 @@
 **仍缺失**：
 1. **桌面端（Electron）冒烟未覆盖 0.2.1-rc.2 / alpha.5**：smoke-desktop-shell.mjs 仅在 0.1.6-alpha.2 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.1 实测过（compat-contract.md:464）——0.2.1-rc.2 桌面端形态目前是**推断兼容**（server 四层实证 + 旧版桌面实证 + alpha.1 桌面实证），缺一环。
 2. 桌面端冒烟不在 CI 矩阵（smoke-runtime.sh:190-198 仅 DSHVM_ELECTRON env 触发；verify-dual 不含桌面步）。
-3. **「UI 进入 recovery」机制不存在**：grep 全 src/ 无 recovery 逻辑；历史上唯一整体失败模式是 0.1.7 settingsScope inject 事故，已修（client.tsx:40 inject=['slots','sessions']，settingsScope 改 ctx.get 可选查找 client.tsx:363-364）。「部分降级」机制也不存在——设置双路径是功能等价 shim 不是降级开关。
+3. **「UI 进入 recovery」机制不存在**：grep 全 src/ 无 recovery 逻辑；历史上唯一整体失败模式是 0.1.7 settingsScope inject 事故，已修（client.tsx:43 inject=['slots','sessions']，settingsScope 改 ctx.get 可选查找 client.tsx:405-407）。「部分降级」机制也不存在——设置双路径是功能等价 shim 不是降级开关。
 
 **用户困惑根源**：v0.7.24 的 description 写「verified → 0.2.1-alpha.3」（git show v0.7.24 实证），用户在桌面端 rc.2 上装 0.7.24 时 npm 页面显示标称范围只到 alpha.3 → 「未声明兼容」错觉。v0.7.25 已改 description（npm 传播约 4 分钟）。
 

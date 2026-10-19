@@ -83,7 +83,7 @@ await t('I-3 护栏①：超长输出（复述/作答形态）→ 回退原文',
   assert.equal(await correctText(ctxWith([{ type: 'text-delta', index: 0, text: bloated }]), '帮我查一下天气', 'zh'), '帮我查一下天气')
 })
 
-await t('I-3 护栏②：前言前缀/元叙述（动词前缀即命中，R3 回退冒号要求）→ 回退原文', async () => {
+await t('I-3 护栏②：前言前缀/元叙述（动词前缀即命中，R4 回退冒号要求——R3 验真轮发现 R3 修法放过三类元叙述）→ 回退原文', async () => {
   // 带冒号的说明头（R1 原始形态）。
   assert.equal(
     await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '修正后：帮我查一下天气' }]), '帮我查一下天气', 'zh'),
@@ -93,8 +93,9 @@ await t('I-3 护栏②：前言前缀/元叙述（动词前缀即命中，R3 回
     await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Corrected: check the weather' }]), 'check the weather', 'en'),
     'check the weather',
   )
-  // R3：R2 的冒号要求放过三类元叙述（失败方向=静默替换用户消息）——回退「前缀即命中」后全收。
-  //   ① 无冒号元叙述；② 动词后句点阻断（[^.\n] 窗口够不着冒号）；③ 冒号超 20 字窗。
+  // R3 验真轮发现 R2 的冒号要求放过三类元叙述（失败方向=静默替换用户消息），R4 回退
+  //   「前缀即命中」后全收：① 无冒号元叙述；② 动词后句点阻断（[^.\n] 窗口够不着冒号）；
+  //   ③ 冒号超 20 字窗。
   assert.equal(
     await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Correction applied to your text' }]), 'fix the confg file', 'en'),
     'fix the confg file',

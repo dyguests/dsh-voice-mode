@@ -178,7 +178,7 @@ async function downloadVerified(opts: {
   // M4（Issue #15 审查 Minor）：补超时。早年裸 fetch 在上游「接受连接后永不响应」
   //  时无限挂起——ensureModelFile 的 Promise 不 settle，modelsLoading 永不为 null，
   //  后续每次 ASR 请求都永久等待（真机「进语音模式后麦克风无响应、控制台无错」根因）。
-  //  注意只限 headers 阶段：body 流式读取不计入（慢网合法续传需数分钟，models.ts:125-127）。
+  //  注意只限 headers 阶段：body 流式读取不计入（慢网合法续传需数分钟，models.ts:152-154）。
   const res = await fetchWithHeadersTimeout(url, { headers, redirect: 'follow' })
   // 重定向后的最终域名必须仍在白名单内（防恶意模型源把请求导去任意地址）。
   if (!redirectHostAllowed(res.url, allowCustomHost)) return false

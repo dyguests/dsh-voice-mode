@@ -33,8 +33,8 @@ const here = fileURLToPath(new URL('.', import.meta.url))
 const tmp = mkdtempSync(join(tmpdir(), 'dsh-vm-echo-'))
 
 let passed = 0
-const t = (name, fn) => {
-  fn()
+const t = async (name, fn) => {
+  await fn()
   passed++
   console.log('  ✓ ' + name)
 }
@@ -290,19 +290,19 @@ fire('audio', { sessionId: SID, sentenceId: 1, chunkId: 1, final: true, text: '�
 await flush()
 await flush()
 
-t('播放引擎经共享 setUi 写 playing:true（拼帧→push→decode→调度链路通）', () => {
+await t('播放引擎经共享 setUi 写 playing:true（拼帧→push→decode→调度链路通）', () => {
   assert.equal(bus.ui.playing, true, 'engine 未置 playing——音频链路断（测试前提不成立）')
   assert.equal(globalThis.__stubSrcs.length, 1, '未调度 BufferSource')
 })
 
-t('修复前形态：playingEndAt=0 → playingTailUntil() 在过去（无宽限）', () => {
+await t('修复前形态：playingEndAt=0 → playingTailUntil() 在过去（无宽限）', () => {
   assert.ok(bus.playingTailUntil() <= Date.now(), 'onended 前尾音窗不应生效（playingEndAt 恒 0 是 bug 形态）')
 })
 
 // 一句播完：BufferSource.onended → setUi({playing:false, playingCaption:null})
 globalThis.__stubSrcs[0].onended()
 
-t('修复后：playing 降沿被记录 → playingTailUntil() 进入未来（≈now+400ms）', () => {
+await t('修复后：playing 降沿被记录 → playingTailUntil() 进入未来（≈now+400ms）', () => {
   assert.equal(bus.ui.playing, false, 'onended 后 playing 未复位')
   const until = bus.playingTailUntil()
   const delta = until - Date.now()
@@ -310,7 +310,7 @@ t('修复后：playing 降沿被记录 → playingTailUntil() 进入未来（≈
   assert.ok(delta <= 500, `playingTailUntil delta=${delta}ms 超窗（ECHO_TAIL_MS=400 + 调用耗时）`)
 })
 
-t('尾音窗到期后回到过去（宽限是有界的，不永久屏蔽 ASR）', async () => {
+await t('尾音窗到期后回到过去（宽限是有界的，不永久屏蔽 ASR）', async () => {
   await new Promise((r) => setTimeout(r, 450))
   assert.ok(bus.playingTailUntil() <= Date.now(), '宽限未到期——永久屏蔽 ASR（比原 bug 更糟）')
 })
@@ -318,7 +318,7 @@ t('尾音窗到期后回到过去（宽限是有界的，不永久屏蔽 ASR）'
 // --------------------------------------------------------------------------
 // 源码锁：createAudioEngine 首参 = 共享 setUi；旧裸闭包形态不存在
 // --------------------------------------------------------------------------
-t('源码锁：bundle 内 createAudioEngine 首参为共享 setUi（非裸闭包）', () => {
+await t('源码锁：bundle 内 createAudioEngine 首参为共享 setUi（非裸闭包）', () => {
   assert.ok(clientSrc.includes('createAudioEngine(setUi'), 'bundle 缺 createAudioEngine(setUi, ...)——首参不是共享入口')
   assert.ok(
     !clientSrc.includes('createAudioEngine((patch)'),
@@ -326,7 +326,7 @@ t('源码锁：bundle 内 createAudioEngine 首参为共享 setUi（非裸闭包
   )
 })
 
-t('源码锁：setUi 实现含 playing 降沿记录（playingEndAt = Date.now()）', () => {
+await t('源码锁：setUi 实现含 playing 降沿记录（playingEndAt = Date.now()）', () => {
   assert.ok(
     /(?:var|const|let) setUi = \(patch\) => \{[\s\S]*?playingEndAt = Date\.now\(\)/.test(clientSrc),
     'setUi 缺降沿记录',

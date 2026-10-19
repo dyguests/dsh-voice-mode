@@ -155,25 +155,35 @@ assert.ok(sdnText.includes('if (submitInFlightRef.current) return'), '块缺双�
 assert.ok(sdnText.includes('submitInFlightRef.current = true'), '块缺 runSubmit 置位腿（真发才置位）')
 assert.ok(!/\n\s*submitInFlightRef\.current = true;/.test(sdnText.slice(0, sdnText.indexOf('const runSubmit'))), '入口又置了在途标记（R2 I-2 回归形态）')
 
-const makeSubmitDraftNow = (deps) =>
-  new Function(
-    'cancelPendingSubmit',
-    'submitInFlightRef',
-    'actionsRef',
-    'draftRef',
-    'bus',
-    't',
-    'sidRef',
-    'shouldSteerSubmit',
-    'runningRef',
-    'submitTimerRef',
-    'phaseRef',
-    'bootNow',
-    'correctCycleRef',
-    'correctDraft',
-    'engineRef',
-    `${sdnText}\nreturn submitDraftNow`,
-  )(...deps)
+/** submitDraftNow 的形参表（提取块的自由变量）——与 makeDeps 的键序逐位对应。 */
+const SDN_PARAMS = [
+  'cancelPendingSubmit',
+  'submitInFlightRef',
+  'actionsRef',
+  'draftRef',
+  'bus',
+  't',
+  'sidRef',
+  'shouldSteerSubmit',
+  'runningRef',
+  'submitTimerRef',
+  'phaseRef',
+  'bootNow',
+  'correctCycleRef',
+  'correctDraft',
+  'engineRef',
+]
+const makeSubmitDraftNow = (deps) => {
+  // OQ2 键序自检：调用处传 Object.values(deps)——按插入序取值，与 SDN_PARAMS 逐位
+  // 对应。deps 键序被重构（增删/重排）时会**静默错位**（如 correctDraft 与 engineRef
+  // 互换：轻则调用处类型错、重则语义错位仍全绿）。与 4 条产物层自检同款：重构即红。
+  assert.deepEqual(
+    Object.keys(deps),
+    SDN_PARAMS,
+    'deps 键序与 submitDraftNow 形参表不一致——按位对应被破坏（重构 makeDeps 需同步 SDN_PARAMS）',
+  )
+  return new Function(...SDN_PARAMS, `${sdnText}\nreturn submitDraftNow`)(...Object.values(deps))
+}
 
 // ---------------------------------------------------------------- 提取 2：hardBreak 三行块
 const HB_ANCHOR = 'cancelAutoSend();\n        submitInFlightRef.current = false;\n        correctCycleRef.current++;'
@@ -270,7 +280,7 @@ console.log('① R2 I-2：纠错 RTT 内在途标记不置位 → partial 回填
 await t('纠错 RTT 内 submitInFlightRef 保持 false（入口不置位——旧形态会冻结回填）', async () => {
   const d = deferredCorrect()
   const { deps, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow()
   await tick()
   assert.equal(deps.submitInFlightRef.current, false, '纠错 RTT 内在途标记必须为 false——置位则 onPartial 门冻结回填（R2 I-2 回归）')
@@ -280,7 +290,7 @@ await t('纠错 RTT 内 submitInFlightRef 保持 false（入口不置位——�
 await t('RTT 内在途门放行回填（gate 通过 → setDraft 探针被调）', async () => {
   const d = deferredCorrect()
   const { deps, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow()
   await tick()
   const backfilled = runPartialGate(deps.submitInFlightRef, deps.draftRef, () => {})
@@ -291,7 +301,7 @@ await t('RTT 内在途门放行回填（gate 通过 → setDraft 探针被调）
 await t('对照：runSubmit 真发后在途门冻结回填（提交窗内不得写回已提交文本）', async () => {
   const d = deferredCorrect()
   const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow()
   await tick()
   // 纠错返回 → runSubmit 真发
@@ -326,7 +336,7 @@ await t('令牌锁：周期 2 已开，周期 1 迟到 resolve 零提交；周�
   const { deps, counters, cleanup } = makeDeps({
     correctDraft: () => (call++ === 0 ? d1.promise : d2.promise),
   })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow() // 周期 1（令牌 0→1）
   await tick()
   submitDraftNow() // 周期 2（用户重新开口→新段定稿→新提交；令牌 1→2）
@@ -346,7 +356,7 @@ await t('令牌锁：周期 2 已开，周期 1 迟到 resolve 零提交；周�
 await t('令牌只增不减：同周期内重复 resolve 不重复提交（无单布尔被误清形态）', async () => {
   const d = deferredCorrect()
   const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow()
   await tick()
   d.resolve('纠错文本')
@@ -363,7 +373,7 @@ await t('双发防护腿：resolve 前已有提交在途（submitInFlightRef=tru
   // 对照见 ① 第三条（不预置 → 提交 exactly 1 次）。
   const d = deferredCorrect()
   const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow()
   await tick()
   deps.submitInFlightRef.current = true // 预置：另一提交已在途
@@ -378,7 +388,7 @@ await t('双发防护腿：resolve 前已有提交在途（submitInFlightRef=tru
 await t('草稿改写腿：resolve 前用户改写草稿 → 弃（旧 snapshot 不得覆盖用户文本）', async () => {
   const d = deferredCorrect()
   const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow()
   await tick()
   deps.draftRef.current = '用户改写后的新文本' // RTT 内用户打字（审查 I1 + UX-I2 复核条件）
@@ -415,7 +425,7 @@ await t('hardBreak 单元：在途标记 true→false、周期令牌 +1', async 
 await t('hardBreak 端到端：RTT 内打断 → 旧纠错文本不得发出（幽灵提交防住）', async () => {
   const d = deferredCorrect()
   const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow() // 周期 1 挂起（纠错 RTT 中）
   await tick()
   runHardBreakCore(() => {}, deps.submitInFlightRef, deps.correctCycleRef, deps.bus) // 用户打断
@@ -430,7 +440,7 @@ await t('hardBreak 端到端：RTT 内打断 → 旧纠错文本不得发出（�
 await t('对照：无打断时同周期 resolve 正常提交（证明上一条红是令牌生效而非恒不提交）', async () => {
   const d = deferredCorrect()
   const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
-  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  const submitDraftNow = makeSubmitDraftNow(deps)
   submitDraftNow()
   await tick()
   d.resolve('正常纠错文本')

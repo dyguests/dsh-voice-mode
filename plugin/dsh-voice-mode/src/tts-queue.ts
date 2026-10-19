@@ -253,7 +253,7 @@ export class TtsQueue {
    *  2) seq 归零撞拒绝线：删队列后重入的新 SessionQueue seq 从 0 起算，而 client 的
    *     sentenceId 拒绝线（rejectSeqUpTo）是「旧会话遗留的最大句号」，新回复前 N 句
    *     全部 ≤ 线被静默丢弃——正是 /toggle 用 cancel 而非 prune 保 seq 连续的同一条
-   *     不变式（index.ts:1176 进模式 cancel / :1190 让出旧会话 cancel(previous) / :1209 退出 cancel）。
+   *     不变式（index.ts:1177 进模式 cancel / :1191 让出旧会话 cancel(previous) / :1210 退出 cancel）。
    * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身
    * （seq 连续递增，跨引擎切换不归零）。
    */

@@ -3,7 +3,7 @@
  * **（源码形态/正则断言，毫秒级、不依赖时序）+ **行为级实证**（真编译 asr-host.ts /
  * tts-queue.ts 驱动，分钟级）。行为级用例共 3 条（文末两段 sweep + listEdgeVoices）：
  *  I2 错误响应一律 writeHead（gzip 包装器下隐式头会产出 ERR_CONTENT_DECODING_FAILED）；
- *  I4 限流键反代不塌缩（X-Forwarded-Host 首段，仅回环来源采信）；
+ *  I4 限流键反代不塌缩（X-Forwarded-For 首段，仅回环来源采信；src/index.ts:619 读 for）；
  *  M7 /toggle 缺 on 显式 400；M6 /correct enabled=false 返 403 + per-client 限流键；
  *  M11 /asr、/stream 补跨源校验；M13 /models/clean 删两个 kokoro 精度目录；
  *  M3 /models/retry 补 .catch；M14 collectBody 413 后 pause + flush 后断流。
@@ -11,6 +11,9 @@
  *    陈旧定稿文本写入新会话缓存（Important 回归）——loop2（resetGen 扫描）行为级实证。
  *  R3 验真轮：loop1（finalized 扫描）守卫行为级零锁 → 两段式用例补上（先产缓存再
  *    在途定稿+sweep；与 loop2 毒链用例互为独立变异锁定，只废其一另一个仍绿）。
+ *    I-1 修复口径（R3 实修、R5 复核）：t 改 async 后**全部 16 个 await 站点**——13 个既有
+ *    同步用例转换 + 2 个 R2 异步用例（毒链/listEdgeVoices）+ 1 个 R3 新增（loop1 两段式）。
+ *    （历史 commit message 写的「15 个调用点」不实，以本头注为准。）
  * 运行：node test/host-fixes.test.mjs（离线，无网络/无 dsh 依赖）。
  */
 import assert from 'node:assert/strict'
