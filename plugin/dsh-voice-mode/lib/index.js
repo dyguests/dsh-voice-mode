@@ -2050,6 +2050,9 @@ var en = {
   skipReading: "Skip current reading",
   backchannelYield: "Short-reply yielding",
   descBackchannelYield: 'When the user says a short answer like "mm-hmm/right" while the agent is reading aloud, yield automatically (skip the current TTS sentence + drop frames for 1.5s; if the user really wants to speak, the existing hardBreak takes over; off = no yielding, behavior matches pre-batch-5)',
+  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage.
+  bargeInSalvage: "Barge-in speech salvage",
+  descBargeInSalvage: "When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)",
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: "Yield window",
   descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires)",
@@ -2108,6 +2111,8 @@ var en = {
   captionFontSizeLabel: "Caption size",
   captionMaxWidthLabel: "Caption width",
   backchannelYieldLabel: "Short-reply yielding",
+  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (*Label mirror key).
+  bargeInSalvageLabel: "Barge-in speech salvage",
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: "Yield window",
   // 批 G 任务 2：空闲预警 + 退出提示文案。
@@ -2354,6 +2359,8 @@ var VOICE_SETTINGS_DEFAULTS = {
   captionMaxWidth: 1,
   // 批 5：backchannel 默认 true（产品决策；关 = 不挂 onBackchannel 回调，行为等同改造前）。
   backchannelYield: true,
+  // Issue #15 批 1 / ADR-0012：打断抢救默认开（I10 有意豁免：默认体验破损=本 issue 存在原因）。
+  bargeInSalvage: true,
   // 批 G 任务 3：让位窗口默认 1500ms（与改造前批 5 行为字节等价；用户可调 500-3000ms）。
   yieldMs: 1500
 };
@@ -2380,6 +2387,7 @@ var DESC = {
   captionFontSize: en.descCaptionFontSize,
   captionMaxWidth: en.descCaptionMaxWidth,
   backchannelYield: en.descBackchannelYield,
+  bargeInSalvage: en.descBargeInSalvage,
   yieldMs: en.descYieldMs
 };
 function createVoiceSettingsSchema(defs) {
@@ -2424,6 +2432,10 @@ function createVoiceSettingsSchema(defs) {
     backchannelYield: z.boolean().default(d.backchannelYield).description(
       DESC.backchannelYield
     ),
+    // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
+    bargeInSalvage: z.boolean().default(d.bargeInSalvage).description(
+      DESC.bargeInSalvage
+    ),
     yieldMs: z.number().min(500).max(3e3).default(d.yieldMs).description(
       DESC.yieldMs
     )
@@ -2463,6 +2475,8 @@ var Config = z.object({
   captionFontSize: z.union([z.const(0), z.const(1), z.const(2), z.const(3)]).default(0),
   captionMaxWidth: z.union([z.const(0), z.const(1), z.const(2)]).default(1),
   backchannelYield: z.boolean().default(true),
+  // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
+  bargeInSalvage: z.boolean().default(true),
   yieldMs: z.number().default(1500)
 });
 function voiceSettingsFromConfig(config) {
@@ -2489,7 +2503,8 @@ function voiceSettingsFromConfig(config) {
     captionFontSize,
     captionMaxWidth,
     backchannelYield,
-    yieldMs
+    yieldMs,
+    bargeInSalvage
   } = config;
   return {
     ttsEngine,
@@ -2514,7 +2529,8 @@ function voiceSettingsFromConfig(config) {
     captionFontSize,
     captionMaxWidth,
     backchannelYield,
-    yieldMs
+    yieldMs,
+    bargeInSalvage
   };
 }
 function apply(ctx, config) {
@@ -2796,6 +2812,7 @@ function apply(ctx, config) {
           captionFontSize: vset.captionFontSize,
           captionMaxWidth: vset.captionMaxWidth,
           backchannelYield: vset.backchannelYield,
+          bargeInSalvage: vset.bargeInSalvage,
           yieldMs: vset.yieldMs,
           senseITN: vset.senseITN,
           cacheDir: config.cacheDir,
