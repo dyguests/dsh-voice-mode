@@ -1586,7 +1586,7 @@ export function MicButton({
     }
     // Issue #15 批 2：运行中 steer 直提交。宿主 InputActions.submit 硬编码 queue
     // （语音提交恒排队，改宿主 busyEnter 也没用）→ 运行中且非命令草稿走
-    // session.prompt(text,'steer') 直达；仅 ok 才清草稿并跳过重试/submit（防双发），
+    // session.prompt(text,'steer') 直达；未显式失败（保守口径）才清草稿并跳过重试/submit（防双发），
     // 任何失败回退队列路径（不劣于现状）。
     const sid = sidRef.current
     if (sid && shouldSteerSubmit(runningRef.current, draftSnapshot)) {

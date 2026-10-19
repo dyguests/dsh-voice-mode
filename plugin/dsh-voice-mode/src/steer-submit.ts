@@ -9,9 +9,9 @@
  * 解：绕过 InputActions.submit，运行中直接用 SessionFace.prompt(content,'steer')
  * （一等 API：'queue' appends a turn; 'steer' interrupts the running one——
  * 下一个 step 边界消费，不中断当前工具调用；窗口关闭时 AgentLoop 天然降级为
- * 下一队列项，无硬失败）。仅 RemoteResult.ok 才视为直达；任何失败（抛错/ok:false/
- * 无 binding/无 prompt 函数——老宿主）返回 false，调用方回退现状 submit() 队列
- * 路径（自带 3 重试+草稿保留，不劣于现状）。
+ * 下一队列项，无硬失败）。**resolve 且未显式 ok:false 即视为已交付**（保守口径防老宿主
+ * 双发，见 trySteerSubmit doc）；显式 ok:false/抛错/无 binding/无 prompt 函数返回
+ * false，调用方回退现状 submit() 队列路径（自带 3 重试+草稿保留，不劣于现状）。
  */
 
 /** SessionFace 的最小面（本插件只用 prompt；其余不依赖）。 */

@@ -1,6 +1,7 @@
 /**
  * Issue #15 批 3：实时转写回填草稿——组成逻辑单测 + wiring 源码锁。
- * 运行：node test/draft-compose.test.mjs（npm test 串联）。
+ * 运行：node test/draft-compose.test.mjs（批 3 接线转绿后登记 npm test 串联；
+ * 当前 wiring 锁为批 3 接线前的预期红，纯函数部分已绿）。
  *
  * 覆盖：
  *  1) composeDraft：剥尾追加（正常）/ 尾不匹配（草稿被清或改写→自愈）/ 空 addition /

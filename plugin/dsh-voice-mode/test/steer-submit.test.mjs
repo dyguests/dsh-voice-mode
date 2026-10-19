@@ -90,13 +90,21 @@ t('wiring：submitDraftNow 有 steer 分流分支（running && 非命令 → bus
   assert.ok(clientSrc.slice(idx, idx + 700).includes('bus.steerSubmit('), '分流块未调 bus.steerSubmit')
 })
 
-t('wiring 顺序①：delivered 分支清草稿后必须立即 return（删 return 防双发 → 红）', () => {
+t('wiring 条件：delivered 条件字面量必须为 if (delivered)（反转/中和变异 → 红，审查复审 Important-1）', () => {
+  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, draftSnapshot)')
+  const win = clientSrc.slice(idx, idx + 900)
+  assert.ok(win.includes('if (delivered)'), 'delivered 条件被反转/中和——双发或丢消息的两条防线同时失效')
+})
+
+t('wiring 顺序①：清草稿后到下一个 return 之间不得有 submitViaQueue（删 return/条件变异 → 红）', () => {
   const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, draftSnapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   const setDraftIdx = win.indexOf("setDraft?.('')")
   assert.ok(setDraftIdx >= 0, 'delivered 分支未清草稿')
-  const returnIdx = win.indexOf('return', setDraftIdx)
-  assert.ok(returnIdx > setDraftIdx, '清草稿之后未紧跟 return——直达成功会继续走队列（双发）')
+  const nextReturn = win.indexOf('return', setDraftIdx)
+  assert.ok(nextReturn > setDraftIdx, '清草稿之后无 return——直达成功会继续走队列（双发）')
+  const between = win.slice(setDraftIdx, nextReturn)
+  assert.ok(!between.includes('submitViaQueue'), '清草稿与 return 之间出现 submitViaQueue——直达成功仍走队列（双发）')
 })
 
 t('wiring 顺序②：失败回退在 .then 内（delivered return 之后、.catch 与外层 return 之前）', () => {
