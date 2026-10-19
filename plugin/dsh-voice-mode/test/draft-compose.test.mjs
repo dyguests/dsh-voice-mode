@@ -64,10 +64,38 @@ const clientSrc = readFileSync(join(root, 'src', 'client.tsx'), 'utf8')
 t('wiring：onPartial 走 composeDraft + wake 门控 + lastPartial 记录', () => {
   const idx = clientSrc.indexOf('engine.onPartial(')
   assert.ok(idx >= 0, '缺 onPartial')
-  const window = clientSrc.slice(idx, idx + 700)
+  const window = clientSrc.slice(idx, idx + 1600)
   assert.ok(window.includes('composeDraft('), 'onPartial 未走 composeDraft')
   assert.ok(window.includes('shouldWritePartial(') || window.includes("=== 'wake'"), 'onPartial 缺 wake 门控')
   assert.ok(window.includes('lastPartialRef'), 'onPartial 未记录 partial 尾（定稿替换需要）')
+})
+
+t('wiring（审查 I-1）：onPartial 门控放行后必须 cancelAutoSend（wake 续段定时器不取消→半成品外发+命令重复）', () => {
+  const idx = clientSrc.indexOf('engine.onPartial(')
+  const win = clientSrc.slice(idx, idx + 1600)
+  const gateIdx = win.indexOf('shouldWritePartial(')
+  assert.ok(gateIdx >= 0, '缺 wake 门控')
+  const cancelIdx = win.indexOf('cancelAutoSend()', gateIdx)
+  assert.ok(cancelIdx > gateIdx, 'wake 门控放行后未取消 pending autoSend——定时器会把未定稿 partial 当半成品发出')
+  assert.ok(cancelIdx < win.indexOf('composeDraft(', gateIdx), 'cancelAutoSend 应在写草稿之前（先取消再写）')
+})
+
+t('wiring（审查 I-2）：onPartial 起始处必须检 submitInFlightRef（提交在途窗口不回写草稿）', () => {
+  const idx = clientSrc.indexOf('engine.onPartial(')
+  const win = clientSrc.slice(idx, idx + 1600)
+  assert.ok(win.includes('submitInFlightRef.current'), 'onPartial 缺提交在途检查——已提交文本会被写回草稿')
+  const checkIdx = win.indexOf('submitInFlightRef.current')
+  const gateIdx = win.indexOf('shouldWritePartial(')
+  assert.ok(checkIdx < gateIdx, '在途检查必须在 wake 门控之前（窗口内任何态都不回写）')
+})
+
+t('wiring（审查 I-2）：submitDraftNow 置在途标记 + onSegment/exitMode 清标记', () => {
+  const submitIdx = clientSrc.indexOf('const submitDraftNow =')
+  assert.ok(clientSrc.slice(submitIdx, submitIdx + 300).includes('submitInFlightRef.current = true'), 'submitDraftNow 未置在途标记')
+  const segIdx = clientSrc.indexOf('engine.onSegment(')
+  assert.ok(clientSrc.slice(segIdx, segIdx + 600).includes('submitInFlightRef.current = false'), 'onSegment 未清在途标记（新段=新周期）')
+  const exitIdx = clientSrc.indexOf('const exitMode =')
+  assert.ok(clientSrc.slice(exitIdx, exitIdx + 500).includes('submitInFlightRef.current = false'), 'exitMode 未清在途标记')
 })
 
 t('wiring：onSegment 用 composeDraft 替换 partial 尾（double-append 防护）', () => {

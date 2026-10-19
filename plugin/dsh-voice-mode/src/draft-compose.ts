@@ -27,7 +27,7 @@ export function composeDraft(current: string, tail: string, addition: string): s
 
 /**
  * partial 是否应写草稿：wake 待机态的 partial 是「它听到了什么」的诊断反馈
- * （含唤醒词、未进入识别），不得写草稿（asr.ts:379-399 同款语义的客户端侧）。
+ * （含唤醒词、未进入识别），不得写草稿（asr.ts wake 分支同款语义的客户端侧，审查 M-2 行号漂移已修）。
  */
 export function shouldWritePartial(state: string): boolean {
   return state !== 'wake'

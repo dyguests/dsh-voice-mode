@@ -1552,6 +1552,7 @@ export function MicButton({
    *  re-render 更新（读旧值会误判空草稿而漏发），故由调用方显式传入；定时器路径省略则读 draftRef。 */
   const submitDraftNow = (expectedText?: string): void => {
     cancelPendingSubmit()
+    submitInFlightRef.current = true // Issue #15 批 3（审查 I-2）：提交在途窗口起
     const actions = actionsRef.current
     const submitFn = actions?.submit
     if (typeof submitFn !== 'function') return
@@ -1634,6 +1635,7 @@ export function MicButton({
     clearIdle()
     cancelPendingSubmit()
     cancelAutoSend()
+    submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：退出清在途标记
     isSpeechTrueCount = 0 // 打断根治：退出重置 isSpeech 计数（防残留）
     fixtureRecorder.save('exit') // fixture 录制：退出即落盘（未开录时为 no-op）
     breakRef.current = null // 手动打断入口：退出即失效
@@ -1908,11 +1910,25 @@ export function MicButton({
       })
       engine.onPartial((text) => {
         bus.setUi({ partial: text })
+        // Issue #15 批 3（审查 I-2）：提交在途窗口——submitDraftNow 后宿主清草稿/
+        // re-render 有时窗，期间新 partial 不得以未清草稿为基（会把已提交文本写回
+        // 草稿，steer 的改写守卫还会跳过清草稿 → 残留无自愈）。宿主清草稿落地
+        // （draftRef 空）即窗口结束；未落地则跳过本次回写。
+        if (submitInFlightRef.current) {
+          if (draftRef.current === '') submitInFlightRef.current = false
+          else return
+        }
         // Issue #15 批 3：partial 实时回填草稿（问题③——原仅状态条预览，输入框要等定稿
         // 才一次性出现）。宿主 setDraft 是整篇替换纯文本：草稿组成 = 已定稿前缀 + 当前
         // partial 尾；lastPartialRef 记住本次写入的尾，定稿时替换它（防 double-append）。
         // wake 待机态 partial 是「它听到了什么」的诊断反馈（含唤醒词），不写草稿。
         if (!shouldWritePartial(engineRef.current?.state ?? '')) return
+        // Issue #15 批 3（审查 I-1）：live partial = 用户仍在说 → 取消 pending autoSend。
+        // wake 续段路径从不出现 'speech' 态（唤醒词命中也只到 'listening'），
+        // onState('speech') 的取消覆盖不到它——不取消则定时器会把「已定稿前缀+未定稿
+        // partial」当半成品发出、新段定稿后再发一次（命令重复）。新段定稿时 onSegment
+        // 自然重新 schedule。
+        cancelAutoSend()
         const partialActions = actionsRef.current
         if (typeof partialActions?.setDraft !== 'function') return
         const composed = composeDraft(draftRef.current, lastPartialRef.current, text)
@@ -1929,6 +1945,7 @@ export function MicButton({
         // 静音到「发送阈值」（断句后再额外静音一个 silenceMs）或按住 Ctrl / hold 松手才发，
         // 不再每段定稿立即发送（长句碎片化/丢字的根因）。
         resetIdle()
+        submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：新段=新提交周期
         bus.setUi({ partial: '' }) // 定稿即清实时字幕（防旧 partial 遮蔽思考/朗读状态条）
         const actions = actionsRef.current
         const trimmed = text.trim()
@@ -2291,6 +2308,9 @@ export function MicButton({
   // Issue #15 批 3：partial 回填的尾记录——定稿时从草稿末尾剥掉它再拼定稿文本
   // （composeDraft 的 tail 参数；防 partial 被 double-append）。
   const lastPartialRef = useRef('')
+  // Issue #15 批 3（审查 I-2）：提交在途标记——submitDraftNow 后宿主清草稿/re-render
+  // 的窗口内，onPartial 不回写草稿（防已提交文本被写回且 steer 守卫跳过清草稿）。
+  const submitInFlightRef = useRef(false)
   const livePhase = useInput ? useInput((s: any) => (s?.phase as string) ?? '') : ''
   const phaseRef = useRef('')
   phaseRef.current = livePhase

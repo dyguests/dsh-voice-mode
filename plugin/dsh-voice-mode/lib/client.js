@@ -3225,7 +3225,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "c4fec2f";
+var BUILD_TAG = "6537d00";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4260,6 +4260,7 @@ function MicButton({
   };
   const submitDraftNow = (expectedText) => {
     cancelPendingSubmit();
+    submitInFlightRef.current = true;
     const actions = actionsRef.current;
     const submitFn = actions?.submit;
     if (typeof submitFn !== "function") return;
@@ -4326,6 +4327,7 @@ function MicButton({
     clearIdle();
     cancelPendingSubmit();
     cancelAutoSend();
+    submitInFlightRef.current = false;
     isSpeechTrueCount = 0;
     fixtureRecorder.save("exit");
     breakRef.current = null;
@@ -4544,7 +4546,12 @@ function MicButton({
       });
       engine.onPartial((text) => {
         bus.setUi({ partial: text });
+        if (submitInFlightRef.current) {
+          if (draftRef.current === "") submitInFlightRef.current = false;
+          else return;
+        }
         if (!shouldWritePartial(engineRef.current?.state ?? "")) return;
+        cancelAutoSend();
         const partialActions = actionsRef.current;
         if (typeof partialActions?.setDraft !== "function") return;
         const composed = composeDraft(draftRef.current, lastPartialRef.current, text);
@@ -4557,6 +4564,7 @@ function MicButton({
       });
       engine.onSegment((text, meta) => {
         resetIdle();
+        submitInFlightRef.current = false;
         bus.setUi({ partial: "" });
         const actions = actionsRef.current;
         const trimmed = text.trim();
@@ -4833,6 +4841,7 @@ function MicButton({
   const draftRef = (0, import_react3.useRef)("");
   draftRef.current = liveDraft;
   const lastPartialRef = (0, import_react3.useRef)("");
+  const submitInFlightRef = (0, import_react3.useRef)(false);
   const livePhase = useInput ? useInput((s) => s?.phase ?? "") : "";
   const phaseRef = (0, import_react3.useRef)("");
   phaseRef.current = livePhase;
