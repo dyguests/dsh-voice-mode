@@ -401,13 +401,15 @@
 - 三轴审查（R1 证据/R2 最小性/R3 风险）+ 第 2 轮复审已全部完成：R3 初判 fail 的 B2/I-1~I-7 与复审两个 Important（抑制口径改 engine 侧弃段、设置接线补 settings-form.tsx）均已修订进计划；复审结论=有条件放行批 1，4 项条件全部落实。
 - **批 1（打断语音抢救）已入库**：`7721d00` feat（asr.ts 预录环+absorbPreRoll+弃段守卫，index/client/strings/settings-form 接线，wake-flow 台架 440→445 全绿，双 tsc+build 过）+ `c136f71` docs（计划修订：种子锚点改请求体起点-250——台架 detect 延迟档实测抓红 sentAt 方案后修正）+ `0496ace` chore(lib)。**执行期修正记录**：台架 max 判频段实验抓红 D5 命令窗（相位小尾巴产字污染唤醒词文本）→ 回退 mean 判+BC 频段加宽 [0.015,0.05) 解决混合块杂字。
 - **批 1 审查前置自检自查两处真 bug 并修复**（均先写复现测试拿红）：① `8cc2e7b` salvage 标记泄漏——beginHeld/endHeld(cancel)/短噪声弃段/clearWakeSegment 四个段重置路径不清 salvagedSegment，抢救段未定稿前用户立刻按住说话会把 hold 段「对/嗯」误抑制；② `316ea2f` 同不变量第三条路径——discardSegment 清空段与条件 seed 之间不清标记（未 seed 时 stale 保留）。修复后 446 全绿。教训：**布尔段标记必须与「段生命周期」所有重置点对齐**，已在台架补「标记不泄漏」用例。
-- 批 1 独立审查进行中（kimi-coding 路由故障，stepfun-plan 路由重派两个窄域审查：引擎正确性/接线与测试；审查对象为 7721d00 原始 diff，两处修复需在裁决时对照当前码）。
-- 基线：HEAD=78200ec（v0.7.25）→ 316ea2f；npm test 446 项；17 版矩阵不变。
+- **批 1（打断语音抢救）已入库且门禁闭环**：`7721d00` feat + `c136f71` docs + `0496ace` chore(lib) + `8cc2e7b`/`316ea2f`（salvage 标记泄漏两处，主会话审查前置自检发现，先写复现测试拿红）+ `cd0a159`（引擎审查 B1/I1 + dial 修正 + 计划锚点口径回写）。**独立审查两路**（引擎正确性/接线与测试，stepfun-plan 路由；kimi-coding 故障期）：接线 pass-with-minor（十站全落+dial 两缺陷已修）；引擎初判 fail（B1 环跨窗不重整→「AI 播完→口述→再开播→打断」常见流程抢救静默失效+让位恢复后反向切句首；I1 wake 下 reset 窗口抹段）→ 修复后台架 8  salvage 用例 18/18、npm test 448 全绿、双 tsc+build 过，**反向断言实证锁红**（删上升沿清环→跨窗用例红；setState 改回 reset 后→wake 用例红）。**执行期关键修正**：种子锚点 sentAt-250 → 请求体起点-250（帧级 VAD 语义保证不切句首，800ms 劣化档+逻辑论证）。
+- **批 1 遗留登记（不阻塞）**：host /cancel 的 asr.reset 清全部世代段与新 epoch 首包上竞态（批 1 前同构暴露）；主线程卡顿下墙钟/音频同窗漂移（真机覆盖）；锚点策略实证区分度（800ms 档两锚点均保守，以计划口径+逻辑论证为真源）。
+- 基线：HEAD=78200ec（v0.7.25）→ b1b7947；npm test 457 项；17 版矩阵不变。
 
 ### 恢复点
 
 1. 读 `docs/plan/issue-15-ux-feedback.md` 全文 + 本段。
-2. 批 1 审查 verdict 回收 → 有 Blocker/Important 则 fix-commit → 放行批 2（运行中 steer 直提交；前置 PoC：0.1.1-rc.2 与 0.2.1-rc.2 两端 session.prompt running 行为）。
+2. **批 2（运行中 steer 直提交）已入库** `b1b7947`：steer-submit.ts 纯模块（四态）+ bus.steerSubmit（ctx.sessions 同源）+ submitDraftNow 分流（直达成功清草稿防双发，失败回退队列）+ 9 项单测；PoC：0.1.2-rc.1+（矩阵 16/17 版）SessionFace.prompt 带 steer 签名（npm 实拉），0.1.1-rc.2 子包未发布（E404）静态不可证——防御式兜底+矩阵冒烟+真机覆盖（known-unknown 已登记）；真机验收项已登记 must-verify-manually（耗时任务中途插话）。独立审查进行中。
+3. 批 2 审查 verdict 回收 → 放行批 3（partial 实时回填草稿：committed/live 分离+wake 门控+onSegment 替换尾部）。
 3. 每批门禁（主会话执行+四连 → 审查 subagent 审 diff → 主会话裁决）；批 1 I10 豁免见 ADR-0012（bargeInSalvage 布尔默认 true + PRE_ROLL_MS=2000 常量）。
 4. 批 1 真机验收项已登记 docs/qa/must-verify-manually.md（外放/耳机 × salvage 纯度 + 纯「嗯」不发送 + 逃逸关口）。
 5. issue #15 回复稿与发版（v0.7.26 先例）在收口批，待用户拍板。
