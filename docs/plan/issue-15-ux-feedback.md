@@ -154,7 +154,7 @@
 1. ~~ctx.llm 纠错调用链~~（批 4 前置 PoC）。**主会话预核已确认**：llm 服务存在（dsh-llm index.js:1801 `super(ctx,"llm")` + Context 增强 `llm: LlmRuntime`）；用 `ctx.get('llm')` 可选查找**无需改 host inject**（同 sessions/profileContext 模式，index.ts:510/576-577）；插件自身 llm/stream tap 对无 sessionId 调用直接放行（index.ts:803 实证，无递归）。**PoC 剩余面**：stream() 精确签名与 provider 解析（agentDefaultModel.currentSelection）、凭据缺失时的降级、跨 17 版本 ctx.get('llm') 可用性。不过则砍 LLM 纠错只留④。
 2. sherpa-onnx WASM 版 hotwordsFile 支持（热词重启前提，本期不做）。
 3. backchannel 死路径行为级证据（台架补测后定性；hold 模式下活着已确认）。
-4. ~~session.prompt 老宿主 running 行为~~：**✓ 已补核**——RPC schema 0.1.5-rc.2 起带 mode（compat-contract.md:174/202，24 帧实测 :196）；dsh-agent@0.1.1-rc.2 已有 steer()（npm 实拉）；**0.1.1-rc.2 客户端侧 mode 参数与 running 态行为仍需批 2 前置 PoC 两端实测**（统一 try/catch+ok+回退路径兜底）。
+4. ~~session.prompt 老宿主 running 行为~~：**✓ 批 2 PoC 已结论**——RPC schema 0.1.5-rc.2 起带 mode（compat-contract.md:174/202，24 帧实测 :196）；`@deepseek-ai/dsh-api-session-controller` 在 0.1.1-rc.2 **不存在**（npm E404；该版 session 面在 dsh-session-reference/projection 子包，客户端 prompt 签名静态不可实证 → known-unknown）；0.1.2-rc.1+（矩阵 17 版中 16 版）SessionFace.prompt 已带 `queue|steer` 签名（npm 实拉）。防御式实现（try/catch+ok+回退）保证 0.1.1-rc.2 上三种可能（抛错/静默排队/生效）均不劣于现状；运行时由 17 版矩阵冒烟+真机插话项（must-verify-manually）覆盖。
 5. 桌面端 0.2.1-rc.2 smoke-desktop-shell 可跑性（批 8 执行时实证；R1 Q4 覆盖版本清单届时复核）；**回退口径（审查 M5）**：本机 Electron/Xvfb 不可用或跑不过 → 降级为纯文档声明 + 在 compat-contract 登记「桌面端 rc.2 未实证」事实，不阻塞发版（兼容宣称以 server 四层矩阵为真源）。
 6. settingsEffectiveNote 中 backchannelYield/yieldMs 改后是否真即时（代理按代码推理不会，待用户实测；批 6 按「下次进入」口径写文案）。
 7. **R1 Q3（批 6 前置）**：17 条丢句路径清单的 file:line 逐条复核（批 6 动这些路径前由主会话+执行者逐条 grep 确认）。
