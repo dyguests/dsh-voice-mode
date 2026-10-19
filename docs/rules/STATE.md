@@ -408,7 +408,7 @@
 ### 恢复点
 
 1. 读 `docs/plan/issue-15-ux-feedback.md` 全文 + 本段。
-2. **批 2（运行中 steer 直提交）已入库** `b1b7947`：steer-submit.ts 纯模块（四态）+ bus.steerSubmit（ctx.sessions 同源）+ submitDraftNow 分流（直达成功清草稿防双发，失败回退队列）+ 9 项单测；PoC：0.1.2-rc.1+（矩阵 16/17 版）SessionFace.prompt 带 steer 签名（npm 实拉），0.1.1-rc.2 子包未发布（E404）静态不可证——防御式兜底+矩阵冒烟+真机覆盖（known-unknown 已登记）；真机验收项已登记 must-verify-manually（耗时任务中途插话）。独立审查进行中。
+2. **批 2（运行中 steer 直提交）已入库且门禁闭环** `b1b7947`+`e55fc8a`：steer-submit.ts 纯模块（五态）+ bus.steerSubmit（ctx.sessions 同源）+ submitDraftNow 分流（直达成功清草稿防双发，失败回退队列）；PoC 结论入待核 #4（0.1.1-rc.2 子包 E404→known-unknown，0.1.2-rc.1+ 16/17 版签名实证，防御式兜底）。**独立审查 fail（唯一 Important=测试保真度）→ 全修**：wiring 锁改顺序锁（三突变反向实证抓红：删 return/删 .then 回退/无条件回退均 exit=1）+ 用户改写守卫（M-1）+ .catch 兜底（M-2）+ 保守交付判据（OQ-1：未显式 ok:false 即交付，防老宿主双发）+ 测试卫生（M-3）。461 全绿。修复窄域复审进行中。
 3. 批 2 审查 verdict 回收 → 放行批 3（partial 实时回填草稿：committed/live 分离+wake 门控+onSegment 替换尾部）。
 3. 每批门禁（主会话执行+四连 → 审查 subagent 审 diff → 主会话裁决）；批 1 I10 豁免见 ADR-0012（bargeInSalvage 布尔默认 true + PRE_ROLL_MS=2000 常量）。
 4. 批 1 真机验收项已登记 docs/qa/must-verify-manually.md（外放/耳机 × salvage 纯度 + 纯「嗯」不发送 + 逃逸关口）。
