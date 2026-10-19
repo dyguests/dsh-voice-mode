@@ -25,7 +25,7 @@
 - `src/index.ts:1432-1461`：host 收到 /cancel，`keepAsr !== true` 时 `asr.reset(sessionId)`（:1456；host 识别流清空，asr-host.ts:730-762 reset 函数内 resetGen++（:749）且连带释放检测 VAD（:752-761））。
 - `src/asr.ts:1370-1436`：discardSegment 清空本地段 + segmentEpoch++ + resetHostStream。
 
-后果链：hardBreak 确认需 confirmFrames×100ms + 上行往返（真机 confirmMs ~490ms，CONTEXT.md:56/61），用户打断开口到打断生效之间说的全部语音只短暂存在于 detectChunks（上限 1s，`src/asr.ts:516` MAX_DETECT_PENDING，且被检测消费/弃段时清空）——既未进识别段、未上 host 流，hardBreak 后新段从零开始。**丢的正是「打断那句话」**，与用户报告「整段或丢开头、长段落尤其明显」完全吻合。
+后果链：hardBreak 确认需 confirmFrames×100ms + 上行往返（真机 confirmMs ~490ms，CONTEXT.md:37/42），用户打断开口到打断生效之间说的全部语音只短暂存在于 detectChunks（上限 1s，`src/asr.ts:516` MAX_DETECT_PENDING，且被检测消费/弃段时清空）——既未进识别段、未上 host 流，hardBreak 后新段从零开始。**丢的正是「打断那句话」**，与用户报告「整段或丢开头、长段落尤其明显」完全吻合。
 
 ### 问题②运行中排队 —— 用户诊断属实，且存在一等公民 API 解
 
@@ -83,7 +83,7 @@
 
 **问题④**：延迟链 = 端点静音 silenceMs（默认 1500，asr-host.ts:340）+ 确认窗 200~800ms（CONFIRM_MIN=200/CONJUNCTION=800，asr-host.ts:177-191）+ finalize = max(zipformer 尾垫 flush, SenseVoice 整段重译) race 上限 20s（race 定义 asr-host.ts:598-606，zipformer 定稿与结果合并 asr-host.ts:609-621）+ 定稿进草稿后再静默一个 silenceMs 才发（client.tsx:1809）→ 合计 5~23s，与用户报的 10-20s 吻合。**客户端 final fetch 10s 超时（asr.ts:693）< host 20s，慢定稿必触发一次重试经 host inflight 守卫等同一 promise**（asr-host.ts:575-577）。
 - 乐观发送（发后替换已发消息）**不可行**：dsh-agent / dsh-api-session-controller / dsh-client-ui-conversation 全文检索无 editMessage/updateMessage/replaceMessage。降级路径：乐观草稿（finalize 两段下发：zipformer 先行、SSE 推 sense 校正、草稿层替换未定稿尾）触及 asr-host/asr/client 三处 = 架构级单独批次。更轻替代：host 自适应跳过 sense（长段/上次解码慢则本段用 zipformer）。
-- senseVoice 关 = 现成快速模式（定稿段降到亚秒）；「识别中…」状态条已有（client.tsx:2516），加耗时是 UI 小改。
+- senseVoice 关 = 现成快速模式（定稿段降到亚秒）；「识别中…」状态条已有（client.tsx:2631 / :2992-2993 耗时递增），加耗时是 UI 小改。
 
 **问题⑤**：LLM 纠错**宿主 API 可行**：cordis `ctx.llm.stream({provider, messages, system})`（dsh-llm），模型路由 `ctx.agentDefaultModel.currentSelection()`；避自 tap：纠错调用不传 sessionId（index.ts:803 的 tap 只拦本会话无 purpose 流）。**ctx.llm 运行时可用性未经 PoC = 待核**。
 - 推荐插入点：**不在 finalize 链内**（每句多 0.5-3s RTT），而在 scheduleAutoSend 到点后、submitDraftNow 前，新 host 路由 /correct 对整条累积草稿纠错一次（每消息一次 RTT）；失败/超时回退原文，纯附加层。开关照搬既有模式（schema+默认+strings+form+/config 透传）。热词：sherpa transducer 理论支持 hotwordsFile（asr-host.ts:276-288），WASM 支持 = 待核。autoSend=false 时草稿天然可见可改，无需新架构。
@@ -95,11 +95,11 @@
 ### 2.D 设置与可观测（代理 D，已与主会话抽查互证 ✓）
 
 **设置生效语义全景**：双路径（≤0.1.6 register+watch / ≥0.1.7 Config 派生+覆盖文件）。applyVset 实际热生效：ttsEngine/kokoroModel/voice/rate 即时；senseITN/senseVoice 即时但懒重建（下次 finalize）；silenceMs host VAD 段级（下一段）+ client autoSend 计时（下次进入）；bargeInMode 客户端 enterMode 快照（下次进入）；其余 12 字段全走 fetchConfig 白名单（下次进入）。
-- **settingsEffectiveNote 文案与机制不符（批 F 落地偏差，文档 bug）**：文案声称字幕字号/宽度/让位窗口/短应答让位「即时生效」，实际走 fetchConfig 白名单下次进入才生效（client.tsx:1414-1419）。
+- **settingsEffectiveNote 文案与机制不符（批 F 落地偏差，文档 bug）**：文案声称字幕字号/宽度/让位窗口/短应答让位「即时生效」，实际走 fetchConfig 白名单下次进入才生效（文案渲染在 settings-form.tsx:1180 `tr('settingsEffectiveNote')`；「已保存未生效」列表 = settings-form.tsx:631 `EffectivePending` 组件，挂载于 :1005）。
 - busyEnter/steer 插件侧 grep 0 命中——纯宿主设置，插件读不到也改不了。**但批次 2 的 steer 直提交方案使语音通道不再依赖该宿主设置**，文案引导降级为附属动作。
 - 外部设置文件运行期无 watch（只在 apply 启动读一次，index.ts:817）——用户手改 JSON 必须重启 dsh 或重进语音模式。
 
-**丢句路径清单（17 条，代理逐条列 file:line）**：已有可见反馈 = finalize 重试耗尽（recognitionFail 状态条）/ TTS 跳句与引擎失败（tts-skip+toast）/ 模型下载失败。仍静默 = partial 上行失败（asr.ts:428-432）/ detect 通道失败（asr.ts:484-486）/ host finalize 异常返回空（asr-host.ts:632-638）/ SenseVoice 降级（asr-host.ts:443-461）/ VAD 模型下载失败 / TTS 队列溢出 / SSE 断连（client.tsx:857-868）。设计性静默（自聊防护/manual 丢帧/迟到响应作废）不算缺陷。
+**丢句路径清单（17 条，代理逐条列 file:line）**：已有可见反馈 = finalize 重试耗尽（recognitionFail 状态条）/ TTS 跳句与引擎失败（tts-skip+toast）/ 模型下载失败。仍静默 = partial 上行失败（asr.ts:428-432）/ detect 通道失败（asr.ts:572 detectFailStreak≥3 才提示）/ host finalize 异常返回空（asr-host.ts:643-649 catch 返回空）/ SenseVoice 降级（asr-host.ts:443-461）/ VAD 模型下载失败 / TTS 队列溢出 / SSE 断连（client.tsx:944 error 监听）。设计性静默（自聊防护/manual 丢帧/迟到响应作废）不算缺陷。
 
 **可观测性**：host 仅 console.warn 无 ring buffer 无导出；客户端 telemetry 仅 localStorage 开关下采集、存内存、无导出无持久化。
 
@@ -169,7 +169,7 @@
 
 常量（不设设置）：PRE_ROLL_MS=2000（抢救环长，见下推导）、SEND_DELAY_MS=1200（发送延迟，见批 5）。
 
-**PRE_ROLL_MS=2000 推导**（审查 OQ4）：需覆盖「VAD 首真 → hardBreak 确认」全窗口 = confirm 窗（真机 confirmMs 252~597ms，CONTEXT.md:56）+ 检测通道上行往返（p99≈430ms）+ 余量 ≈ 1.1s 量级；2000ms ≈ 1.8× 覆盖；慢主机（interruptLevel=2 一帧确认+网络劣化）窗口翻倍仍在环内。并入起点锚定 **detect 请求体起点-250ms**（reqBodyStart=sentAt−请求体音频时长；帧级 VAD 语义保证语音起点 ≥ 请求体起点，锚此永不切句首——引擎审查 B1 后修订，计划原「sentAt-250」在劣化 cadence 下会切），环长只决定「极端慢确认」时的丢失上界，不决定日常质量；onset 跟踪失败时退环起点（2s 全量）兜底。
+**PRE_ROLL_MS=2000 推导**（审查 OQ4）：需覆盖「VAD 首真 → hardBreak 确认」全窗口 = confirm 窗（真机 confirmMs 252~597ms，CONTEXT.md:37）+ 检测通道上行往返（p99≈430ms）+ 余量 ≈ 1.1s 量级；2000ms ≈ 1.8× 覆盖；慢主机（interruptLevel=2 一帧确认+网络劣化）窗口翻倍仍在环内。并入起点锚定 **detect 请求体起点-250ms**（reqBodyStart=sentAt−请求体音频时长；帧级 VAD 语义保证语音起点 ≥ 请求体起点，锚此永不切句首——引擎审查 B1 后修订，计划原「sentAt-250」在劣化 cadence 下会切），环长只决定「极端慢确认」时的丢失上界，不决定日常质量；onset 跟踪失败时退环起点（2s 全量）兜底。
 
 ## 7. 审查记录与裁决
 

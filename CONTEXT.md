@@ -25,30 +25,11 @@ DSH 语音双工插件：进入语音模式 → 流式识别入草稿 → 静音
 - 检测 VAD 阈值 0.35（灵敏），端点 VAD 阈值 0.5（保守断句）。
 - 打断计数**仅在播放期累积**（非播放期清零），否则用户说自己的话的残留计数会在 AI 开播瞬间误打断。
 - 段生命周期：host 按 sessionId→epoch 嵌套 Map；finalize 幂等（缓存定稿文本 + 并发守卫），client 对瞬时失败有界重试（3 次）——不丢句。
-- **唤醒词链（issue #10 + 后续真机排查）**：匹配 = startsWith 快路径 + 容错慢路径（lead ≤3 字符平移 + Levenshtein ≤1，
-  窗口 w±1 且 ≥2 字；单字词不走慢路径）。待机态 partial 也上屏（「说『x』开始 · 转写」复合显示）；
-  待机段**静音 ≥ silenceMs 即弃段**（防段首毒化 + 自愈 host 流丢头）；待机段清空统一走
-  `clearWakeSegment()`（`segmentEpoch++` 作废在途 partial + 水位归零 + host 流清场）。
-  `resetGate` 保证「host 清场先落地、partial 后上行」——hardBreak 的 /cancel asr.reset 与 reset=1
-  双清场竞态是「打断后卡住」根因。打断门控是 VAD 与唤醒词无关；每句断句/打断后回待机需重说唤醒词。
-- **待机段音频组装 = 与正常聆听路径同构（真机「唤醒词几乎无法触发」两个流程根因，2026-09-18 修）**：
-  ① **朗读期不入段并清残留**（自聊守卫，对齐正常路径的 isPlaying 分支）——否则 TTS 回声累积进待机段，
-  朗读结束后第一次 partial 把「AI 的话 + 唤醒词」整段上传，host 累计文本以 AI 的话开头 → 头部锚定必失配；
-  ② **开口后尾随静音也入段上传**——流式解码器要尾随音频才 flush 得出尾字，只发超门限帧会让用户一停口
-  就没有新帧、不再发 partial，4 字唤醒词只剩 2 字（编辑距离 2 > 1 → 失配）；③ **prePad 补起始音**（弱起音不被切）。
-  ④ **命中不丢段**：用户常把命令与唤醒词连说（「你好小李你给我说100个字」），命中时命令前半句已在同一段里，
-  清段/清 host 流会把它整段吃掉、只剩尾部几个字（「完全无法使用」根因）；改为保留音频继续识别，定稿时用
-  `stripWakePrefix` 从文本头部剥掉唤醒词（找不到就原样保留——**保内容优先**，多留一个词好过丢一句命令）。
-  ⑤ **命中置 `speechActive` 并结转 `silenceMs`**（D4：命中发生在用户停口之后时，尾随静音不定稿 → 命令悬挂；
-  台架 LAG=3000ms 实证 0 条定稿）；⑥ **只喊唤醒词不关命令窗口**（D5：剥完为空时保持聆听，
-  否则「唤醒词…停顿…命令」的命令会被当待机音频丢弃）。待机段计入 `speechMs`（过 MIN_SPEECH_MS）。
-  真机台架 `test/wake-flow.test.mjs`（假浏览器+假 host 驱动真引擎；D1-D5 每处都有反向验证）。
-- **输出链路静默丢音（2026-09-18 真机「AI 回复偶尔不朗读」）**：三类原因——① 云端 TTS 单句重试
-  （3 次/退避）耗尽后**静默跳句**（`tts-queue.ts` pump）→ 现 `onSkip` → host `tts-skip` → 客户端
-  状态条提示，不再静默；② 浏览器挂起 AudioContext 后播放被调度但**无声**（UI 仍显示朗读中、字幕照走）
-  → 现 `push()` 先 `warm()`（resume）+ 全局 pointerdown/keydown 恢复；③ SSE 丢帧致整句不完整
-  → 按设计丢弃坏句（`chunkId !== curChunkCount`），留 `tts-drop-sentence` 诊断。`engine.duck()` 为
-  未启用预留挂点（增益恒 1，无静音风险）。回合 aborted 时不 flush 残句 = 有意（用户打断了不想听）。
+- **唤醒词链（issue #10 + 后续真机排查）**：匹配 = startsWith 快路径 + 容错慢路径（lead ≤3 字符平移 + Levenshtein ≤1，窗口 w±1 且 ≥2 字；单字词不走慢路径）。待机态 partial 也上屏（「说『x』开始 · 转写」复合显示）；待机段**静音 ≥ silenceMs 即弃段**（防段首毒化 + 自愈 host 流丢头）；待机段清空统一走 `clearWakeSegment()`（`segmentEpoch++` 作废在途 partial + 水位归零 + host 流清场）。`resetGate` 保证「host 清场先落地、partial 后上行」——hardBreak 的 /cancel asr.reset 与 reset=1 双清场竞态是「打断后卡住」根因。打断门控是 VAD 与唤醒词无关；每句断句/打断后回待机需重说唤醒词。
+- **待机段音频组装 = 与正常聆听路径同构（真机「唤醒词几乎无法触发」流程根因，2026-09-18 修）**：① **朗读期不入段并清残留**（自聊守卫，对齐正常路径的 isPlaying 分支）——否则 TTS 回声累积进待机段，朗读结束后第一次 partial 把「AI 的话 + 唤醒词」整段上传 → 头部锚定必失配；② **开口后尾随静音也入段上传**——流式解码器要尾随音频才 flush 得出尾字，只发超门限帧会让用户一停口就没有新帧、不再发 partial，4 字唤醒词只剩 2 字（编辑距离 2 > 1 → 失配）；③ **prePad 补起始音**（弱起音不被切）。
+  ④ **命中不丢段**：用户常把命令与唤醒词连说（「你好小李你给我说100个字」），命中时命令前半句已在同一段里，清段/清 host 流会把它整段吃掉、只剩尾部几个字（「完全无法使用」根因）；改为保留音频继续识别，定稿时用 `stripWakePrefix` 从文本头部剥掉唤醒词（找不到就原样保留——**保内容优先**，多留一个词好过丢一句命令）。
+  ⑤ **命中置 `speechActive` 并结转 `silenceMs`**（D4：命中发生在用户停口之后时，尾随静音不定稿 → 命令悬挂；台架 LAG=3000ms 实证 0 条定稿）；⑥ **只喊唤醒词不关命令窗口**（D5：剥完为空时保持聆听，否则「唤醒词…停顿…命令」的命令会被当待机音频丢弃）。待机段计入 `speechMs`（过 MIN_SPEECH_MS）。真机台架 `test/wake-flow.test.mjs`（假浏览器+假 host 驱动真引擎；D1-D5 每处都有反向验证）。
+- **输出链路静默丢音（2026-09-18 真机「AI 回复偶尔不朗读」）**：三类原因——① 云端 TTS 单句重试（3 次/退避）耗尽后**静默跳句**（`tts-queue.ts` pump）→ 现 `onSkip` → host `tts-skip` → 客户端状态条提示，不再静默；② 浏览器挂起 AudioContext 后播放被调度但**无声**（UI 仍显示朗读中、字幕照走）→ 现 `push()` 先 `warm()`（resume）+ 全局 pointerdown/keydown 恢复；③ SSE 丢帧致整句不完整 → 按设计丢弃坏句（`chunkId !== curChunkCount`），留 `tts-drop-sentence` 诊断。`engine.duck()` 为未启用预留挂点（增益恒 1，无静音风险）。回合 aborted 时不 flush 残句 = 有意（用户打断了不想听）。
 - **断句静音阈值由设置 silenceMs 真实驱动**（端点 VAD minSilenceDuration = silenceMs/1000，默认 1500ms；
   客户端静音计时仅作 VAD 缺失兜底）。**发送为累积模式**：定稿进草稿，再静音一个 silenceMs 或 Ctrl/hold 才发，
   连续多段拼成一条消息（内部仍按 30s 分块识别、跨块拼接）。
@@ -108,10 +89,7 @@ DSH 语音双工插件：进入语音模式 → 流式识别入草稿 → 静音
 - `npm run analyze:fixture -- <fixture.json>`：真机录制分析（覆盖率/停顿归因/confirmMs）
 - 录制开关 `localStorage['dsh-voice-mode.record']=meta|full`，用法见 docs/fixture-recording.md
 - **真机 fixture 已起步**：4 条 2×2 矩阵（2026-09-14，含音轨，不进公开仓）
-- 决策记录：ADR-0003 VAD 服务端 Silero（已接受，提议下沉客户端待决策；fixture 已实证必要性）· ADR-0004 WebSocket transport（提议，deferred）·
-  ADR-0005 回归基准（已接受）· ADR-0006 打断模式自动探测（已接受）·
-  ADR-0007 情感标签 DSL（**已接受 2026-09-14，先本地后 Edge 分两步**）·
-  ADR-0008 让位语义（**已接受 Phase 1 2026-09-14，#1 backchannel + #2 让位 prompt，#3-5 砍/推迟**）
+- 决策记录：ADR-0003 VAD 服务端 Silero（已接受，提议下沉客户端待决策；fixture 已实证必要性）· ADR-0004 WebSocket transport（提议，deferred）· ADR-0005 回归基准（已接受）· ADR-0006 打断模式自动探测（已接受）· ADR-0007 情感标签 DSL（**已接受 2026-09-14，先本地后 Edge 分两步**）· ADR-0008 让位语义（**已接受 Phase 1 2026-09-14，#1 backchannel + #2 让位 prompt，#3-5 砍/推迟**）
 
 ## 关键源文件
 

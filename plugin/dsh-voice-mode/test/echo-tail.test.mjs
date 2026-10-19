@@ -1,6 +1,6 @@
 /**
  * Issue #15 Blocker-1：ECHO_TAIL 死代码修复的行为级验证。
- * 运行：node test/echo-tail.test.mjs（npm test 串联待 PM/test teammate 加入）。
+ * 运行：node test/echo-tail.test.mjs（npm test 串联——R2 集成轮已登记入链）。
  *
  * 背景（只读审查结论）：client.tsx 把**原始 setUi 闭包**（Object.assign+notify，
  * 不记 playing 降沿）传给 createAudioEngine，而 playing 降沿只记录在 bus.setUi

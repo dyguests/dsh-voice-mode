@@ -29,5 +29,5 @@
 ## 依据
 
 - `docs/plan/issue-15-ux-feedback.md` §1/§2.A（根因证据链与设计选项对抗评估）、§6（PRE_ROLL_MS=2000 推导）、§7（R2 审查裁决）；
-- 真机基线：CONTEXT.md:56/61（confirmMs 252~597ms、检测通道 p99≈430ms）；
+- 真机基线：CONTEXT.md:37/42（confirmMs 252~597ms、检测通道 p99≈430ms）；
 - 台架：`test/wake-flow.test.mjs` 扩展（vadOnly 可编程响应 + hardBreak 序列 + 抢救内容进定稿断言，先红后修，反向断言防回归）。

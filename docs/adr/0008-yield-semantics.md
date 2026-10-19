@@ -87,10 +87,10 @@ YIELDING (let the user interrupt)
 | 触发条件 | 短词（嗯/对/so）+ LLM 自判断 | 长词（≥2 字符有效音频）+ 确认窗 + echoGate |
 | 动作 | TTS 暂停（epoch 不动）+ 等 1s | 立即硬打断（epoch 推进）+ 弃段 |
 | TTS-queue 影响 | `pauseAtBoundary()` | `cancel()`（现有 hardBreak） |
-| 时延预算 | 200-500ms（人感知阈） | 256-597ms（实测 CONTEXT.md L56） |
+| 时延预算 | 200-500ms（人感知阈） | 256-597ms（实测 CONTEXT.md L37） |
 | LLM 介入 | 是（system prompt 注入信号） | 否（纯前端） |
 
-**新加的"pauseAtBoundary"必须经 epoch 通道**（CLAUDE.md "CONTEXT.md 不丢句不变量"），不能直接 `engine.interrupt()`（那会破坏 `tts-queue.ts:300-320` 的"重试 3 次 + epoch 守卫"不变量）。
+**新加的"pauseAtBoundary"必须经 epoch 通道**（CLAUDE.md "CONTEXT.md 不丢句不变量"），不能直接 `engine.interrupt()`（那会破坏 `tts-queue.ts:344-353` 的"重试 3 次"（MAX_SYNTH_ATTEMPTS）+ `:250` 的 epoch 守卫不变量）。
 
 ### 5. ADR-0008 之外但本 ADR 顺带解决的
 

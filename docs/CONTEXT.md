@@ -2,7 +2,7 @@
 
 > **本文件角色**：跨文档索引 + 项目心智模型；状态变化改对应链接/锚点，不追加流水账。
 > **真源层级**：根 `CONTEXT.md`（开发者上下文，重写式 ~60 行）/ `docs/rules/STATE.md`（唯一恢复点）/ `docs/adr/`（决策）。
-> **基准 HEAD**：`d92f43b`（Issue #15 八批收口，src+lib 一致；本基线随收口批滚动更新）。
+> **基准 HEAD**：`6995ae7`（Issue #15 R2 全量深化收口，src+lib 一致——lib BUILD_TAG 实测 = 6995ae7；本基线随收口批滚动更新）。历史基线 `d92f43b`（Issue #15 八批收口）保留备查。
 > **批 7M 🔴 砍落地（2026-09-16）**：4 项砍除——`recognitionLanguage`（4532b48）/ `asrHotwords`+`asrHotwordsScore`+模块（e3423ef）/ `docs/qa/user-experience-flow.md`（6bed6d4）；本文件设置键表砍 3 行（识别热词 / 热词偏置分 / 识别语种）后剩 7 个数据行。
 > **批 7N 🟡 重做落地（2026-09-16）**：5 项重做——`bargeInMode='manual'` 接通（8278097）/ echoGateDb + autoResume 描述对齐（d667ffb+5b6019b）/ 端到端补测 3 项（58f6d77+b0e45fe+ee4312b）/ ADR-0003+0004 重命名（0564a51+0cacd88）/ autoResume 文案统一（f883b35）；详见下方设置键表。
 
@@ -45,7 +45,7 @@ bridge /voice-mode SSE：owner=sessionId，/config + /preview + assembleStream
   - `emotion.ts`（批 4）/ `asr-sense-key.ts`（纯函数 sanitize/key；批 7M 砍除 `asr-hotwords.ts`）
   - `sense-worker.ts` / `wakeword.ts` / `segmenter.ts` / `fixture-recorder.ts` 等
 - **`plugin/dsh-voice-mode/lib/`** —— esbuild 产物（`build.mjs` 重建，**不手改**；批 7P P2 起 lib 随每批 rebuild 对齐 BUILD_TAG=HEAD，旧「免重建」口径已证伪作废）
-- **`plugin/dsh-voice-mode/test/`** —— `.mjs` 测试（npm test 48 文件 / **583 项全绿**（2026-10-19 集成轮实测口径：各文件「N 项通过」之和 = `grep -c '✓'` = 583；R1 时为 41 文件 / 518 项，fix-test 本轮新增 7 个登记文件 + 31 项行为测试后为 583/48））
+- **`plugin/dsh-voice-mode/test/`** —— `.mjs` 测试（npm test 48 文件 / **583 项全绿**（2026-10-19 集成轮实测口径：各文件「N 项通过」之和 = `grep -c '✓'` = 583；R1 时为 41 文件 / 518 项，fix-test 本轮新增 7 个登记文件 + 31 项**行为级**测试后为 583/48；全套件计数另含合同级/静态守卫类用例——“31 项行为级”与“48 文件/583 项”两口径勿混用））
 - **`docs/competitive/sources/scan-*.md`** —— 18 份子代理扫描报告
 
 ## 诊断开关

@@ -683,17 +683,28 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
     // 「reset()/dispose()」时清理，而 reset 由 /toggle、/cancel 等主动路径触发——
     // 页面直接关闭/断电/kill 的会话永远不会 reset，其 finalized 缓存与 resetGen 代际
     // 条目永久驻留（每会话至多 32 条定稿文本 + 1 个数字）。宿主长命运行 +
-    // 会话轮转下只增不消。此处按「segments 已无该 sid」判定孤立并回收；resetGen
-    // 一并删除是安全的——其唯一用途是在途定稿写回前的代际比对（resetGen:493/615），
-    // 无 sid 即无在途定稿，下一段自然从 0 起算。
+    // 会话轮转下只增不消。此处按「segments 已无该 sid」判定孤立并回收。
+    //
+    // R2 验真轮（Important 回归修复）：判定必须同时排除 finalizing 在途定稿。
+    // finalize 入口同步摘段（:581-582）后，整个 senseP 窗口（≤~21s）内
+    // segments.has(sid) 恒为 false，而 finalizing 在 :654 同步登记、:641/647/750
+    // 清除——是精确的在途信号。若只判 segments，30s 一扫约 70% 概率落入窗口，
+    // resetGen.delete 使代际计数器可复用：进模式(gen=1)→首句定稿在途→sweep 删条目
+    // →barge-in（reset 后 gen 回到 1）→旧定稿写回守卫 1===1 通过(:626)→陈旧文本
+    // 写入新会话 epoch 0 缓存→下一句 final 缓存命中(:494)返回旧文本（autoSend
+    // 默认开，错文本可能直接发出）。修复前 gen 单调递增，此路径本不可能命中。
+    // finalized 一并删是安全的：定稿成功后的缓存只服务「客户端重试同一 final」
+    // 与「迟到 partial 不重建幽灵段」两个短窗，而重试路径改用全量载荷
+    // （asr.ts:686-687）会重建段并重新定稿，不会因缓存缺席而丢句。
     for (const sid of finalized.keys()) {
-      if (segments.has(sid)) continue
+      if (segments.has(sid) || finalizing.has(sid)) continue
       finalized.delete(sid)
       resetGen.delete(sid)
     }
-    // resetGen 自身也可能在 finalized 为空时残留（reset 递增代际后无新段）。
+    // resetGen 自身也可能在 finalized 为空时残留（reset 递增代际后无新段）——
+    // 同样的在途判定（在途定稿的代际计数器绝不可回收）。
     for (const sid of resetGen.keys()) {
-      if (segments.has(sid)) continue
+      if (segments.has(sid) || finalizing.has(sid)) continue
       resetGen.delete(sid)
     }
     // 检测 VAD 清扫：会话 90s 无检测活动即释放（reset/dispose 之外的兜底，

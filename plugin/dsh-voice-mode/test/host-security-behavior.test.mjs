@@ -366,7 +366,10 @@ await t('on 非布尔 → 400 invalid on（防误落退出分支）', async () =
 console.log('⑤ 会话层（未知会话 403）+ ⑥ 限流层（同会话 2 次/2s，第 3 次 429）')
 
 await t('未知会话 → 403（第 0 层：只接受真实存在的会话）', async () => {
-  const res = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: 'ghost-limiter', on: true }) })))
+  // 独立 sessionId（ghost-session）：不与其他用例共享限流桶——⑤⑥ 解耦，
+  // 重排/增删用例互不影响（R2 验真轮 Minor：旧实现与 ⑥ 共享 ghost-limiter 桶，
+  // ⑥ 隐式依赖 ⑤ 先消耗 1 次配额，删 ⑤ 会误导性红）。
+  const res = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: 'ghost-session', on: true }) })))
   assert.equal(res.statusCode, 403, `status=${res.statusCode}`)
 })
 
@@ -375,15 +378,23 @@ await t('限流阈锁：src/index.ts toggle 限流为 2 次/2000ms', () => {
   assert.ok(indexSrc.includes('limiter.hit(`toggle:${sessionId}`, 2, 2000)'), 'toggle 限流阈值不是 2 次/2s——429 行为与阈值锁需同步复核')
 })
 
-await t('同会话第 2 次仍放行（进会话层 403）、第 3 次 → 429', async () => {
-  const r2 = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: 'ghost-limiter', on: true }) })))
-  assert.equal(r2.statusCode, 403, `第 2 次应放过限流层落到会话层（status=${r2.statusCode}）`)
-  const r3 = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: 'ghost-limiter', on: true }) })))
+await t('限流行为（独立桶自建配额）：同会话第 1/2 次放行到会话层 403，第 3 次 → 429', async () => {
+  // 自建配额（ghost-rate 桶仅本用例使用）：#1 消耗 1/2 → 403 未知会话；#2 消耗 2/2 → 403；
+  // #3 桶满 → 429。三次请求在同一用例内连续完成，不依赖其他用例的消耗顺序。
+  // 时序依赖（无法避免，如实登记）：RateLimiter 用真实 Date.now() 滑动窗（2s）——
+  // 若机器在三次请求间卡顿 >2s，窗口过期会使 #3 落 403 误导性红；正常执行路径
+  // 三次请求间隔为毫秒级（假 req/res，无真实 IO）。卡顿误判时重跑即可。
+  const sid = 'ghost-rate'
+  const r1 = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: sid, on: true }) })))
+  assert.equal(r1.statusCode, 403, `第 1 次应放过限流层落到会话层（status=${r1.statusCode}）`)
+  const r2 = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: sid, on: true }) })))
+  assert.equal(r2.statusCode, 403, `第 2 次应仍放过限流层（status=${r2.statusCode}）`)
+  const r3 = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: sid, on: true }) })))
   assert.equal(r3.statusCode, 429, `第 3 次应被限流（status=${r3.statusCode}）`)
   assert.equal(bodyCode(r3), 'rate_limited')
 })
 
-await t('不同会话独立桶（ghost-other 不受 ghost-limiter 限流影响）', async () => {
+await t('不同会话独立桶（ghost-other 不受 ghost-rate 限流影响）', async () => {
   const res = await awaitRes(get('/voice-mode/toggle', makeReq({ body: JSON.stringify({ sessionId: 'ghost-other', on: true }) })))
   assert.equal(res.statusCode, 403, `独立桶应放行到会话层（status=${res.statusCode}）`)
 })

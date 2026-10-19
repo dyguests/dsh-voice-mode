@@ -5,7 +5,11 @@
  * 防的是同一类根因——**文案绕过词典 / 两份词典漂移**：
  *  1. 词典 zh/en 键一一对应、占位符一致、en 无中文泄漏、无空值；
  *  2. settings-form 的每个字段（Row name / 子控件 field）在 zh、en 都有 `${name}Label` 标题，且 en 不是中文/占位 stub；
- *  3. 代码里所有 `t('键')` / `tr('键')` 字面量都存在于词典（拼错键 = 用户看到键名）；
+ *  3. 代码里所有 `t('键')` / `tr('键')` / `tk('键')` 字面量都存在于词典（拼错键 = 用户看到键名；
+ *     tk 为 client.tsx:195 的同词典薄封装，setNotice 瞬态提示出口）；
+ *     **未来在新文件里用 tk()/t()/tr() 时，把该文件补进下方「词典键引用」用例的 files 数组**
+ *     （现覆盖 client.tsx / settings-form.tsx / voice-labels.ts / error-text.ts / i18n.ts；
+ *      注意 asr-host.ts 的 `t` 是本地路径拼接函数、非 i18n，刻意不入列）；
  *  4. host 错误码（errors.ts）闭合：每个码有词典键；index.ts / asr-host.ts 里出现的 code 字面量都在码表内；
  *  5. **UI 文件不得出现中文字面量**（AST 扫描，注释不算）——中文只允许出现在数据/开发者工具文件；
  *  6. 运行日志（console.*）必须英文（开发者录制工具 fixture-recorder 除外）。
@@ -96,14 +100,16 @@ t('所有 descXxx 引用都在词典（漏 = 行下显示键名）', () => {
   assert.deepEqual(refs.filter((k) => !(k in zh) || !(k in en)), [])
 })
 
-// ── 所有 t()/tr() 字面量键存在 ──────────────────────────────────────────────
+// ── 所有 t()/tr()/tk() 字面量键存在 ───────────────────────────────────────────
 console.log('词典键引用')
-t('client / settings-form / voice-labels / error-text 中 t()/tr() 的字面量键都存在', () => {
+t('client / settings-form / voice-labels / error-text / i18n 中 t()/tr()/tk() 的字面量键都存在', () => {
   const files = ['client.tsx', 'settings-form.tsx', 'voice-labels.ts', 'error-text.ts', 'i18n.ts']
   const bad = []
   for (const f of files) {
     const src = read(f)
-    for (const m of src.matchAll(/(?<![\w.])(?:t|tr)\(\s*['"]([a-zA-Z][a-zA-Z0-9]*)['"]/g)) {
+    // tk = client.tsx:195 的同词典薄封装（setNotice 瞬态提示出口）——旧正则只覆盖
+    // t/tr，tk('键') 拼错键时用户看到裸键名（R2 验真轮 Minor 补锁）。
+    for (const m of src.matchAll(/(?<![\w.])(?:t|tr|tk)\(\s*['"]([a-zA-Z][a-zA-Z0-9]*)['"]/g)) {
       if (!(m[1] in zh) || !(m[1] in en)) bad.push(`${f}:${m[1]}`)
     }
   }

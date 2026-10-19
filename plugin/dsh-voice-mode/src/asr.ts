@@ -433,7 +433,15 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         }
       }
       if (epoch !== segmentEpoch) return
-      if (!res.ok) return
+      if (!res.ok) {
+        // Minor-3（R2）：连败计数此前只覆盖首个 fetch 的网络 throw——202 重试超时
+        // （上方合成 503）、403 恢复重发失败（res 停在 403）、host 5xx 都经此静默
+        // return，不计连败 → 「识别通道持续断」的提示永不触发（字幕静默死亡无头故障）。
+        // 持久 202（模型仍在下载）不计：那是 setState('loading-model') 已告知的自愈态，
+        // 有独立 UI 信号，再提示属重复噪音。
+        if (res.status !== 202 && ++partialFailStreak >= 3) emit(noticeListeners, 'partialFail')
+        return
+      }
       const out = (await res.json()) as { text?: string; endpoint?: boolean; isSpeech?: boolean }
       if (epoch !== segmentEpoch) return
       // 唤醒词门：wake 待机态下 partial 只用于匹配，命中 → 转入聆听（**不丢段**）。
@@ -690,7 +698,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         const body = useFull ? (sliceChunks(recoverySegment, 0).buffer as ArrayBuffer) : (samples.buffer as ArrayBuffer)
         let res: Response
         try {
-          res = await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
+          res = await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:598-606）——原 10s 必触发一次空转重试
             method: 'POST',
             headers: { 'content-type': 'application/octet-stream' },
             body,
@@ -707,7 +715,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
             setTimeout(async () => {
               try {
                 resolve(
-                  await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
+                  await fetch(asrUrl(true, off, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:598-606）——原 10s 必触发一次空转重试
                     method: 'POST',
                     headers: { 'content-type': 'application/octet-stream' },
                     body,
@@ -731,7 +739,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
             // I2 修复：re-enter 已 asr.reset 清空 host 流，从 0 全量重发（恢复段引用），
             // 否则 host 只收到尾巴、定稿缺前半句（确定性丢首段）。
             try {
-              res = await fetch(asrUrl(true, 0, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
+              res = await fetch(asrUrl(true, 0, epochSnapshot), { signal: AbortSignal.timeout(25000), // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:598-606）——原 10s 必触发一次空转重试
                 method: 'POST',
                 headers: { 'content-type': 'application/octet-stream' },
                 body: sliceChunks(recoverySegment, 0).buffer as ArrayBuffer,
@@ -778,9 +786,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
           // 上方 isPlaying 守卫丢弃而不清段，speechActive 常驻，该段最终定稿时整段仍是
           // 「嗯」，不拦就会作为消息/草稿发出（恢复播放后 detect 通道还已被饿死）。
           if ((wasSalvaged || wasYielded) && matchBackchannel(finalText)) {
-            // I4：弃段时 emit 瞬态提示键 backchannelDropped。客户端侧「剥草稿尾 + 清 partial
-            // + 提示」消费属 client.tsx/strings.ts 待接线项——本引擎只负责 emit（当前客户端
-            // onNotice 透传 t(key)，未知键落 setNotice(undefined) 走兜底分支：不显示也不乱）。
+            // I4：弃段时 emit 瞬态提示键 backchannelDropped——客户端已完整消费
+            // （client.tsx onNotice 分支：剥草稿里的 live partial 尾 + 清 partial +
+            // bus.setNotice 提示；strings.ts 已配双语键「已忽略附和词，不发送」）。
             // notice 与 onError（硬失败、持续显示）区分：由客户端 5s 自动清除。
             emit(noticeListeners, 'backchannelDropped')
             // 终态与短噪声弃段对齐（审查 M4）：唤醒用户丢「嗯」后保持 listening（打断=已
@@ -1151,33 +1159,46 @@ const startRecorder = async (): Promise<void> => {
     // 优先 AudioWorklet（专用音频线程，摆脱 ScriptProcessor 主线程卡顿/glitch）；
     // 不支持或 addModule 失败时回退 ScriptProcessor（跨浏览器兜底，行为与旧版一致）。
     if (audioCtx.audioWorklet) {
+      // Important-3（R2）：节点先存局部、connect 成功后才赋模块级——catch 回退只断
+      // **本启动创建**的节点。此前 catch 断模块级 workletNode：A 的 addModule 慢失败
+      // 期间 B 已完整启动（workletNode=B 的节点）→ A 的 catch 断掉 B 的节点 → B 永久聋。
+      let myWorkletNode: AudioWorkletNode | null = null
       try {
         if (!workletBlobUrl) {
           workletBlobUrl = URL.createObjectURL(new Blob([__AUDIO_WORKLET__], { type: 'text/javascript' }))
         }
         await audioCtx.audioWorklet.addModule(workletBlobUrl)
         // I2：addModule await 后同样复检（Safari/慢宿主上 addModule 可达数百 ms，
-        // 期间 stop() 随时可能落入）。此时 workletNode 尚未创建，无节点需断开。
+        // 期间 stop() 随时可能落入）。此时本启动节点尚未创建，无节点需断开。
         if (stopRequested || mySeq !== startSeq) {
           await abandonStart(myStream, myCtx)
           return
         }
-        workletNode = new AudioWorkletNode(audioCtx, 'voice-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
-        workletNode.port.onmessage = (e: MessageEvent<Float32Array>) => {
+        myWorkletNode = new AudioWorkletNode(audioCtx, 'voice-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
+        myWorkletNode.port.onmessage = (e: MessageEvent<Float32Array>) => {
           handleAudio(e.data)
         }
-        source.connect(workletNode)
-        workletNode.connect(audioCtx.destination) // 保持图活跃；worklet 不写输出 = 静音，无反馈
+        source.connect(myWorkletNode)
+        myWorkletNode.connect(audioCtx.destination) // 保持图活跃；worklet 不写输出 = 静音，无反馈
+        workletNode = myWorkletNode // connect 成功后才赋模块级（此前失败也不留半装配节点）
         ctxRate = SAMPLE_RATE // worklet 已重采样到 16k，handleAudio 跳过重采样
         active = true
         return
       } catch {
         try {
-          workletNode?.disconnect()
+          myWorkletNode?.disconnect() // 只断本启动创建的节点（不动模块级——那可能是 B 的）
         } catch {
           // ignore
         }
-        workletNode = null
+        // Important-3（R2）：addModule **reject** 会跳过上方 await 后的复检——在回退
+        // ScriptProcessor 之前补同一复检。否则抢占/停止已发生（stop() 落入 addModule
+        // 窗口、ctx 已被 stopRecorder 关闭）时，A 仍会走回退路径置 active=true：
+        // 麦道常开 + 幽灵上行 + 新会话 B 被旧续体搅乱。（audioWorklet 缺失的分支无需
+        // 此复检：resume 后的复检到 active=true 之间没有 await 点。）
+        if (stopRequested || mySeq !== startSeq) {
+          await abandonStart(myStream, myCtx)
+          return
+        }
       }
     }
     processor = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1)
@@ -1278,6 +1299,12 @@ const startRecorder = async (): Promise<void> => {
       if (active) return
       stopRequested = false // Fix8：新一次启动清除取消标记
       startSeq++ // 防双路开麦：推进启动序号（startRecorder 入口捕获 mySeq，返回时按差序放弃旧启动）
+      // Important-2（R2）：捕获本次启动的世代——startRecorder 抛错时，若期间已发生过
+      // 新启动（stop→start 快速重进），不得把新会话的 'wake'/'listening' 踩成 'idle'
+      // （状态条误显退出但新会话在收音）。可达链：A 的 addModule 因 ctxA 被 stopRecorder
+      // 关闭而 reject → 回退路径在 null ctx 上抛 → 若无守卫，A 的 catch 踩 B 的状态。
+      // 与 stop() 的 myStopSeq 同构。
+      const myStartSeq = startSeq
       segmentEpoch++
       // Issue #15 批 7（审查 M3）：新一次启动重置连败计数（上一会话的失败不计入本次）。
       partialFailStreak = 0
@@ -1305,7 +1332,9 @@ const startRecorder = async (): Promise<void> => {
       try {
         await startRecorder()
       } catch (error) {
-        setState('idle')
+        // Important-2（R2）：仅当本次启动仍是最新世代才落 idle——新启动已接管时它自管
+        // 状态（否则旧启动的迟到抛错会把活跃会话踩成 idle）。
+        if (startSeq === myStartSeq) setState('idle')
         throw error
       }
     },

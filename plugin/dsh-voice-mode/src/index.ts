@@ -604,6 +604,12 @@ export function apply(ctx: Context, config: Config): void {
    * 首段（最左 = 原始客户端，后续每跳反代 append）；否则回退 remoteAddress。
    * 非回环来源一律不采信 XFF——远端客户端可任意伪造该头绕过限流。
    *
+   * 已知取舍（R2 验真轮补注）：回环上的**本地进程**仍可轮换伪造 XFF 换新桶绕过
+   * 限流。彻底防住需要「反代颁发的可信连接标识」（如反代注入的带密钥头），超出本
+   * 插件威胁模型——本地回环进程本就与插件同权限，可直连其它端口。现有兜底：
+   * RateLimiter.maxKeys=10000 在键满时 fail-closed 拒绝新键（security.ts:52-54），
+   * 伪造换桶最终会撞满键表而全体被拒，攻击者先伤己。
+   *
    * 与 denyNonLoopback/denyCrossOrigin 同为本文件内的守卫助手（安全原语在
    * security.ts），不新增对外导出。
    */
@@ -1078,8 +1084,11 @@ export function apply(ctx: Context, config: Config): void {
           // 「每消息一次」足够。M6：键从全局 'correct' 改为 per-client（同 I4 的
           // 反代取键）——全局键下任一人点满 10 次，其余人的纠错全部静默回退原文。
           // 语义分流（审查 M6 续）：enabled=false = 功能停用，是确定性的 403
-          // voice_disabled（客户端 errorText 据此给出「语音模式已关闭」），而不是
-          // 与「打太猛」混为一谈的 429。
+          // voice_disabled；打太猛才是 429 rate_limited。但两者对**用户可见行为**完全
+          // 相同——client.tsx:1697 是 `if (!r.ok) return text`，不读 code、不弹提示，
+          // 一律静默回退原文（纠错是纯附加层，不得阻断发送）。故 403/429 分流的价值在
+          // **服务端可观测性**（日志/诊断能区分「停用」与「限流」）；早年注释宣称
+          // 「客户端 errorText 给出语音模式已关闭」与实现不符，已更正。
           if (!config.enabled) {
             respondJson(res, 403, { code: 'voice_disabled', error: 'voice mode disabled', text: trimmed })
             return

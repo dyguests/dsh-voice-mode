@@ -622,7 +622,12 @@ const NEXT_ENTRY_FIELDS: { key: string; label: string; fmt?: (v: unknown) => str
   { key: 'shortcut', label: 'shortcutLabel', fmt: (v) => (v ? String(v) : tr('valueOff')) },
 ]
 
-/** 生效提示块：列出「已保存但未生效」的字段及其运行态当前值。 */
+/** 生效提示块：列出「下次进入语音模式才生效」的字段（tier④，NEXT_ENTRY_FIELDS）中
+ *  已存值与运行态当前值不一致的项——用户视角＝这几项改了但还没生效。
+ *  R2 M-4 登记（无订阅直读）：effective 取自 getRuntimeBoot() 的模块级镜像——客户端
+ *  fetchConfig 成功即刷新，但**镜像刷新不触发本卡片重渲染**；重渲染时（保存/切换字段等）
+ *  直读最新值，故展示值可能落后于「刚进入语音模式」那一瞬。宿主设置卡通常随导航卸载，
+ *  kept-alive 常驻场景无实证；真要覆盖需 runtime-boot 加订阅（跨文件，留待有证据再动）。 */
 function EffectivePending({ effective, value, ready }: { effective: Record<string, unknown> | null; value: Record<string, unknown>; ready?: boolean }): React.ReactElement | null {
   // ready 门控（审查 M-4）：HttpScope 初始快照 value={}，未就绪时全部字段都会误判 pending。
   if (!ready || !effective) return null

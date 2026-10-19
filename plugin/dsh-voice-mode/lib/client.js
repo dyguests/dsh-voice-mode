@@ -616,7 +616,10 @@ function createAsrEngine(config, sessionId) {
         }
       }
       if (epoch !== segmentEpoch) return;
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (res.status !== 202 && ++partialFailStreak >= 3) emit(noticeListeners, "partialFail");
+        return;
+      }
       const out = await res.json();
       if (epoch !== segmentEpoch) return;
       if (state === "wake" && wakeEnabled) {
@@ -785,7 +788,7 @@ function createAsrEngine(config, sessionId) {
         try {
           res = await fetch(asrUrl(true, off, epochSnapshot), {
             signal: AbortSignal.timeout(25e3),
-            // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
+            // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:598-606）——原 10s 必触发一次空转重试
             method: "POST",
             headers: { "content-type": "application/octet-stream" },
             body
@@ -802,7 +805,7 @@ function createAsrEngine(config, sessionId) {
                 resolve(
                   await fetch(asrUrl(true, off, epochSnapshot), {
                     signal: AbortSignal.timeout(25e3),
-                    // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
+                    // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:598-606）——原 10s 必触发一次空转重试
                     method: "POST",
                     headers: { "content-type": "application/octet-stream" },
                     body
@@ -824,7 +827,7 @@ function createAsrEngine(config, sessionId) {
             try {
               res = await fetch(asrUrl(true, 0, epochSnapshot), {
                 signal: AbortSignal.timeout(25e3),
-                // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:591-594）——原 10s 必触发一次空转重试
+                // Issue #15 批 4：对齐 host SenseVoice race 上限 20s（asr-host.ts:598-606）——原 10s 必触发一次空转重试
                 method: "POST",
                 headers: { "content-type": "application/octet-stream" },
                 body: sliceChunks(recoverySegment, 0).buffer
@@ -1092,6 +1095,7 @@ function createAsrEngine(config, sessionId) {
     ctxRate = audioCtx.sampleRate;
     const source = audioCtx.createMediaStreamSource(stream);
     if (audioCtx.audioWorklet) {
+      let myWorkletNode = null;
       try {
         if (!workletBlobUrl) {
           workletBlobUrl = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  // src/resample.ts\n  function resampleLinear(src, srcRate, dstRate) {\n    if (srcRate === dstRate) return src;\n    if (src.length === 0) return src;\n    const ratio = srcRate / dstRate;\n    const outLen = Math.max(1, Math.floor(src.length / ratio));\n    const out = new Float32Array(outLen);\n    for (let i = 0; i < outLen; i++) {\n      const pos = i * ratio;\n      const i0 = Math.floor(pos);\n      const i1 = Math.min(i0 + 1, src.length - 1);\n      const frac = pos - i0;\n      out[i] = src[i0] + (src[i1] - src[i0]) * frac;\n    }\n    return out;\n  }\n\n  // src/audio-worklet.ts\n  var TARGET_RATE = 16e3;\n  var CHUNK = 1024;\n  var RATIO = sampleRate / TARGET_RATE;\n  var NEED = Math.ceil(CHUNK * RATIO);\n  var VoiceCaptureProcessor = class extends AudioWorkletProcessor {\n    acc = new Float32Array(0);\n    accLen = 0;\n    process(inputs) {\n      const ch = inputs[0]?.[0];\n      if (ch && ch.length > 0) this.push(ch);\n      this.drain();\n      return true;\n    }\n    push(ch) {\n      if (this.accLen + ch.length > this.acc.length) {\n        let cap = this.acc.length > 0 ? this.acc.length : NEED * 2;\n        while (cap < this.accLen + ch.length) cap *= 2;\n        const next = new Float32Array(cap);\n        next.set(this.acc.subarray(0, this.accLen));\n        this.acc = next;\n      }\n      this.acc.set(ch, this.accLen);\n      this.accLen += ch.length;\n    }\n    drain() {\n      while (this.accLen >= NEED) {\n        const src = sampleRate === TARGET_RATE ? this.acc.subarray(0, CHUNK) : resampleLinear(this.acc.subarray(0, NEED), sampleRate, TARGET_RATE);\n        const chunk = new Float32Array(CHUNK);\n        chunk.set(src.length >= CHUNK ? src.subarray(0, CHUNK) : src);\n        this.port.postMessage(chunk, [chunk.buffer]);\n        this.acc.copyWithin(0, NEED, this.accLen);\n        this.accLen -= NEED;\n      }\n    }\n  };\n  registerProcessor("voice-capture", VoiceCaptureProcessor);\n})();\n'], { type: "text/javascript" }));
@@ -1101,21 +1105,25 @@ function createAsrEngine(config, sessionId) {
           await abandonStart(myStream, myCtx);
           return;
         }
-        workletNode = new AudioWorkletNode(audioCtx, "voice-capture", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
-        workletNode.port.onmessage = (e) => {
+        myWorkletNode = new AudioWorkletNode(audioCtx, "voice-capture", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        myWorkletNode.port.onmessage = (e) => {
           handleAudio(e.data);
         };
-        source.connect(workletNode);
-        workletNode.connect(audioCtx.destination);
+        source.connect(myWorkletNode);
+        myWorkletNode.connect(audioCtx.destination);
+        workletNode = myWorkletNode;
         ctxRate = SAMPLE_RATE2;
         active = true;
         return;
       } catch {
         try {
-          workletNode?.disconnect();
+          myWorkletNode?.disconnect();
         } catch {
         }
-        workletNode = null;
+        if (stopRequested || mySeq !== startSeq) {
+          await abandonStart(myStream, myCtx);
+          return;
+        }
       }
     }
     processor = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
@@ -1196,6 +1204,7 @@ function createAsrEngine(config, sessionId) {
       if (active) return;
       stopRequested = false;
       startSeq++;
+      const myStartSeq = startSeq;
       segmentEpoch++;
       partialFailStreak = 0;
       detectFailStreak = 0;
@@ -1218,7 +1227,7 @@ function createAsrEngine(config, sessionId) {
       try {
         await startRecorder();
       } catch (error) {
-        setState("idle");
+        if (startSeq === myStartSeq) setState("idle");
         throw error;
       }
     },
@@ -1574,7 +1583,6 @@ var zh = {
   buttonListening: "\u8046\u542C\u4E2D",
   holdToTalk: "\u6309\u4F4F\u8BF4\u8BDD",
   releaseToSend: "\u677E\u5F00\u53D1\u9001",
-  voiceDetected: "\u8BED\u97F3\u4E2D",
   entering: "\u8FDB\u5165\u4E2D\u2026",
   voiceBtn: "\u8BED\u97F3",
   ariaActive: "\u8BED\u97F3\u6A21\u5F0F\u8FDB\u884C\u4E2D",
@@ -1603,7 +1611,6 @@ var zh = {
   startFail: "\u8BED\u97F3\u6A21\u5F0F\u542F\u52A8\u5931\u8D25\uFF1A{err}",
   holdDots: "\u6309\u4F4F\u8BF4\u8BDD\u2026",
   exit: "\u9000\u51FA",
-  skip: "\u8DF3\u8FC7",
   configUnavailableNote: "\uFF08\u8BBE\u7F6E\u6587\u6863\u672A\u5C31\u7EEA\uFF0C\u9762\u677F\u5C31\u7EEA\u540E\u4F1A\u81EA\u52A8\u51FA\u73B0\uFF09\u3002",
   // settings-form
   previewNameFirst: "\u8BF7\u5148\u586B\u5199\u97F3\u8272\u540D\uFF08ShortName\uFF09",
@@ -1839,7 +1846,6 @@ var en = {
   buttonListening: "Listening",
   holdToTalk: "Hold to talk",
   releaseToSend: "Release to send",
-  voiceDetected: "Voice active",
   entering: "Entering\u2026",
   voiceBtn: "Voice",
   ariaActive: "Voice mode active",
@@ -1868,7 +1874,6 @@ var en = {
   startFail: "Voice mode failed to start: {err}",
   holdDots: "Hold to talk\u2026",
   exit: "Exit",
-  skip: "Skip",
   configUnavailableNote: " (settings document not ready; the panel will appear when it is).",
   previewNameFirst: "Enter a voice ShortName first",
   previewDisabled: "Voice mode disabled (plugin enabled=false); preview unavailable",
@@ -3404,7 +3409,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "d92f43b";
+var BUILD_TAG = "13b9252";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4013,6 +4018,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("asr-error", (e) => {
       try {
         const p = JSON.parse(e.data);
+        if (!activeSessionId) return;
         ui.error = t("modelDownloadFail").replace("{file}", p.file ?? "");
         ui.model = null;
         notify();
@@ -4185,6 +4191,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
         });
         const out = await res.json();
         activeSessionId = out.active === sessionId ? sessionId : null;
+        playingEndAt = 0;
         notify();
         if (!res.ok) return { ok: false, error: errorText(out, "enterFail") };
         if (out.active === sessionId) setLastVoiceSession(sessionId);
@@ -4461,7 +4468,7 @@ function MicButton({
         isSpeechTrueCount = 0;
         isSpeechFalseRun = 0;
         submitInFlightRef.current = false;
-        correctInFlightRef.current = false;
+        correctCycleRef.current++;
         breakRef.current = null;
         manualHoldRef.current = false;
         holdCtrlRef.current = false;
@@ -4487,7 +4494,8 @@ function MicButton({
     }
   };
   const correctDraft = async (text) => {
-    bus.setUi({ notice: t("correctFixing") });
+    const hint = t("correctFixing");
+    bus.setUi({ notice: hint });
     try {
       const r = await fetch(`${location.origin}${BASE_PATH2}/correct`, {
         method: "POST",
@@ -4496,20 +4504,19 @@ function MicButton({
         signal: AbortSignal.timeout(12e3)
         // 上限 12s——超时按原文发，不等纠错
       });
-      bus.setUi({ notice: null });
+      if (bus.ui.notice === hint) bus.setUi({ notice: null });
       if (!r.ok) return text;
       const out = await r.json();
       const corrected = typeof out.text === "string" ? out.text.trim() : "";
       return corrected || text;
     } catch (e) {
-      bus.setUi({ notice: null });
+      if (bus.ui.notice === hint) bus.setUi({ notice: null });
       if (e instanceof DOMException && e.name === "TimeoutError") bus.setNotice(t("correctAbandoned"));
       return text;
     }
   };
   const submitDraftNow = (expectedText) => {
     cancelPendingSubmit();
-    submitInFlightRef.current = true;
     const actions = actionsRef.current;
     const submitFn = actions?.submit;
     if (typeof submitFn !== "function") {
@@ -4522,6 +4529,7 @@ function MicButton({
       return;
     }
     const runSubmit = (submitText) => {
+      submitInFlightRef.current = true;
       const snapshot = submitText.trim() || draftSnapshot;
       let wroteBack = false;
       if (snapshot !== draftSnapshot && typeof actions?.setDraft === "function") {
@@ -4575,11 +4583,12 @@ function MicButton({
       submitViaQueue();
     };
     if (bootNow().llmCorrect === true && !draftSnapshot.startsWith("/")) {
-      correctInFlightRef.current = true;
+      const myCycle = ++correctCycleRef.current;
       void correctDraft(draftSnapshot).then((finalText) => {
-        const valid = correctInFlightRef.current && submitInFlightRef.current && draftRef.current.trim() === draftSnapshot && engineRef.current?.state !== "speech";
-        correctInFlightRef.current = false;
-        if (!valid) return;
+        if (correctCycleRef.current !== myCycle) return;
+        if (submitInFlightRef.current) return;
+        if (draftRef.current.trim() !== draftSnapshot) return;
+        if (engineRef.current?.state === "speech") return;
         runSubmit(finalText);
       });
       return;
@@ -4604,7 +4613,7 @@ function MicButton({
     cancelPendingSubmit();
     cancelAutoSend();
     submitInFlightRef.current = false;
-    correctInFlightRef.current = false;
+    correctCycleRef.current++;
     isSpeechTrueCount = 0;
     isSpeechFalseRun = 0;
     if (breakDotsTimerRef.current) {
@@ -4668,7 +4677,7 @@ function MicButton({
         bus.unduckAudio();
         cancelAutoSend();
         submitInFlightRef.current = false;
-        correctInFlightRef.current = false;
+        correctCycleRef.current++;
         bus.setBackchannelHold(0);
         if (runningRef.current && sidRef.current) {
           bus.cancelTurn(sidRef.current);
@@ -4840,6 +4849,7 @@ function MicButton({
         bus.setUi({ error: t(key) });
       });
       engine.onNotice((key) => {
+        if (engineRef.current !== engine) return;
         if (key === "backchannelDropped") {
           if (lastPartialRef.current) {
             const composed = composeDraft(draftRef.current, lastPartialRef.current, "");
@@ -4997,7 +5007,7 @@ function MicButton({
       cancelPendingSubmit();
       cancelAutoSend();
       submitInFlightRef.current = false;
-      correctInFlightRef.current = false;
+      correctCycleRef.current++;
       micReadyRef.current = false;
       isSpeechTrueCount = 0;
       isSpeechFalseRun = 0;
@@ -5173,7 +5183,7 @@ function MicButton({
   draftRef.current = liveDraft;
   const lastPartialRef = (0, import_react3.useRef)("");
   const submitInFlightRef = (0, import_react3.useRef)(false);
-  const correctInFlightRef = (0, import_react3.useRef)(false);
+  const correctCycleRef = (0, import_react3.useRef)(0);
   const livePhase = useInput ? useInput((s) => s?.phase ?? "") : "";
   const phaseRef = (0, import_react3.useRef)("");
   phaseRef.current = livePhase;

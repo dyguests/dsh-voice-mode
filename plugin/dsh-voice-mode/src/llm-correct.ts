@@ -46,10 +46,15 @@ export function correctionSystem(lang: 'zh' | 'en'): string {
 }
 
 /** 前言前缀形态（R1 I-3 护栏）：弱模型爱加「修正后：」「这是修正后的文本：」「Corrected:」
- *  等说明头。锚定行首、限长（防误伤正文里偶合的词）。命中即回退原文——纠正是纯附加层，
- *  零护栏时用户消息会被模型的发挥静默替换。 */
+ *  等说明头。锚定行首、动词后限长内必须出现冒号（防误伤正文里偶合的词）。
+ *  命中即回退原文——纠正是纯附加层，零护栏时用户消息会被模型的发挥静默替换。
+ *  R2 误伤面收窄（Minor-2）：① zh 动词表去掉「修改」——「修改：把接口改成异步」是真实
+ *  用户指令，命中=白丢一次纠错（方向安全但误伤）；保留 修正/纠正/更正/纠错 四个强信号
+ *  （「纠错后」无冒号仍不命中，历史测试口径不变）。② en 分支补冒号要求与 zh 对齐——
+ *  原版 "corrected" 无冒号也命中，面过宽。残余误伤（如「纠正一下：…」的指令形态）取舍：
+ *  宁可漏纠（发原文），不可换字。 */
 const CORRECTION_PREAMBLE_RE =
-  /^(?:以下是|这是)?(?:修正|纠正|更正|纠错|修改)[^。！？\n]{0,12}[：:]|^(?:here is (?:the )?)?(?:corrected|correction)\b/i
+  /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)[^。！？\n]{0,12}[：:]|^(?:here is (?:the )?)?(?:corrected|correction)\b[^.\n]{0,20}[：:]/i
 
 /**
  * 纠错一条文本。任何失败（无 ctx.get / 无 llm 服务 / 无默认模型 / stream 抛错 /
@@ -85,9 +90,15 @@ export async function correctText(
     const corrected = out.trim()
     // R1 I-3：模型输出护栏——零护栏时弱模型加前言/复述/作答，用户消息被静默替换。
     // 廉价启发式，命中一律回退原文（宁可不纠，也不能把用户的话换成模型的发挥）：
-    //   ① 超长（> max(64, 原文×3)）＝复述/作答形态（纠错不应让文本膨胀数倍）；
+    //   ① 超长（> max(3×原文, 原文+24)）＝复述/作答形态（纠错不应让文本膨胀数倍）。
+    //      R2 修正：原 max(64, 3L) 的 64 下限对短输入完全旁路（L=7 时允许 9.1 倍膨胀，
+    //      「现在几点」→「现在是下午三点。」这类简短作答可穿过）；改 max(3L, L+24) 后
+    //      短输入阈值随输入收紧（L=7→31，约 4.4 倍；L≥12 起 3L 主导，长输入行为不变）。
+    //      残留缺口（长度护栏原理性够不到）：与原文等长的简短「作答」仍可通过——
+    //      要拦它需字符重合度等相似度判据（有误伤合法重纠的风险，不进本廉价护栏）。
     //   ② 前言前缀（「修正后：」「Corrected:」等）＝带说明输出。
-    if (corrected.length > Math.max(64, trimmed.length * 3) || CORRECTION_PREAMBLE_RE.test(corrected)) return text
+    if (corrected.length > Math.max(trimmed.length * 3, trimmed.length + 24)) return text
+    if (CORRECTION_PREAMBLE_RE.test(corrected)) return text
     return corrected || text
   } catch {
     return text

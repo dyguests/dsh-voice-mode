@@ -139,6 +139,44 @@ t('strings（R1 M-2）：*Label 孪生 base 键零死键（批 C 双轨残留清
   }
 })
 
+t('strings（R1 M-2 补强，R2 Minor-1）：全量零引用死键扫描（动态消费键白名单从源码派生）', () => {
+  // 孪生扫描只覆盖「X + X+'Label'」形态；R2 发现孪生外的死键也能漏（voiceDetected/skip——
+  // client 改 buttonListening/skipReading 后 0 引用）。本扫描覆盖全词典：
+  // 键在 src/ 无 t()/tr()/tk() 字面量引用 = 死键（tk = t(key as TKey)，client.tsx:195）。
+  const zhBlock = stringsSrc.slice(stringsSrc.indexOf('export const zh = {'), stringsSrc.indexOf('} as const'))
+  const zhKeys = [...zhBlock.matchAll(/^ {2}([a-zA-Z][a-zA-Z0-9]*): '/gm)].map((m) => m[1])
+  const srcFiles = readdirSync(join(root, 'src'))
+    .filter((f) => /\.tsx?$/.test(f) && f !== 'strings.ts')
+    .map((f) => read(`src/${f}`))
+  const asrSrc = read('src/asr.ts')
+  const cliSrc = read('src/client.tsx')
+  const vlSrc = read('src/voice-labels.ts')
+  const errSrc = read('src/errors.ts')
+  // 动态消费白名单（从源码派生，防硬编码清单过期）：
+  //  ① *Label——settings-form Row 经 tr(`${name}Label`) 模板消费；
+  //  ② asr.ts 发射键（emitError/noticeListeners）——client 经 t(key as 'partialFail') 泛型消费；
+  //  ③ client.tsx 泛型转换字面量（as 'KEY'）与 TELEMETRY_VIEW 的 key: 'tel*'；
+  //  ④ voice-labels.ts / errors.ts 分派表里的键字面量（ACCENT_KEY/STYLE_KEY 值、
+  //     ERROR_I18N_KEY 值、三元分支）——经 t(MAP[...]) / t(ERROR_I18N_KEY[code]) 动态查表。
+  const dynamic = new Set([
+    ...zhKeys.filter((k) => /Label$/.test(k)),
+    ...[...asrSrc.matchAll(/emitError\('([a-zA-Z0-9]+)'\)/g)].map((m) => m[1]),
+    ...[...asrSrc.matchAll(/emit\(noticeListeners, '([a-zA-Z0-9]+)'\)/g)].map((m) => m[1]),
+    ...[...cliSrc.matchAll(/as '([a-zA-Z0-9]+)'/g)].map((m) => m[1]),
+    ...[...cliSrc.matchAll(/key: '([a-zA-Z0-9]+)'/g)].map((m) => m[1]),
+    ...[...vlSrc.matchAll(/'([a-zA-Z][a-zA-Z0-9]*)'/g)].map((m) => m[1]).filter((k) => zhKeys.includes(k)),
+    ...[...errSrc.matchAll(/'([a-zA-Z][a-zA-Z0-9]*)'/g)].map((m) => m[1]).filter((k) => zhKeys.includes(k)),
+  ])
+  // 主扫描：键作为字面量出现在某个 t()/tr()/tk() 调用的参数里（含三元分支形态
+  // tr(cond ? 'A' : 'B')——engineBadge* 即此形态，直接参数正则会漏）。
+  const dead = zhKeys.filter(
+    (k) => !dynamic.has(k) && !srcFiles.some((s) => new RegExp(`\\b(?:t|tr|tk)\\([^()]*(['"\`])${k}\\1`).test(s)),
+  )
+  assert.deepEqual(dead, [], `零引用死键：${dead.join(', ')}`)
+  // R2 点名的 2 个死键必须已删。
+  for (const k of ['voiceDetected', 'skip']) assert.ok(!zhKeys.includes(k), `${k} 死键未删`)
+})
+
 t('strings（R1 M-3/M-4/文案 8）：effectiveNote 补 Kokoro 即时档、cardDesc 补两项、尾句收窄', () => {
   const note = /settingsEffectiveNote: '([^']*)'/.exec(stringsSrc)[1]
   assert.ok(/即时[^；]*Kokoro 模型精度/.test(note), 'Kokoro 模型精度应归①即时档（applyVset 重建引擎，已缓存则即时）')

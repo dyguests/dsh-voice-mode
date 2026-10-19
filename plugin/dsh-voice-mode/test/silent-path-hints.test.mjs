@@ -66,7 +66,7 @@ t('asr.ts（审查 M3）：连败计数在段边界重置（clearWakeSegment/dis
 t('client：onNotice → bus.setNotice（5s 自动清除）', () => {
   const idx = clientSrc.indexOf('engine.onNotice(')
   assert.ok(idx >= 0, '缺 onNotice 处理')
-  const win = clientSrc.slice(idx, idx + 900)
+  const win = clientSrc.slice(idx, idx + 1100)
   assert.ok(win.includes('bus.setNotice('), 'onNotice 未走 setNotice')
   // bus.setNotice 实现：5s 清除 + 仅当 notice 仍是本次文案才清
   const sIdx = clientSrc.indexOf('setNotice(hint)')
@@ -79,7 +79,7 @@ t('client：onNotice → bus.setNotice（5s 自动清除）', () => {
 t('client（Issue #15 接口约定）：onNotice 特判 backchannelDropped——先剥 live 尾再提示', () => {
   const idx = clientSrc.indexOf('engine.onNotice(')
   assert.ok(idx >= 0, '缺 onNotice 处理')
-  const win = clientSrc.slice(idx, idx + 900)
+  const win = clientSrc.slice(idx, idx + 1100)
   const keyIdx = win.indexOf("key === 'backchannelDropped'")
   assert.ok(keyIdx >= 0, '缺 backchannelDropped 特判（asr 弃段键无客户端处理）')
   // 顺序锁：剥尾 → 清 partial → setNotice（清理必须先于提示，否则草稿残留 Ghost 文本）
@@ -166,6 +166,84 @@ t('client（UX Blocker）：状态条补 role/aria-live（可访问性）', () =
   const idx = clientSrc.indexOf('role="status"')
   assert.ok(idx >= 0, '状态条/提示面缺 role=status')
   assert.ok(clientSrc.slice(idx, idx + 200).includes('aria-live="polite"'), '缺 aria-live=polite')
+})
+
+// ---- Issue #15 R2 验真轮：纠错周期令牌 / 在途置位点后移 / Minor 收口 ----
+
+t('client（R2 I-1）：纠错周期令牌——旧周期 then 失配即弃，不清新周期标记', () => {
+  // 单布尔 correctInFlightRef 必须已退役（它会被旧周期 then 无条件清 false，
+  // 误清新周期 → 新文本静默漏发：留草稿无提示 + submitInFlightRef 残留 true）。
+  // 按代码用法形态断言（.current 读写/声明），注释中的历史名词不误捕。
+  assert.ok(!clientSrc.includes('correctInFlightRef.current'), 'correctInFlightRef 单布尔未退役——跨周期串话复发')
+  assert.ok(!clientSrc.includes('const correctInFlightRef = useRef'), 'correctInFlightRef 声明未删')
+  assert.ok(clientSrc.includes('const correctCycleRef = useRef(0)'), '缺周期令牌 ref')
+  // 锚点取纠错分支条件（令牌取在 .then 之前，从 .then 正向外捞会漏）
+  const branchIdx = clientSrc.indexOf("bootNow().llmCorrect === true")
+  assert.ok(branchIdx >= 0, '缺纠错分支条件')
+  const win = clientSrc.slice(branchIdx, branchIdx + 1700)
+  assert.ok(win.includes('const myCycle = ++correctCycleRef.current'), '纠错分支未取周期令牌（myCycle）')
+  // 失配早退必须在任何 valid 计算/runSubmit 之前（迟到旧周期直接弃）
+  const mismatch = win.indexOf('correctCycleRef.current !== myCycle')
+  const run = win.indexOf('runSubmit(finalText)')
+  assert.ok(mismatch > 0 && mismatch < run, '令牌失配早退未置于 runSubmit 之前——旧周期会创新周期')
+  // 废周期路径一律 ++（置 false 会误清新周期）
+  for (const site of ['const hardBreak = async', 'const exitMode = async', 'if (bus.activeSessionId !== sid)', 'mountedRef.current = false']) {
+    const s = clientSrc.indexOf(site)
+    assert.ok(s >= 0, `缺废周期路径锚点：${site}`)
+    assert.ok(clientSrc.slice(s, s + 2600).includes('correctCycleRef.current++'), `${site} 未用 ++ 废纠错周期`)
+  }
+})
+
+t('client（R2 I-2）：纠错 RTT 内 partial 回填不冻结（在途置位点后移至 runSubmit）', () => {
+  const submitIdx = clientSrc.indexOf('const submitDraftNow =')
+  const runIdx = clientSrc.indexOf('const runSubmit =', submitIdx)
+  assert.ok(runIdx > submitIdx, '缺 runSubmit 定义')
+  // 入口→runSubmit 之间不得置位（置位则纠错 RTT 内 onPartial 门恒真 → 回填冻结）
+  assert.ok(
+    !clientSrc.slice(submitIdx, runIdx).includes('submitInFlightRef.current = true'),
+    'submitDraftNow 入口仍置位——纠错 RTT（最长 12s）内 partial 回填被冻结至定稿',
+  )
+  // 置位必须落在 runSubmit 体内（「提交后宿主清草稿窗」语义不变）
+  assert.ok(
+    clientSrc.slice(runIdx, runIdx + 400).includes('submitInFlightRef.current = true'),
+    'runSubmit 内未置位——提交后宿主清草稿窗失去回填抑制（比原窗口小）',
+  )
+  // onPartial 回填门仍读 submitInFlightRef（提交窗口语义不变，只是窗口起点后移）
+  const pIdx = clientSrc.indexOf('engine.onPartial(')
+  assert.ok(clientSrc.slice(pIdx, pIdx + 2400).includes('submitInFlightRef.current'), 'onPartial 缺在途门')
+})
+
+t('client（R2 M-b）：onNotice 与 onPartial 同款实例比对（迟到 notice 不剥尾/不提示）', () => {
+  const idx = clientSrc.indexOf('engine.onNotice(')
+  assert.ok(idx >= 0, '缺 onNotice')
+  const win = clientSrc.slice(idx, idx + 1100)
+  assert.ok(win.includes('engineRef.current !== engine'), 'onNotice 缺实例比对——退出后迟到的 backchannelDropped 会剥新会话草稿的尾')
+  // 实例比对必须在特判/提示之前
+  const check = win.indexOf('engineRef.current !== engine')
+  const special = win.indexOf("key === 'backchannelDropped'")
+  assert.ok(check > 0 && check < special, '实例比对未置于特判之前')
+})
+
+t('client（R2 M-c）：bus.enter 重置 playingEndAt（快速重入立即开口不丢首 400ms）', () => {
+  const idx = clientSrc.indexOf('async enter(sessionId) {')
+  assert.ok(idx >= 0, '缺 bus.enter')
+  const win = clientSrc.slice(idx, idx + 1100)
+  assert.ok(win.includes('playingEndAt = 0'), 'enter 未重置尾音宽限起点——上会话自然停播 ≤400ms 内重入并开口会丢首 400ms')
+})
+
+t('client（R2 M-e）：asr-error 补会话门控（全局广播不污染非激活态常驻提示面）', () => {
+  const idx = clientSrc.indexOf("source.addEventListener('asr-error'")
+  assert.ok(idx >= 0, '缺 asr-error 监听')
+  const win = clientSrc.slice(idx, idx + 700)
+  assert.ok(win.includes('if (!activeSessionId) return'), 'asr-error 无会话门控——别的 tab/后台预热的失败会写进本 tab mic-hint 红字')
+})
+
+t('client（R2 M-d）：correctDraft 的 notice 清除按文案比对（不冲掉 RTT 内其它 notice）', () => {
+  const idx = clientSrc.indexOf('const correctDraft =')
+  assert.ok(idx >= 0, '缺 correctDraft')
+  const win = clientSrc.slice(idx, idx + 1100)
+  assert.ok(win.includes('const hint = t(\'correctFixing\')'), 'correctDraft 未固化本次文案')
+  assert.ok(win.includes("if (bus.ui.notice === hint) bus.setUi({ notice: null })"), 'notice 清除未按文案比对——无条件 null 会冲掉 partialFail/echoRejectHint 等并发提示')
 })
 
 console.log(`\nsilent-path-hints：${passed} 项通过`)

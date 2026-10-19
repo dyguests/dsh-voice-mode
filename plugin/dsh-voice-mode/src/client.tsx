@@ -876,10 +876,12 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     setFrozen: (frozen) => aec.setFrozen(frozen),
   }
 
-  // playing 降沿记录 + ui 合并 + notify——播放引擎与状态条/手势共用的唯一写入入口。
+  // playing 降沿记录 + ui 合并 + notify——播放引擎与状态条/手势共用的写入入口，
+  // 是 **playing 的唯一写入入口**（bus 内另有直接 ui. 写——pushBotLevels 的
+  // botLevels、noticeTimer 链等——但均不碰 playing，降沿语义不会被旁路）。
   // Blocker 修复（Issue #15）：此前 createAudioEngine 首参传的是裸闭包
   // （Object.assign+notify，不记降沿）→ playingEndAt 恒 0 → playingTailUntil()
-  // 恒 false → ECHO_TAIL_MS 400ms 回声尾音宽限（:1861 isPlaying 门）从未生效，
+  // 恒 false → ECHO_TAIL_MS 400ms 回声尾音宽限（isPlaying 门）从未生效，
   // 句播完瞬间的残响漏入 ASR。提取为命名函数后两方同源，降沿只此一处记录。
   const setUi = (patch: Partial<VoiceUiState>): void => {
     // 记录 playing 降沿（true→false），供 isPlaying 回声尾音宽限判定。
@@ -1031,6 +1033,11 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     source.addEventListener('asr-error', (e: MessageEvent<string>) => {
       try {
         const p = JSON.parse(e.data) as { file?: string }
+        // M-e：会话门控——asr-error 是 host 全局广播（载荷只有 file/reason，无
+        // sessionId；别的 tab 的会话/后台预热失败也会到达）。非激活态写入会出现在
+        // mic 旁常驻红字（B2 提示面）上，污染本 tab 的提示面——仅本 tab 有活跃
+        // 语音会话时接管（此时状态条/提示面确属本 tab 的语音模式）。
+        if (!activeSessionId) return
         ui.error = t('modelDownloadFail').replace('{file}', p.file ?? '')
         ui.model = null
         notify()
@@ -1250,6 +1257,10 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         // B1 修复：仅当本 tab 真正成为活跃会话才认领 owner；否则保持非 owner（null），
         // 防止多 tab 下「out.active 是别的会话」时本 tab 误收养别人会话 → 重复播放。
         activeSessionId = out.active === sessionId ? sessionId : null
+        // M-c：重置回声尾音宽限起点——上会话自然停播 ≤400ms 内快速重入并立即开口时，
+        // 残留 playingEndAt 会让 isPlaying 误判「朗读中」→ 丢首 400ms 语音（skip 路径
+        // doSkipAudio 已置 0，自然停播路径没有，补在进入口）。
+        playingEndAt = 0
         notify()
         if (!res.ok) return { ok: false, error: errorText(out, 'enterFail') }
         // I5：记住本次语音会话（autoResume 切回时自动恢复）。
@@ -1635,7 +1646,7 @@ export function MicButton({
         isSpeechTrueCount = 0 // 打断根治：任何 host 驱动退出（状态条退出/被抢占/跨 tab 让出）都复位计数
         isSpeechFalseRun = 0 // M5：同复位迟滞「假」运行计数（模块级，跨会话不重置会误衰减）
         submitInFlightRef.current = false // 批 3 复审 Minor-1：抢占路径直接退出不经 exitMode，须同口径清在途标记（防陈旧 true 跨 enterMode 存活致回填静默失效）
-        correctInFlightRef.current = false // Issue #15 UX-I2：抢占同步废纠错周期（防幽灵提交）
+        correctCycleRef.current++ // R2 I-1：抢占废当前纠错周期（旧周期 then 令牌失配即弃）
         breakRef.current = null
         manualHoldRef.current = false
         holdCtrlRef.current = false // 复位 Ctrl 按住态（防抢占后残留致下次手势错乱）
@@ -1671,8 +1682,10 @@ export function MicButton({
   const correctDraft = async (text: string): Promise<string> => {
     // Issue #15 UX：纠错 RTT 最坏 12s——期间给「纠错中…」提示（纠正是纯附加层，
     // 但静默等待 12s 会被当成卡死）。不走 setNotice 的 5s 自清（纠错可超过 5s），
-    // 由本函数在返回前清理。
-    bus.setUi({ notice: t('correctFixing') })
+    // 由本函数在返回前按文案比对清除（M-d：RTT 内用户可能收到别的 notice——
+    // partialFail/echoRejectHint 等——无条件 notice:null 会把它们冲掉）。
+    const hint = t('correctFixing')
+    bus.setUi({ notice: hint })
     try {
       const r = await fetch(`${location.origin}${BASE_PATH}/correct`, {
         method: 'POST',
@@ -1680,13 +1693,13 @@ export function MicButton({
         body: JSON.stringify({ text, lang: activeLocale() === 'en' ? 'en' : 'zh' }),
         signal: AbortSignal.timeout(12000), // 上限 12s——超时按原文发，不等纠错
       })
-      bus.setUi({ notice: null })
+      if (bus.ui.notice === hint) bus.setUi({ notice: null })
       if (!r.ok) return text
       const out = (await r.json()) as { text?: unknown }
       const corrected = typeof out.text === 'string' ? out.text.trim() : ''
       return corrected || text
     } catch (e) {
-      bus.setUi({ notice: null })
+      if (bus.ui.notice === hint) bus.setUi({ notice: null })
       // 超时放弃：提示一次（其余失败保持静默回退——纠错是纯附加层，不阻断发送）。
       if (e instanceof DOMException && e.name === 'TimeoutError') bus.setNotice(t('correctAbandoned'))
       return text
@@ -1698,7 +1711,9 @@ export function MicButton({
    *  re-render 更新（读旧值会误判空草稿而漏发），故由调用方显式传入；定时器路径省略则读 draftRef。 */
   const submitDraftNow = (expectedText?: string): void => {
     cancelPendingSubmit()
-    submitInFlightRef.current = true // Issue #15 批 3（审查 I-2）：提交在途窗口起
+    // Issue #15 R2 Important-2：在途标记**不在此处置位**——起点是「提交真正发出」
+    // （runSubmit 内）而非入口。入口置位会让纠错 RTT（最长 12s）内的 partial
+    // 回填被冻结（onPartial 门读它），草稿侧 live 预览停摆至定稿。
     const actions = actionsRef.current
     const submitFn = actions?.submit
     if (typeof submitFn !== 'function') {
@@ -1712,6 +1727,10 @@ export function MicButton({
     }
     /** 实际提交文本（纠错后可能与 draftSnapshot 不同；队列 submit 发送宿主草稿，故先写回）。 */
     const runSubmit = (submitText: string): void => {
+      // Issue #15 批 3（审查 I-2）：提交在途窗口起——「宿主清草稿/re-render」窗的
+      // 起点是提交发出（本行），不是 submitDraftNow 入口（R2 Important-2 后移）；
+      // 终点仍是宿主清草稿落地（onPartial 观察到 draftRef 空即清）。语义等价。
+      submitInFlightRef.current = true
       const snapshot = submitText.trim() || draftSnapshot
       // 纠错文本写回草稿（队列 submit 提交的是宿主草稿；steer 直发用 snapshot）。
       // wroteBack 记录写回是否真落地（审查 I2）：老宿主/收窄槽位下 setDraft 缺失是静默
@@ -1781,22 +1800,26 @@ export function MicButton({
       submitViaQueue()
     }
     // Issue #15 批 4：LLM 纠错预步（可选默认关）——发送前整条一次；命令草稿不纠错
-    // （'/' 开头走宿主 adjudication）；纠错 RTT 期间在途标记已置（partial 不回写）。
+    // （'/' 开头走宿主 adjudication）。R2 Important-2 起纠错 RTT 期间在途标记不置位
+    // （partial 正常回填），放弃条件由周期令牌 + 草稿/语音态复核承担。
     if (bootNow().llmCorrect === true && !draftSnapshot.startsWith('/')) {
-      correctInFlightRef.current = true
+      // Issue #15 R2 Important-1：周期令牌。RTT（最坏 12s）内用户可再次开口 →
+      // 新段定稿 → 新 submitDraftNow；旧周期 .then 若持「单布尔」会无条件
+      // clear false，把新周期标记误清 → 新文本静默漏发（留草稿无提示）。
+      // 计数器只增不减：旧周期 then 令牌失配即弃，不碰任何共享状态。
+      const myCycle = ++correctCycleRef.current
       void correctDraft(draftSnapshot).then((finalText) => {
-        // 有效性复核（审查 I1 + Issue #15 UX-I2）：纠错 RTT（最坏 12s）内用户退出/
-        // 打字/抢占/改写草稿/重新开口 → 放弃本次发送（文字留草稿可手动发）——
-        // 不幽灵提交、不用旧 snapshot 覆盖用户文本。correctInFlightRef 独立于
-        // submitInFlightRef：hardBreak（I1）/退出/新一轮提交会清它；speech 态 =
-        // 用户打断后又在说话，这句留给用户说完一起发。
-        const valid =
-          correctInFlightRef.current &&
-          submitInFlightRef.current &&
-          draftRef.current.trim() === draftSnapshot &&
-          engineRef.current?.state !== 'speech'
-        correctInFlightRef.current = false
-        if (!valid) return
+        // 旧周期迟到（新提交/退出/打断已 ++令牌）→ 直接弃，不清共享状态。
+        if (correctCycleRef.current !== myCycle) return
+        // R2 Important-2：在途标记置位点已后移至 runSubmit——RTT 内若别的提交
+        // 已真正发出（submitInFlightRef=true），本周期弃（防双发）。
+        if (submitInFlightRef.current) return
+        // 有效性复核（审查 I1 + Issue #15 UX-I2）：纠错 RTT 内用户改写草稿/重新
+        // 开口 → 放弃本次发送（文字留草稿可手动发）——不幽灵提交、不用旧
+        // snapshot 覆盖用户文本。退出/打字/抢占/hardBreak 经令牌++废周期；
+        // speech 态 = 用户打断后又在说话，这句留给用户说完一起发。
+        if (draftRef.current.trim() !== draftSnapshot) return
+        if (engineRef.current?.state === 'speech') return
         runSubmit(finalText)
       })
       return
@@ -1827,7 +1850,7 @@ export function MicButton({
     cancelPendingSubmit()
     cancelAutoSend()
     submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：退出清在途标记
-    correctInFlightRef.current = false // Issue #15 UX-I2：退出同步废纠错周期（防幽灵提交）
+    correctCycleRef.current++ // R2 I-1：退出废当前纠错周期
     isSpeechTrueCount = 0 // 打断根治：退出重置 isSpeech 计数（防残留）
     isSpeechFalseRun = 0 // M5：同步重置迟滞「假」运行计数（模块级，不重置会跨会话误衰减）
     if (breakDotsTimerRef.current) {
@@ -1909,11 +1932,11 @@ export function MicButton({
         // 立即停播 + 恢复音量：不等待慢操作（discardSegment 最多 5s、cancel 最多 3s）。
         bus.skipAudio()
         bus.unduckAudio()
-        // Issue #15 I1：打断即取消 pending 自动发送 + 清提交/纠错在途标记——否则纠错
+        // Issue #15 I1：打断即取消 pending 自动发送 + 清提交在途标记——否则纠错
         // RTT（最坏 12s）内打断后旧文本被发出（幽灵提交，复核三条件全过）。文字留草稿。
         cancelAutoSend()
         submitInFlightRef.current = false
-        correctInFlightRef.current = false
+        correctCycleRef.current++ // R2 I-1：打断废当前纠错周期（旧周期 then 令牌失配即弃）
         // 批 5：真打断优先——清 backchannel 让位窗口，避免 1.5s 丢帧阻塞用户新回合播放。
         bus.setBackchannelHold(0)
         // 立即取消当前回合（不等 cancelP/discardSegment）：否则其 3~5s 窗口内用户开口的
@@ -2129,9 +2152,12 @@ export function MicButton({
         bus.setUi({ error: t(key as 'recognitionFail') })
       })
       engine.onNotice((key) => {
+        // M-b：与 onPartial（M6）同款实例比对——退出后迟到的 notice（含
+        // backchannelDropped）不消费：剥 live 尾/提示都属于已结束的会话。
+        if (engineRef.current !== engine) return
         // Issue #15 接口约定（asr 侧 backchannel 弃段时 emit 'backchannelDropped'）：
         // 先剥掉草稿里的 live partial 尾——该段被弃，定稿永不到来，partial 尾若残留
-        // 会被下次 composeDraft 当已定稿内容拼进新草稿（ Ghost 文本）。
+        // 会被下次 composeDraft 当已定稿内容拼进新草稿（Ghost 文本）。
         if (key === 'backchannelDropped') {
           if (lastPartialRef.current) {
             const composed = composeDraft(draftRef.current, lastPartialRef.current, '')
@@ -2355,7 +2381,7 @@ export function MicButton({
       cancelPendingSubmit()
       cancelAutoSend()
       submitInFlightRef.current = false // 批 4 复审 Minor-1a：卸载同样清在途标记（纠错 RTT 内切会话/导航 → promise resolve 后幽灵提交）
-      correctInFlightRef.current = false // Issue #15 UX-I2：卸载同步废纠错周期（同 Minor-1a 口径）
+      correctCycleRef.current++ // R2 I-1：卸载废当前纠错周期（同 Minor-1a 口径）
       micReadyRef.current = false // M11：卸载同步废采音标记
       isSpeechTrueCount = 0 // 打断根治：卸载重置 isSpeech 计数（防残留）
       isSpeechFalseRun = 0 // M5：卸载同重置迟滞「假」运行计数（模块级，跨会话不重置会误衰减）
@@ -2588,10 +2614,11 @@ export function MicButton({
   // Issue #15 批 3（审查 I-2）：提交在途标记——submitDraftNow 后宿主清草稿/re-render
   // 的窗口内，onPartial 不回写草稿（防已提交文本被写回且 steer 守卫跳过清草稿）。
   const submitInFlightRef = useRef(false)
-  // Issue #15 UX-I2：纠错 RTT 的独立在途标记——与 submitInFlightRef 分工：后者兼管
-  // onPartial 回写门（提交窗口语义），前者只标「本次纠错周期是否仍然有效」
-  // （hardBreak/退出/新一轮提交会使其失效 → 纠错 then 放弃发送，文字留草稿）。
-  const correctInFlightRef = useRef(false)
+  // Issue #15 R2 Important-1：纠错周期令牌（计数器，只增不减）。submitDraftNow
+  // 纠错分支 ++取令牌；hardBreak/退出/抢占/卸载 ++废当前周期（旧周期 then 令牌
+  // 失配即弃）。替代原单布尔 correctInFlightRef——旧布尔会被旧周期 then 无条件
+  // 清 false，误清新周期标记导致新文本静默漏发。
+  const correctCycleRef = useRef(0)
   const livePhase = useInput ? useInput((s: any) => (s?.phase as string) ?? '') : ''
   const phaseRef = useRef('')
   phaseRef.current = livePhase

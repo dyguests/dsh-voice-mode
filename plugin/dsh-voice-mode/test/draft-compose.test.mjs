@@ -108,9 +108,18 @@ t('wiring（复审 OQ-2）：空 partial 不剥 live 尾（防输入框闪烁）
   assert.ok(guardIdx < win.indexOf('composeDraft('), '空 partial 早退必须在 composeDraft 之前')
 })
 
-t('wiring（审查 I-2）：submitDraftNow 置在途标记 + onSegment/exitMode 清标记', () => {
+t('wiring（审查 I-2 + R2 I-2）：在途标记置位点在 runSubmit（提交发出时），不在 submitDraftNow 入口', () => {
   const submitIdx = clientSrc.indexOf('const submitDraftNow =')
-  assert.ok(clientSrc.slice(submitIdx, submitIdx + 300).includes('submitInFlightRef.current = true'), 'submitDraftNow 未置在途标记')
+  const runIdx = clientSrc.indexOf('const runSubmit =', submitIdx)
+  assert.ok(runIdx > submitIdx, '缺 runSubmit 定义')
+  // R2 Important-2：入口置位会让纠错 RTT（最长 12s）内 onPartial 回填冻结——
+  // 入口到 runSubmit 之间不得出现置位；置位必须落在 runSubmit 体内（提交发出点）。
+  const entry = clientSrc.slice(submitIdx, runIdx)
+  assert.ok(!entry.includes('submitInFlightRef.current = true'), 'submitDraftNow 入口仍置位在途标记——纠错 RTT 内 partial 回填被冻结')
+  assert.ok(
+    clientSrc.slice(runIdx, runIdx + 400).includes('submitInFlightRef.current = true'),
+    'runSubmit 起始未置位——「提交后宿主清草稿窗」失去回填抑制',
+  )
   const segIdx = clientSrc.indexOf('engine.onSegment(')
   assert.ok(clientSrc.slice(segIdx, segIdx + 600).includes('submitInFlightRef.current = false'), 'onSegment 未清在途标记（新段=新周期）')
   const exitIdx = clientSrc.indexOf('const exitMode =')

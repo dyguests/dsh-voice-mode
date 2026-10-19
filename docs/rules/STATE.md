@@ -497,4 +497,30 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 7. **批 6 已闭环** `bf09967`+`86d0566`+`3bb0519`（四档生效文案+当前生效值提示（runtime-boot 镜像源，审查 I-1 后修）+静默路径提示/SSE 断连/诊断复制（批 7）；两路审查 fail 项全修——批 6 I-1 镜像口径/I-2 补字段、批 7 B1 补提测试文件/I1 mtime/I2 锁紧/I3 计划收窄登记）。
 8. **批 8 已入库**：0.2.1-rc.2 runtime 冒烟全量通过（含设置卡片 16 断言）；0.2.1-alpha.5 设置卡片探针稳定失败 3/3 但经发布包 0.7.25 A/B 实证非插件回归（compat-contract §20）；桌面 Electron 冒烟无桌面环境未跑（用户侧 Windows 先例，已登记真机项）。
 9. **收口完成**：CHANGELOG [Unreleased] Issue #15 条目、CONTEXT.md 设置语义刷新、`docs/issue-15-reply.md` 回复稿（待用户直发——注意本机 GitHub token 是 fine-grained PAT 无跨仓库 discussions:write 权限，需用户网页端发或提供 classic token，同 #8250 排查结论）。
-10. **待用户拍板**：发版（建议 patch 0.7.26）；issue 回帖；桌面冒烟补跑；alpha.5 探针复跑。npm test 583 项全绿（48 个测试文件；口径 = 各文件「N 项通过」之和 = `npm test 2>&1 | grep -c '✓'` 行数 = 583，两种求和法一致，2026-10-19 集成轮实测）。计数沿革：R1 docs 审查时为 41 文件 / 518 项（22:36 实测）；R1 测试审查 B1 发现 `steer-submit` 9 处 + `llm-correct` 10 处漏 await 曾使这两个文件 summary 在 19 个用例执行完前提前打印、自报少 19（修复后两口径一致）；集成轮 fix-test 新增 7 个登记文件 + 31 项行为测试 → 48 文件 / 583 项。
+10. **待用户拍板**：发版（建议 patch 0.7.26）；issue 回帖；桌面冒烟补跑；alpha.5 探针复跑。npm test 583 项全绿（48 个测试文件；口径 = 各文件「N 项通过」之和 = `npm test 2>&1 | grep -c '✓'` 行数 = 583，两种求和法一致，2026-10-19 集成轮实测）。计数沿革：R1 docs 审查时为 41 文件 / 518 项（22:36 实测）；R1 测试审查 B1 发现 `steer-submit` 9 处 + `llm-correct` 10 处漏 await 曾使这两个文件 summary 在 19 个用例执行完前提前打印、自报少 19（修复后两口径一致）；集成轮 fix-test 新增 7 个登记文件 + 31 项**行为级**测试 → 48 文件 / 583 项（两个口径勿混用：31 项为行为级；48 文件/583 项为全套件计数，另含合同级/静态守卫类用例，如 `host-fixes.test.mjs` 为合同级非行为级）。
+
+---
+
+## Issue #15 R2 全量深化轮（2026-10-19 夜 ~ 10-20 凌晨；多代理协同模式）
+
+**模式变更（用户指令）**：全代码库多代理协同、逐行细审、loop「发现→梳理→确认方案→执行→复审回归」到连续 2 轮零问题；主会话仅项目管理（任务板/协调/终审/提交推送），实现交由 teammate 按不相交 write scope 执行；可 commit+push，**不发版**。
+
+**R1 发现轮**（7 个只读代理并行：asr.ts / client.tsx / host 侧 / 新模块+i18n / docs 事实核查 / test 全套 / UX 第一性原理）→ 汇总去重后创建 R2 修复任务板。
+**R2 修复轮**（6 个 teammate：fix-asr / fix-client / fix-host / fix-modules / fix-docs / fix-test，write scope 不相交）+ 3 轮收尾派单（backchannelDropped 消费接线、stopRecorder 竞态、缺失 strings 键、descBargeIn 披露、行为测试补齐）。
+**R2 集成轮**：fix-test 补 31 项行为测试（fail-streak-notice / steer-submit-behavior / partial-gating / host-security-behavior）+ 登记 7 个新测试文件；fix-docs 终态 sync（计数 583/48、27 处行号、93 处 sed 自检）。
+**R2 入库并 push**：`6995ae7`（73 文件 +3952/-837；78200ec..6995ae7 已推 origin/main）。
+
+**R2 修复的 5 个 Blocker**（均经独立审查 fail→修复→验真）：ECHO_TAIL 400ms 回声尾音宽限自 6b1ea37 起从未生效（createAudioEngine 收裸闭包不记 playing 降沿）；错误提示面与激活态耦合（micDenied/429/空闲退出/autoResume 五条路径永不可见）；wake 门被 host 202 击穿（唤醒词泄漏进消息，issue #10 症状回归）；tts-queue setEngine 不升 epoch（引擎热切换后前 N 句静默丢弃+孤儿泵双轨）；README 设置表漏 2 项与回复稿直接矛盾。
+
+**R2 验真轮**（5 个只读代理：修复验真+回归查找）→ **不干净：6 个新 Important**，其中 2 个是 R2 修复自身引入的回归：
+1. sweep 孤立 sid 扫描漏判 finalizing 在途（asr-host.ts）→ resetGen 可复用 → 陈旧定稿投毒新会话缓存（可构造：定稿在途+30s  sweep+barge-in）；
+2. correctInFlightRef 单布尔跨周期串话（client.tsx）→ 旧纠错周期 .then 清新周期标记 → 新文本静默漏发；
+3. llm-correct 短输入长度护栏失效（64 下限旁路 3x 比率）；
+4. lib BUILD_TAG 漂移（d92f43b≠HEAD，违反成文口径）；
+5. CHANGELOG [Unreleased] 缺 R2 条目；
+6. asr.ts 12 项修复仅 2 项有抓红测试（I1-I4 无行为测试锁定）+ start() 漏世代守卫 + worklet 回退路径漏复检。
+
+**R3 修复轮（进行中）**：6 个 teammate 并行修上述项；fix-test 的行为测试在 src 落定后补。
+
+**流程校正（记入）**：`6995ae7` 的 commit message 称「每个 Blocker/Important 修复均有变异实证」——asr 验真实证 12 项仅 2 项有抓红测试，言过其实。后续 commit message 只写实证过的范围。
+**产品取舍登记待用户**（未擅自做）：backchannel 让位丢一句、待机期附和词护栏、toggle+manual 待机态 push-to-talk、yieldedSegment 弃段的误伤面（让位后只说单个附和词会被弃）、steer 前 beginSubmission 回显（宿主无此符号，待核）、待机期模型下载提示（202 不亮 loading-model 的代价）、host 202 不喂流致重复 202 丢段音频（新旧同症）。
