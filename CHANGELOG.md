@@ -46,6 +46,34 @@
 
 **明确不做（issue 回复中已向用户交代）**：真全双工、乐观发送/两段下发、云端 ASR、自定义热词、纠错确认 UI、语义断句、外部文件 watch 等（架构级或需单独议题）。
 
+### Issue #15 R2 全量多代理协同深化（5 Blocker + 20 Important + 60+ Minor；2026-10-20，commit `6995ae7`）
+
+用户指令升级为「全代码库多代理协同、逐行细审、loop 到连续 2 轮零问题」：R1 发现轮（7 个只读代理：asr/client/host/新模块+i18n/docs/test/UX）→ R2 修复轮（6 个 teammate 按不相交 write scope 并行）→ 集成轮（行为测试补齐 + 文档终态 sync）。
+
+**修复（用户可见，5 个 Blocker）**
+
+- **400ms 回声尾音宽限从未生效**（自 `6b1ea37` 起跨 8 批未发现）：播放引擎收到的是不记录 playing 降沿的裸 `setUi` 闭包 → `playingEndAt` 恒 0 → ECHO_TAIL 宽限恒不触发（句播完瞬间残响漏入 ASR 的自聊风险）。提取命名 `setUi` 为唯一写入入口，播放引擎与状态条/手势同源。
+- **五条错误提示路径永不可见**：麦克风被拒 / 插件被禁用 / 429 限流 / 空闲退出 / autoResume 的提示写在退出之后，用户什么都看不到。改为麦克风按钮旁常驻提示面（与激活态解耦），空闲提示后移到退出完成之后。
+- **唤醒词泄漏进消息**（issue #10 症状回归）：待机期一次 host 202（模型加载中）把状态切出 wake → 唤醒门失效到下一段定稿。待机期 202 不再切 state；台架锁定 + 反向变异实证。
+- **引擎热切换后回复前 N 句静默丢弃**：`tts-queue` `setEngine` 不升 epoch（与已修的 prune 同反模式）→ 新句 seq 归零撞拒绝线 + 孤儿泵双轨。逐队列 epoch++ 且保留 SessionQueue 对象保 seq 连续；red-green 回归测试。
+- **文档与实现直接矛盾**：README 设置表漏 2 项（23→25）、生效范围两档过期、发送等待 1500ms→1200ms 五处与 issue 回复稿矛盾——中英 README、CONTEXT、ADR、plan 全修（含 27 处行号终态 sync）。
+
+**修复（健壮性，Important 代表项）**
+
+- hardBreak 清 autoSend/in-flight 标记（打断后幽灵提交）；打字退出不掐朗读；可见性恢复失败完整退出；backchannel 让位段打标 + 弃段（「嗯」不再泄漏进消息，含客户端剥尾闭环）。
+- requestPartial 补 5s 超时（host 挂起不再静默死亡）；stop() 作废在途启动 + 双启动竞态 + stopRecorder 收尾 identity 守卫（麦克风常开 / 幽灵上行 / 新 audioCtx 被置空）。
+- warmup 门控（`enabled=false` 不再后台下载 390MB 模型）；6 处隐式头改 `respondJson`（gzip 包装器下 403 复事故）；Config schema 补界（rate 五倍速 / silenceMs 碎句）；限流键 per-client（反代下不塌缩）；纠错 RTT 独立标记（12s 反馈黑屏 + 消息切分）；`correctText` 输出护栏（前言/超长回退原文）；EffectivePending 五项 fmt 映射（裸枚举不再示人）；toggle+manual 静默致聋如实披露。
+
+**测试与工具**
+
+- 测试套件自身修复：B1 五个文件 40 处 `t()` 异步不匹配（summary 提前打印少报 19——「518 全绿」口径的根源）；B2 preview-error 中文检查改扫原始 src（esbuild ascii 转义致证伪不了）。
+- **新增 31 项行为级测试**（`fail-streak-notice` / `steer-submit-behavior` / `partial-gating` / `host-security-behavior` 等，连败提示 / steer 双发 / partial 门控 / 安全守卫，全部变异实证），连同 echo-tail 等共 7 个新文件登记入 `scripts.test`；装饰锁 5 处、死断言、K:/ 死脚本删除、陈旧行号实测刷新。
+- 计数口径：`npm test` exit 0 / **583 ✓ / 48 文件**（两种求和法一致：各文件「N 项通过」之和 = `grep -c '✓'` = 583）。两个数字勿混用：**31 项为行为级测试**（驱动真实链路断言行为）；**48 文件 / 583 项为全套件计数**，另含合同级/静态守卫类用例（如 `host-fixes.test.mjs` 为合同级非行为级）。
+
+**文档事实同步**
+
+- 测试计数 583/48 全位置落地（README 中英徽章/正文、TEST-SYSTEM、qa/checklist、STATE 口径注记含沿革）；ADR 11→12；must-verify/checklist/docs-CONTEXT 基线滚至 `6995ae7`；ADR-0012/0003/0008/CONTEXT/plan 共 30+ 处行号终态 sync（sed 逐行自检）；echoGate 0/937；issue 回复稿「开口前约 250ms」。
+
 ### 规划中
 
 - F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）
