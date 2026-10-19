@@ -60,14 +60,14 @@ export interface TtsEngine {
 - 解析 `<\w+(?:\s+\d+ms)?>` → 按引擎映射替换为对应 SSML/停顿/emoji
 - 返回**纯字符串**（注意：Edge 引擎后续需走 `rawToFile`/`rawToStream` 路径而非 `_SSMLTemplate`，因为后者的 `<prosody>` 包裹破坏 `<mstts:express-as>` 嵌入）
 
-**`src/tts-queue.ts` Edge 引擎 (`src/tts-queue.ts:104` 的 `EdgeTtsEngine`)**：
+**`src/tts-queue.ts` Edge 引擎 (`src/tts-queue.ts:109` 的 `EdgeTtsEngine`)**：
 - 检测 `text` 是否包含 emotion 标签（已 stripped 时不含）
 - 不含：走原 `synthesize` 路径
 - 含：切换到 rawSSML 路径（用 **`MsEdgeTTS.rawToFile`(L122) 或 `rawToStream`(L132)** —— 仓库公开 API；私有 `_rawSSMLRequest`(L137-139) 不可直接调用）—— 无需 fork
 
-**`src/index.ts:1110-1127` `tapActiveStream`**：
+**`src/index.ts:1699` `tapActiveStream`**（调用点 :918）：
 - 在 `segmenter.feed(chunk.text)` 之前调 `normalizeEmotionTags(chunk.text, engine)`，把抽取到的情绪信息塞到 `enqueue` 路径
-- `SentenceSegmenter.feed` (`src/segmenter.ts:72-92`) 内部 `plainText` 必须在情绪标签抽取之后调——**顺序敏感**
+- `SentenceSegmenter.feed` (`src/segmenter.ts:69` 类 / `:78` feed) 内部 `plainText` 必须在情绪标签抽取之后调——**顺序敏感**
 
 ### 4. 验收（必须达成）
 
@@ -76,7 +76,7 @@ export interface TtsEngine {
 - [ ] 未知标签按字面文本朗读
 - [ ] 三引擎跑通样例句 `"你好<laugh>今天天气真好"`：Kokoro 笑声 token、VITS emoji+停顿、Edge `<mstts:express-as style="cheerful">`
 - [ ] 现有 `ttsEngine: edge/vits/kokoro` 切换不影响其他字段
-- [ ] **不破坏现有不丢句不变量**：`tts-queue.ts:300-320` 重试 + epoch 守卫不动
+- [ ] **不破坏现有不丢句不变量**：`tts-queue.ts:358-370` 重试 + `:264`/`:328`（epoch 自增）/`:361`（泵内守卫）不动
 
 ## 后果
 
@@ -124,7 +124,7 @@ export interface TtsEngine {
 
 **落地偏差（plan §6.2 末段决策 vs 实际）**：
 
-1. **决策点修正** —— 计划 §6.2 末段决策「处理点全收在 `tts-local.synthesize` 内部」执行到位（`src/emotion.ts` 纯函数 + `src/tts-local.ts:441-498` 多段合成拼 PCM 返回单 WAV）；`tapActiveStream` 完全不动（避免动段切分）；`tts-queue` 完全不动（I4/I5 天然无风险）。
+1. **决策点修正** —— 计划 §6.2 末段决策「处理点全收在 `tts-local.synthesize` 内部」执行到位（`src/emotion.ts` 纯函数 + `src/tts-local.ts:443-470` 多段合成拼 PCM 返回单 WAV——拼帧 :452/:456、合并返回 :466-470）；`tapActiveStream` 完全不动（避免动段切分）；`tts-queue` 完全不动（I4/I5 天然无风险）。
 
 2. **B1 修复（plan §6.2 表漏列，批 4 审查 subagent 抓出）** —— `src/segmenter.ts:27` 原正则 `/<\/?[a-zA-Z][^>]*>/g` 把 emotion 标签一并剥掉，导致 emotion 处理永远不触发。修复方法（§6.2 表「推荐后者」）：① `plainText` 改为白名单 26 个 HTML 标签（`b|i|u|br|p|span|div|strong|em|s|sub|sup|h[1-6]|ul|ol|li|a|img|code|pre|blockquote|hr|table|tr|td|th`）；② `sanitizeForTts` 字符集移除 `<` 和 `>`（闭合 `>` 必须保留）。B1 防回归断言：`test/emotion-integration.test.mjs`（9 项，5 种场景 + 反向断言验证旧正则会让集成测试红）。
 

@@ -12,7 +12,7 @@
 >
 > **批 7N 落地（2026-09-16）**：
 > - **批 7M 🔴 砍 `recognitionLanguage` 已落地**（commit `4532b48`）—— schema 退回 `auto` 单值，根因：锁 en 后英文段仍识别为中文（zipformer-zh-int8 模型词表以中文为主）。
-> - **批 7N 🟡 重做 1/5 `bargeInMode='manual'` 接通已落地**（commit `8278097`）—— ADR-0006 第一级探测（asr.ts:778 已读 `track.getSettings().echoCancellation`）接通 `bargeInMode='manual'` 闸门：asr-host.ts AsrRuntimeOptions 加 `bargeInMode` getter + feed() 加 `manualPressed` 守卫（manual + !pressed early return `{text: ''}`）+ handleAsrRequest 透传 `?manual=1`；asr.ts AsrConfig 加 `bargeInMode?` + handleAudio 入口守卫 + asrUrl `&manual=1`；client.tsx createAsrEngine 透传。新增 `test/barge-in-manual.test.mjs` 8 项 esbuild bundle 真源码测试。**I10 默认行为守恒**（默认 auto = 原行为零变化）。
+> - **批 7N 🟡 重做 1/5 `bargeInMode='manual'` 接通已落地**（commit `8278097`）—— ADR-0006 第一级探测（asr.ts:1128 已读 `track.getSettings().echoCancellation`）接通 `bargeInMode='manual'` 闸门：asr-host.ts AsrRuntimeOptions 加 `bargeInMode` getter + feed() 加 `manualPressed` 守卫（manual + !pressed early return `{text: ''}`）+ handleAsrRequest 透传 `?manual=1`；asr.ts AsrConfig 加 `bargeInMode?` + handleAudio 入口守卫 + asrUrl `&manual=1`；client.tsx createAsrEngine 透传。新增 `test/barge-in-manual.test.mjs` 8 项 esbuild bundle 真源码测试。**I10 默认行为守恒**（默认 auto = 原行为零变化）。
 
 ## 背景
 
@@ -37,12 +37,12 @@
 | Silero 自身窗口 | ~32ms/帧 | 模型固有 |
 
 > **栅格更正（2026-09-02）**：本表初版把确认窗写成 300/200/100ms，**错了**。
-> AudioWorklet 每 1024 样本 = 64ms 投一帧（`src/audio-worklet.ts:31-32` CHUNK 口径；真 worklet 接线在 `src/asr.ts:879-888`，`new AudioWorkletNode` 在 :883——旧行号误指，worklet 文件实长 73 行），而 `src/asr.ts:700` 一带是 `MAX_SEGMENT_MS` 滚窗重置（**与栅格无关**）；真正的派发条件是 `nowMs - lastPollAt >= 100` 且仅在派发时推进 `lastPollAt`——64ms 的帧永远要攒两帧才够 100ms，**稳态派发间隔是 128ms**。
-> 三档确认窗实际为 384 / 256 / 128ms。`src/client.tsx:1382-1386` 的 `isSpeechTrueCount = 0`（进入 enterMode 时的残留计数复位）与 `setLocalMode('pending')` 注释同样写错，需一并修。
+> AudioWorklet 每 1024 样本 = 64ms 投一帧（`src/audio-worklet.ts:31-32` CHUNK 口径；真 worklet 接线在 `src/asr.ts:1170-1177`，`new AudioWorkletNode` 在 :1177——2026-10-20 实测刷新；worklet 文件实长 73 行），而 `src/asr.ts:700` 一带是 `MAX_SEGMENT_MS` 滚窗重置（**与栅格无关**）；真正的派发条件是 `nowMs - lastPollAt >= 100` 且仅在派发时推进 `lastPollAt`——64ms 的帧永远要攒两帧才够 100ms，**稳态派发间隔是 128ms**。
+> 三档确认窗实际为 384 / 256 / 128ms。`src/client.tsx:1896-1898` 的 `isSpeechTrueCount = 0`（进入 enterMode（:1893）时的残留计数复位）与 `setLocalMode('pending')`（:1901）——2026-10-20 实测刷新（原 1382-1386 区现为 VoiceBootConfig 字段）。
 > 复核：`node scripts/bench-echo-gate.mjs` §4。
 > 这也解释了实测的 525ms（384 + Silero 窗口 + 往返），并意味着**下沉能省掉的比原估计更多**。
 
-同时，播放期 detect 通道以 f32 PCM 持续上行（16000 × 4 B/s ≈ 64 KB/s），并需要 `detectGeneration` 代际计数器来作废迟到响应（`src/asr.ts:198`，对应 L372/L385/L388/L672 4 处迟到响应作废判断）。
+同时，播放期 detect 通道以 f32 PCM 持续上行（16000 × 4 B/s ≈ 64 KB/s），并需要 `detectGeneration` 代际计数器来作废迟到响应（`src/asr.ts:267` 声明，对应 :551/:554 两处迟到响应作废判断——原 4 处已随重构合并；2026-10-20 实测刷新）。
 
 ## 真机数据（2026-09-02 补充，本 ADR 的分量因此上调）
 
@@ -86,7 +86,7 @@ host 侧 VAD 保留两个用途，不再承担打断：
 - 确认延迟从 ~525ms 降到 ~150–250ms（去掉轮询量化 + 往返；确认帧改为按 32ms VAD 帧计，可用更多帧换更低延迟）
 - detect 通道上行归零（省 64 KB/s，且长朗读下不再有积压/丢弃逻辑）
 - 打断与网络解耦：网络抖动不再导致打断失效
-- 可删除 `detectGeneration` 与 detect 通道的积压上界逻辑（`src/asr.ts:354-367`）
+- 可删除 `detectGeneration`（`src/asr.ts:267`）与 detect 通道的积压上界逻辑（`src/asr.ts:524-529` MAX_DETECT_PENDING；2026-10-20 实测刷新）
 - 判定与音频帧严格对齐，消除 100ms 量化误差
 
 **负面 / 成本**
@@ -108,6 +108,6 @@ host 侧 VAD 保留两个用途，不再承担打断：
 ## 备选方案
 
 - **A：保持 host VAD，改用 WebSocket 传输**（[ADR-0004](0004-realtime-transport-deferred.md)）——去掉轮询量化，但保留往返，延迟改善有限（~50–80ms），收益远小于本方案，但成本也小得多
-- **B：客户端能量域快路径 + host VAD 确认**——历史上已试过并移除（`src/asr.ts:580-582` 注释：「打断前沿：已由服务端 Silero VAD 帧级 isSpeech 驱动（阶段二，取代原 RMS 能量快路径 + P0 瞬态抑制 + P1 噪声自适应）；此处不再做能量域打断判定」），能量域无法区分语音与噪声/回声，不重走
+- **B：客户端能量域快路径 + host VAD 确认**——历史上已试过并移除（`src/asr.ts:856-857` 注释：「打断前沿：已由服务端 Silero VAD 帧级 isSpeech 驱动（阶段二，取代原 RMS 能量快路径 + P0 瞬态抑制 + P1 噪声自适应）；此处不再做能量域打断判定」），能量域无法区分语音与噪声/回声，不重走
 - **C：什么都不做，用 `interruptLevel=2`（1 帧确认）换延迟**——确认窗从 384ms 降到 128ms，但误打断率上升，且没有基准无法量化代价。
   注意：[2026-09-02 的发现](../findings/2026-09-02-echo-gate-ratchet.md)表明回声门控在真实回声下判别力≈0，**降档时没有第二道防线兜底**，风险比原先设想的高

@@ -58,7 +58,7 @@
 | 条目 | 状态 | 估算 | 关键锚点（file:line） | 推迟原因 / 触发条件 |
 |---|---|---|---|---|
 | A2 会后「3 条要点 + 行动项」摘要卡片 | Ready | 1.5-2 天 | `index.ts:629-664` `/config` exact 路由仿 `/recap` + `client.tsx:2423` VoiceStatusBar（旧 507-535/2280-2296 已漂移） | 无需求牵引推迟 |
-| A5 `interruptThreshold_ms` + `eagerness` 暴露 | Ready | 0.5-1 天 | `index.ts:240-280` schema + `asr.ts:108-122` + `settings-form.tsx:52` 头部 FIELD_LABELS 注释（旧 :54 漂移 ±2） | 无需求牵引推迟（竞品对齐，本仓无迁移用户） |
+| A5 `interruptThreshold_ms` + `eagerness` 暴露 | Ready | 0.5-1 天 | `index.ts:269-297` schema + `asr.ts:108-122` config 接口 + strings.ts `*Label` 镜像键（行标题唯一真源；FIELD_LABELS 已随整合批删除，2026-10-20 核） | 无需求牵引推迟（竞品对齐，本仓无迁移用户） |
 | A6 浮动状态条 + 启动 chime | Ready | 0.5-1 天 | `client.tsx:168-174` beepCtx + `client.tsx:1233` holding CSS + `client.tsx:2156` holding state（旧 :1160/:1959 已漂移） | 无需求牵引推迟 |
 | A10 AI 主播开场问候 | Ready | 1.5-2 天 | `index.ts:629-664` `/config` exact 路由仿 `/greeting` + `tts-queue.ts:254-268` enqueue（旧 507-535/268-307 已漂移） | 无需求牵引推迟（建议固定模板不调 LLM） |
 | B3 WebRTC APM3 替代自研 NLMS | Need-PoC | PoC 1-2 周 | `aec.ts`（NLMS 自研兜底，无 bypass 开关，按符号定位） + `audio-worklet.ts` + ADR-0001/0005 | 需 PoC 实证 ERLE > 自研 NLMS |
@@ -76,7 +76,7 @@
 | 插件能力结构化注入 system prompt | Ready | 30 行 | `index.ts:112` VOICE_SPOKEN_SECTION + `index.ts:446` settingsScope.register（旧 72-79/462-477 已漂移） | 无需求牵引推迟（可与让位注入处合并） |
 | 同步自带 skill 到 `~/.dsh/skills/` | Ready | 30 行 + 4-6 SKILL.md | `index.ts:373` apply 入口（旧 L282+ 已漂移） | 无需求牵引推迟 |
 | 注册 MCP `voice_*` 工具 | Ready | 1-2 天 | `index.ts:121` host inject（`export const inject`，旧 :88 巧合仍近，按符号定位） + `systemPrompt` | 需 peer 实证 tools/jobs/agents 可达性 |
-| 设置卡 CardForm draft/validate 模式 | Ready | 150 行 | `settings-form.tsx:250-330` draft/commit NumberField（全文件 1240 行，旧 1-1088 已漂移） | 无需求牵引推迟 |
+| 设置卡 CardForm draft/validate 模式 | Ready | 150 行 | `settings-form.tsx:128` NumberField（全文件 1187 行；旧 250-330/1240 行已漂移，2026-10-20 实测刷新） | 无需求牵引推迟 |
 | 全局并发闸门 + AbortSignal 队列 | Ready | 80 行 | `index.ts:88` apply 入口 | 无需求牵引推迟（与 tts-queue epoch 协同） |
 | 修 README 设置表（4 字段）+ 删误传字段 | Ready | 1 小时 | `plugin/README.md:71-86` + `index.ts:140-227` | 需 grep 验证误传字段（heldHint/cursorHint/recallAuto） |
 | `normalizeWake` 加语气词白名单 | Ready | 5 行 + 测试 | `wakeword.ts:13-18` | 无需求牵引推迟（与 hold 关闭 wakeWord 兼容） |

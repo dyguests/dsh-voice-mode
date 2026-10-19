@@ -121,7 +121,7 @@ YIELDING (let the user interrupt)
 - `src/asr.ts:184-185`（wakeEnabled 唤醒词门：唤醒词非空且非 hold 模式，逻辑可参考）
 - `src/asr-host.ts:584`（finalize 同步路径 `finalizeP`，"不丢句"不变量；原 442-466 区现为 senseTranscribe）
 - `src/tts-queue.ts:325`（cancel() 硬打断；epoch 守卫；不丢句；原 268-307 区现为 updateVoice）
-- `src/tts-queue.ts` （`_SSMLTemplate` epoch 通道）
+- `src/tts-queue.ts`（`q.epoch` 逐队列代际字段——epoch 通道本体：声明 :204/:212，自增 :264（setEngine）/ :328（cancel），入队快照 :317，泵内守卫 :361。**勘误（2026-10-20）**：原「`_SSMLTemplate` epoch 通道」全 src 0 命中，系幻影符号）
 - `src/client.tsx:1946`（hardBreak 函数定义 + 注释上下文 L1941-1945）
 - `src/client.tsx:2106`（`onAecState` 回调已用，证明回调注入机制成熟；原 1539 区现为 fetchConfig）
 - `CONTEXT.md:26`（"打断计数仅在播放期累积"不变量）

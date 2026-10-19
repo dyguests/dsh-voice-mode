@@ -28,11 +28,11 @@
 
 | 计数器 | 位置 | 防的是什么 |
 |---|---|---|
-| `segmentEpoch` | `src/asr.ts:186` | 弃段/定稿后迟到的 partial 响应 |
-| `detectGeneration` | `src/asr.ts:198` | 重置后旧 vadOnly 响应推进 `detectSent` 水位 |
+| `segmentEpoch` | `src/asr.ts:251` | 弃段/定稿后迟到的 partial 响应 |
+| `detectGeneration` | `src/asr.ts:267` | 重置后旧 vadOnly 响应推进 `detectSent` 水位 |
 | `resetGen` | `src/asr-host.ts` | 定稿期间会话被 reset，陈旧缓存写回 |
-| `turnGen` | `src/index.ts:300`（声明 Map）+ L490-498（get/set/increment） | 旧回合的 turn state 覆盖新回合 |
-| TTS `q.epoch` | `src/tts-queue.ts:182`（SessionQueue.epoch 类型声明） | 打断后积压句子与孤儿泵继续广播 |
+| `turnGen` | `src/index.ts:552`（声明 Map）+ :916-924（get/set/守卫） | 旧回合的 turn state 覆盖新回合 |
+| TTS `q.epoch` | `src/tts-queue.ts:212`（SessionQueue.epoch 类型声明；接口 :207） | 打断后积压句子与孤儿泵继续广播 |
 
 另有 `uploadedSamples` / `seg.fed` / `detectSent` 三个字节水位，用于在"包可能丢失、可能重复、可能乱序"的前提下做幂等增量。
 
@@ -45,7 +45,7 @@
 | WebSocket 性质 | 消除 |
 |---|---|
 | 有序 | 迟到响应作废逻辑（`segmentEpoch` / `detectGeneration` 的响应校验分支） |
-| 有状态（连接 = 会话生命周期） | 403 会话过期 → 重入 → 全量重发的整条恢复路径（`src/asr.ts:289-300`、`:492-505`） |
+| 有状态（连接 = 会话生命周期） | 403 会话过期 → 重入 → 全量重发的整条恢复路径（`src/asr.ts:416-438` 403 重试、`:659-660` recoverySegment 全量重发；2026-10-20 实测刷新） |
 | 连接断开即明确失效 | host 侧 90s 空闲扫描回收（`SEGMENT_IDLE_MS`） |
 | 无轮询 | 100ms 量化延迟；`lastPollAt` / `partialInFlight` / `detectInFlight` 三个在途标志 |
 | 二进制帧原生 | base64 膨胀（TTS 下行当前 base64，+33%） |
@@ -53,7 +53,7 @@
 保留的：`turnGen`（LLM 回合语义，与传输无关）、TTS `q.epoch`（打断语义，与传输无关）。**预计可塌缩 3 套计数器 + 2 套水位。**
 
 配套建议（同一次改动内）：
-- 上行 PCM 改 **int16**（当前 f32，`src/asr.ts:232` Float32Array 构造 + `src/asr-host.ts:138` Float32Array 解析）——带宽减半，ASR 输入精度无损失
+- 上行 PCM 改 **int16**（当前 f32，`src/asr.ts:232` Float32Array 构造 + `src/asr-host.ts:154-155`（pcmToSamples）Float32Array 解析）——带宽减半，ASR 输入精度无损失
 - 下行 TTS 改二进制帧，去掉 base64
 
 ## 预期后果

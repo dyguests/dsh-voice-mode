@@ -6,7 +6,7 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| [real-machine-acceptance-checklist.md](real-machine-acceptance-checklist.md) | 真机验收 19 项清单（自动化部分见 TEST-SYSTEM.md；当前单测 611 项 / 50 套件） |
+| [real-machine-acceptance-checklist.md](real-machine-acceptance-checklist.md) | 真机验收 19 项清单（自动化部分见 TEST-SYSTEM.md；当前单测 616 项 / 51 套件） |
 | [must-verify-manually.md](must-verify-manually.md) | 必须人工复核最小清单（4 项必过发版门禁） |
 | [TEST-SYSTEM.md](TEST-SYSTEM.md) | 长期测试体系（维持·迭代·反馈·完善：四层验证维度 + 维持/迭代循环 + 已知陷阱） |
 

@@ -11,17 +11,17 @@
 | 常数 | 值 | 位置 |
 |---|---|---|
 | `echoGateDb` | 6 dB | 设置默认 |
-| 检测 VAD 阈值 | 0.35 | `src/asr-host.ts:334` |
-| 端点 VAD 阈值 | 0.5 | `src/asr-host.ts:296` |
-| `INT_CONFIRM_FRAMES` | 3 / 2 / 1 | `src/client.tsx:33` |
-| `peakDecay` 基数 | 0.9 per 64ms | `src/asr.ts:592` |
-| `floorAlpha` 基数 | 0.98 per 64ms | `src/asr.ts:593` |
-| `SPEECH_RMS` | 0.015 | `src/asr.ts:108` |
-| `VAD_CONTINUE_RMS` | 0.02 | `src/asr-host.ts:151` |
-| `MIN_SPEECH_MS` | 250 | `src/asr.ts:113` |
-| 确认窗口 | 800 / 350 / 400ms | `src/asr-host.ts:153-156` |
-| delay 置信门 | peak > 0.5 | `src/client.tsx:713` |
-| 迟滞衰减 | 连续 2 拍假才减 1 | `src/client.tsx:1480` |
+| 检测 VAD 阈值 | 0.35 | `src/asr-host.ts:355` |
+| 端点 VAD 阈值 | 0.5 | `src/asr-host.ts:340` |
+| `INT_CONFIRM_FRAMES` | 3 / 2 / 1 | `src/client.tsx:37` |
+| `peakDecay` 基数 | 0.9 per 64ms | `src/asr.ts:869` |
+| `floorAlpha` 基数 | 0.98 per 64ms | `src/asr.ts:870` |
+| `SPEECH_RMS` | 0.015 | `src/asr.ts:162` |
+| `VAD_CONTINUE_RMS` | 0.02 | `src/asr-host.ts:171` |
+| `MIN_SPEECH_MS` | 250 | `src/asr.ts:167` |
+| 确认窗口 | 800 / 350 / 200ms（连词/长句/短句；另有「无新实词 ≥400ms」提前判完） | `src/asr-host.ts:174-177`（+ :529） |
+| delay 置信门 | peak > 0.5 | `src/client.tsx:856-859` |
+| 迟滞衰减 | 连续 2 拍假才减 1 | `src/client.tsx:31`（声明）/ :2075（消费） |
 
 每一个都是真机试错的产物，git log 里能看到它们被反复调整（如 2a67df7「迟滞降 confirmMs 566~2796→~500ms」）。
 
@@ -40,17 +40,17 @@
 | 常数 | 位置 | 客户端纯核可覆盖 |
 |---|---|---|
 | `echoGateDb` 6 | 设置默认 | ✅ |
-| `peakDecay` 0.9 | `src/asr.ts:592` | ✅ |
-| `floorAlpha` 0.98 | `src/asr.ts:593` | ✅ |
-| `confirmFrames` 3/2/1 | `src/client.tsx:33` | ✅ |
-| 迟滞连续 2 拍 | `src/client.tsx:1480` | ✅ |
-| `SPEECH_RMS` 0.015 | `src/asr.ts:108` | ⏳ 阶段二（分段级联） |
-| `MIN_SPEECH_MS` 250 | `src/asr.ts:113` | ⏳ 阶段二 |
-| delay 置信门 0.5 | `src/client.tsx:713` | ⚠️ 仅间接（经 `playingTailUntil` 影响播放态） |
-| 检测 VAD 0.35 | `src/asr-host.ts:334` | ❌ host 侧，需独立重放脚本 |
-| 端点 VAD 0.5 | `src/asr-host.ts:296` | ❌ |
-| `VAD_CONTINUE_RMS` 0.02 | `src/asr-host.ts:151` | ❌ |
-| 确认窗口 800/350/400 | `src/asr-host.ts:153-156` | ❌ |
+| `peakDecay` 0.9 | `src/asr.ts:869` | ✅ |
+| `floorAlpha` 0.98 | `src/asr.ts:870` | ✅ |
+| `confirmFrames` 3/2/1 | `src/client.tsx:37` | ✅ |
+| 迟滞连续 2 拍 | `src/client.tsx:31` / :2075 | ✅ |
+| `SPEECH_RMS` 0.015 | `src/asr.ts:162` | ⏳ 阶段二（分段级联） |
+| `MIN_SPEECH_MS` 250 | `src/asr.ts:167` | ⏳ 阶段二 |
+| delay 置信门 0.5 | `src/client.tsx:856-859` | ⚠️ 仅间接（经 `playingTailUntil` 影响播放态） |
+| 检测 VAD 0.35 | `src/asr-host.ts:355` | ❌ host 侧，需独立重放脚本 |
+| 端点 VAD 0.5 | `src/asr-host.ts:340` | ❌ |
+| `VAD_CONTINUE_RMS` 0.02 | `src/asr-host.ts:171` | ❌ |
+| 确认窗口 800/350/200 | `src/asr-host.ts:174-177` | ❌ |
 
 即：**第一批覆盖 5 个，阶段二 +2，host 侧 4 个需要另一条重放路径**（依赖 `sherpa-onnx` + 模型下载）。
 不要在任何地方宣称"12 个常数全有守卫"。

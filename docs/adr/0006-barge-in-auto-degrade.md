@@ -39,7 +39,7 @@ README 的排障表实际上是在教用户调声学参数。对"外放的桌面
 
 **第一级 —— 零成本，进入语音模式即可判定**
 
-`getUserMedia` 后读 `track.getSettings().echoCancellation`（现有代码已有此信号，`src/asr.ts:751` `startRecorder` → `config.onAecState`(L782) → `src/client.tsx:1566-1569` `onAecState` 回调 + `bus.setEchoBypass`）。
+`getUserMedia` 后读 `track.getSettings().echoCancellation`（现有代码已有此信号：`src/asr.ts:1128`，在 `startRecorder`（:1099）内 → `config.onAecState`（:1137）→ `src/client.tsx:2106` `onAecState` 回调 + `bus.setEchoBypass`；2026-10-20 实测刷新，原 751/L782/1566-1569 已漂移）。
 
 - `=== false` → 原生 AEC 未生效（耳机无原生 AEC / Safari VoiceProcessingIO 失效）→ **直接判定不具备 auto 条件**，落 `manual`，状态条提示「本机回声消除未生效，已切为长按打断」
 
@@ -125,4 +125,4 @@ README 的排障表实际上是在教用户调声学参数。对"外放的桌面
 
 1. **manual 闸门已接通**（commit `8278097`，批 7N 🟡 重做 1/5）：`asr-host.ts` `feed()` 加 `manualPressed` 守卫 + URL `?manual=1` 透传（host 侧防御守卫）；新增 `test/barge-in-manual.test.mjs` 8 项回归。
 2. **`detect` 取值已进 schema**（批 7O 落地）：`bargeInMode` 为 `'auto' | 'manual' | 'detect'` 三值（`src/asr.ts:114` 类型真源；`src/index.ts` zod union 同步），默认 `detect`。
-3. **第一级自动探测仍未实现**（`echoCancellation === false` → 自动落 `manual`）：`src/asr.ts:845-848` 已读信号但仅 console.warn，不改变打断模式；已登记批 7O 代码块实施。
+3. **第一级自动探测已实现**（`echoCancellation === false` → 自动落 `manual`）：`src/asr.ts:1134-1136`（`if (config.bargeInMode === 'detect') { runtimeBargeInMode = aecOn ? 'auto' : 'manual' }`），运行时取值被 `:301-302`（manual 时 URL 带 `&manual=1`）与 `:828-829`（manual 丢弃非按压帧）实际消费；落地 commit `503e83e`（2026-09-17 11:04，「detect 取值 + 第一级自动探测落地」）。**注记勘误（2026-10-20）**：原「仍未实现」注记写于 `c833f94`（同日 10:16），48 分钟后即被 `503e83e` 实现、注记从未更新——混淆点：一级探测（echoCancellation→manual）已实现；**二级探测**（ERLE/回声地板阈值运行中降级）确未做，待真机样本（见 `docs/competitive/backlog.md`）。

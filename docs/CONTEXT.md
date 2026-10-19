@@ -45,7 +45,7 @@ bridge /voice-mode SSE：owner=sessionId，/config + /preview + assembleStream
   - `emotion.ts`（批 4）/ `asr-sense-key.ts`（纯函数 sanitize/key；批 7M 砍除 `asr-hotwords.ts`）
   - `sense-worker.ts` / `wakeword.ts` / `segmenter.ts` / `fixture-recorder.ts` 等
 - **`plugin/dsh-voice-mode/lib/`** —— esbuild 产物（`build.mjs` 重建，**不手改**；批 7P P2 起 lib 随每批 rebuild 对齐 BUILD_TAG=HEAD，旧「免重建」口径已证伪作废）
-- **`plugin/dsh-voice-mode/test/`** —— `.mjs` 测试（npm test 50 文件 / **611 项全绿**（2026-10-20 R4 后实测口径：各文件「N 项通过」之和 = `grep -c '✓'` = 611，`scripts.test` 链 50 个文件调用，exit 0）。沿革：R1 时 41 文件/518 项 → R2 集成轮 48 文件/583 项 → R3 后 49 文件/603 项 → R4 后 50 文件/611 项（+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16）。两口径勿混用：**行为级测试 74 项**（fix-test scope 枚举口径，R4 落定：fail-streak-notice 4 / partial-gating 3 / asr-lifecycle 5 / steer-submit-behavior 9 / correct-cycle-behavior 11 / host-security-behavior 13 / host-fixes 3 / download 4 / barge-in-manual 8 / detect-route 6 / sense-worker 8；host-security-behavior 余 2 条为源码常量锁、host-fixes 余 13 条为合同级，镜像级 hold-clear/backchannel 不计）与**全套件 50 文件/611 项**是两回事））
+- **`plugin/dsh-voice-mode/test/`** —— `.mjs` 测试（npm test 51 文件 / **616 项全绿**（2026-10-20 R9 后实测口径：各文件「N 项通过」之和 = `grep -c '✓'` = 616，`scripts.test` 链 51 个文件调用，exit 0）。沿革：R1 时 41 文件/518 项 → R2 集成轮 48 文件/583 项 → R3 后 49 文件/603 项 → R4 后 50 文件/611 项（+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16）→ R9 后 51 文件/616 项（+5 = barge-in-detect-behavior 一级探测行为锁，fix-test 补）。两口径勿混用：**行为级测试 79 项**（fix-test scope 枚举口径，R9 落定：fail-streak-notice 4 / partial-gating 3 / asr-lifecycle 5 / steer-submit-behavior 9 / correct-cycle-behavior 11 / host-security-behavior 13 / host-fixes 3 / download 4 / barge-in-manual 8 / detect-route 6 / sense-worker 8 / barge-in-detect-behavior 5（R9 新增，一级探测行为锁）；host-security-behavior 余 2 条为源码常量锁、host-fixes 余 13 条为合同级，镜像级 hold-clear/backchannel 不计）与**全套件 50 文件/611 项**是两回事））
 - **`docs/competitive/sources/scan-*.md`** —— 18 份子代理扫描报告
 
 ## 诊断开关
@@ -70,7 +70,7 @@ cd plugin/dsh-voice-mode && \
 ## 发版流程（批 K 收口 + L 文档同步验证通过的工作流）
 
 1. `git status --short` 仓干净
-2. `npm run typecheck && npm run build && npm test` 全绿（npm test 611 项 / 50 文件）
+2. `npm run typecheck && npm run build && npm test` 全绿（npm test 616 项 / 51 文件）
 3. `systemctl restart dsh.service && curl /voice-mode/config` 验 ASR 侧 8 字段非 null（senseVoice/senseITN/captionFontSize/captionMaxWidth/backchannelYield/yieldMs/bargeInSalvage/llmCorrect）
 4. 真机冒烟 **4 项必过** / **~10 分钟**（`docs/qa/must-verify-manually.md`：字幕 / 让位 / 60s 长段 / manual 外放）
 5. 文档回写：`STATE.md` + 根 `CONTEXT.md` + `backlog.md` + ADR 落地注记（批 7M 砍 4 项 + 批 7N 重做 5 项已完成）
