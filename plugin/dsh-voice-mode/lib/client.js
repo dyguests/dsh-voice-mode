@@ -2049,6 +2049,19 @@ async function trySteerSubmit(session, text) {
   }
 }
 
+// src/draft-compose.ts
+function composeDraft(current, tail, addition) {
+  const cur = String(current ?? "");
+  const t3 = String(tail ?? "");
+  const base = t3 && cur.endsWith(t3) ? cur.slice(0, cur.length - t3.length).replace(/\s+$/, "") : cur.trim();
+  const add = String(addition ?? "").trim();
+  if (!add) return base;
+  return base ? `${base} ${add}` : add;
+}
+function shouldWritePartial(state) {
+  return state !== "wake";
+}
+
 // src/settings-form.tsx
 var import_react2 = require("react");
 
@@ -3212,7 +3225,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "8b57a7b";
+var BUILD_TAG = "c4fec2f";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4529,17 +4542,28 @@ function MicButton({
         const next = cur.length < WAVE_BARS ? [...cur, l] : [...cur.slice(1), l];
         bus.setUi({ levels: next });
       });
-      engine.onPartial((text) => bus.setUi({ partial: text }));
+      engine.onPartial((text) => {
+        bus.setUi({ partial: text });
+        if (!shouldWritePartial(engineRef.current?.state ?? "")) return;
+        const partialActions = actionsRef.current;
+        if (typeof partialActions?.setDraft !== "function") return;
+        const composed = composeDraft(draftRef.current, lastPartialRef.current, text);
+        if (!composed) return;
+        lastPartialRef.current = text.trim();
+        try {
+          partialActions.setDraft(composed);
+        } catch {
+        }
+      });
       engine.onSegment((text, meta) => {
         resetIdle();
         bus.setUi({ partial: "" });
         const actions = actionsRef.current;
         const trimmed = text.trim();
         if (!trimmed) return;
-        let nextDraft = trimmed;
+        let nextDraft = composeDraft(draftRef.current, lastPartialRef.current, trimmed);
+        lastPartialRef.current = "";
         try {
-          const curText = draftRef.current;
-          nextDraft = curText ? `${curText} ${trimmed}` : trimmed;
           if (typeof actions?.setDraft === "function") actions.setDraft(nextDraft);
           else if (typeof actions?.setDraft === "function") actions.setDraft(nextDraft);
         } catch {
@@ -4808,6 +4832,7 @@ function MicButton({
   const liveDraft = useInput ? useInput((s) => s?.draft ?? "") : "";
   const draftRef = (0, import_react3.useRef)("");
   draftRef.current = liveDraft;
+  const lastPartialRef = (0, import_react3.useRef)("");
   const livePhase = useInput ? useInput((s) => s?.phase ?? "") : "";
   const phaseRef = (0, import_react3.useRef)("");
   phaseRef.current = livePhase;

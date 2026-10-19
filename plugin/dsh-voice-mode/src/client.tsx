@@ -16,6 +16,7 @@ import { resampleLinear } from './resample.ts'
 import { fixtureRecorder } from './fixture-recorder.ts'
 import { errorText } from './error-text.ts'
 import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
+import { composeDraft, shouldWritePartial } from './draft-compose.ts'
 import { activeLocale, bindLocale, t, useLang, type TKey } from './i18n.ts'
 
 /**
@@ -1905,7 +1906,24 @@ export function MicButton({
         const next = cur.length < WAVE_BARS ? [...cur, l] : [...cur.slice(1), l]
         bus.setUi({ levels: next })
       })
-      engine.onPartial((text) => bus.setUi({ partial: text }))
+      engine.onPartial((text) => {
+        bus.setUi({ partial: text })
+        // Issue #15 批 3：partial 实时回填草稿（问题③——原仅状态条预览，输入框要等定稿
+        // 才一次性出现）。宿主 setDraft 是整篇替换纯文本：草稿组成 = 已定稿前缀 + 当前
+        // partial 尾；lastPartialRef 记住本次写入的尾，定稿时替换它（防 double-append）。
+        // wake 待机态 partial 是「它听到了什么」的诊断反馈（含唤醒词），不写草稿。
+        if (!shouldWritePartial(engineRef.current?.state ?? '')) return
+        const partialActions = actionsRef.current
+        if (typeof partialActions?.setDraft !== 'function') return
+        const composed = composeDraft(draftRef.current, lastPartialRef.current, text)
+        if (!composed) return
+        lastPartialRef.current = text.trim()
+        try {
+          partialActions.setDraft(composed)
+        } catch {
+          // 写草稿失败不阻断——预览仍在状态条
+        }
+      })
       engine.onSegment((text, meta) => {
         // 定稿进草稿（可编辑 Q13）。发送语义：累积模式——连续多段拼成一条消息，
         // 静音到「发送阈值」（断句后再额外静音一个 silenceMs）或按住 Ctrl / hold 松手才发，
@@ -1915,11 +1933,12 @@ export function MicButton({
         const actions = actionsRef.current
         const trimmed = text.trim()
         if (!trimmed) return
-        // 追加式写入：保留已有草稿内容（绝对不改第一真文）：
-        let nextDraft = trimmed
+        // Issue #15 批 3：定稿**替换** partial 尾（不是追加——追加会把刚写进草稿的
+        // partial 重复计入，主会话预审定位的 double-append 风险）。草稿被提交清空时
+        // 尾不匹配 → composeDraft 自愈从定稿新起。
+        let nextDraft = composeDraft(draftRef.current, lastPartialRef.current, trimmed)
+        lastPartialRef.current = ''
         try {
-          const curText = draftRef.current
-          nextDraft = curText ? `${curText} ${trimmed}` : trimmed
           if (typeof actions?.setDraft === 'function') actions.setDraft(nextDraft)
           else if (typeof (actions as any)?.setDraft === 'function') (actions as any).setDraft(nextDraft)
         } catch {
@@ -2269,6 +2288,9 @@ export function MicButton({
   const liveDraft = useInput ? useInput((s: any) => (s?.draft as string) ?? '') : ''
   const draftRef = useRef('')
   draftRef.current = liveDraft
+  // Issue #15 批 3：partial 回填的尾记录——定稿时从草稿末尾剥掉它再拼定稿文本
+  // （composeDraft 的 tail 参数；防 partial 被 double-append）。
+  const lastPartialRef = useRef('')
   const livePhase = useInput ? useInput((s: any) => (s?.phase as string) ?? '') : ''
   const phaseRef = useRef('')
   phaseRef.current = livePhase
