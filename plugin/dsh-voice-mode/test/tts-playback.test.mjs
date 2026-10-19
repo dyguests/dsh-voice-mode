@@ -149,7 +149,8 @@ await t('C1 链：tts-queue 通知 → index 广播 tts-skip → 客户端提示
   assert.ok(/broadcast\('tts-skip'/.test(indexSrc), 'index 缺 tts-skip 广播')
   assert.ok(/addEventListener\('tts-skip'/.test(clientSrc), '客户端缺 tts-skip 处理')
   assert.ok(/t\('ttsSkipNotice'\)/.test(clientSrc), '客户端缺 ttsSkipNotice 文案引用')
-  assert.ok(/streak/.test(indexSrc), 'index 的 tts-skip 广播应携带 streak')
+  assert.ok(/broadcast\('tts-skip',\s*\{[^}]*\bstreak\b/.test(indexSrc), 'tts-skip 广播体必须携带 streak 字段（客户端据此区分偶发抖动与云端整体不可用）')
+  assert.ok(/\(p\.streak \?\? 1\)\s*>=\s*2/.test(clientSrc), '客户端缺 streak 消费（down 阈值判定）——广播带字段而客户端不读 = 死字段')
   assert.ok(/t\('ttsUnavailableNotice'\)/.test(clientSrc), '客户端缺 ttsUnavailableNotice（连续失败的可行动提示）')
 })
 

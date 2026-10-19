@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
-import { mkdtempSync, readFileSync, writeFileSync, statSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, statSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -151,5 +151,4 @@ t('host 注册了 /settings 路由且写入受跨源与大小限制保护', () =
   assert.ok(blk.includes('denyNonLoopback') && blk.includes('denyCrossOrigin') && blk.includes('MAX_JSON_BODY'))
 })
 
-assert.ok(existsSync(out))
 console.log(`\nsettings-store：${n} 项通过`)

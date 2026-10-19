@@ -105,7 +105,7 @@ await t('回退⑤：空输入直返（不发请求）', async () => {
   assert.equal(called, false, '空输入不应发 LLM 请求')
 })
 
-t('correctionSystem：双语提示含关键约束', () => {
+await t('correctionSystem：双语提示含关键约束', () => {
   const zh = correctionSystem('zh')
   const en = correctionSystem('en')
   assert.ok(zh.length > 20 && en.length > 20, '提示为空')
@@ -120,19 +120,27 @@ const clientSrc = readFileSync(join(root, 'src', 'client.tsx'), 'utf8')
 const stringsSrc = readFileSync(join(root, 'src', 'strings.ts'), 'utf8')
 const formSrc = readFileSync(join(root, 'src', 'settings-form.tsx'), 'utf8')
 
-t('wiring：host /correct 路由存在（loopback+跨源守卫+collectBody+correctText）', () => {
+await t('wiring：host /correct 路由存在（loopback+跨源守卫+collectBody+correctText）', () => {
   const idx = indexSrc.indexOf('path: `${base}/correct`')
   assert.ok(idx >= 0, '缺 /correct 路由')
-  const win = indexSrc.slice(idx - 200, idx + 1800)
+  // 窗口取到路由结束（下一个 ctx.effect 注册处）而非固定长度：M6 重构在该路由内
+  // 插入了 enabled/限流分流，固定窗口会把待锁的 .catch 与 limiter 门切在窗外。
+  const end = indexSrc.indexOf('ctx.effect(() =>', idx + 10)
+  const win = indexSrc.slice(idx - 200, end > idx ? end : idx + 1800)
   assert.ok(win.includes('denyNonLoopback'), '缺 loopback 守卫')
   assert.ok(win.includes('denyCrossOrigin'), '缺跨源守卫')
   assert.ok(win.includes('correctText(ctx,'), '未调 correctText')
   // 审查 Minor-2：路由层 .catch 恒 200 与 limiter 门也要锁（删了全量套件仍绿过）
   assert.ok(win.includes('.catch('), '缺 .catch 恒 200——correctText 异常会逃逸成未处理 rejection+HTTP 永不响应')
-  assert.ok(win.includes("limiter.hit('correct'"), '缺限流门——本地页面可无上限触发 LLM 调用')
+  // M6：键从全局 'correct' 改为 per-client（反代部署下限流桶不塌缩）
+  assert.ok(/limiter\.hit\(`correct:\$\{clientKey\(req\)\}`/.test(win), '缺 per-client 限流门——本地页面可无上限触发 LLM 调用')
+  // M6：enabled=false 返 403 voice_disabled（与限流 429 分流，不再混为一谈）
+  assert.ok(win.includes("respondJson(res, 403, { code: 'voice_disabled'"), 'enabled=false 未返 403 voice_disabled')
+  // M6：lang 归一化走 prompts.ts 单一真源，不再内联 === 'en'
+  assert.ok(win.includes('normalizePromptLang(parsed.lang)'), 'lang 未走 normalizePromptLang（内联 === 会误判 en-US/zh-CN）')
 })
 
-t('wiring：llmCorrect 设置十站（interface/默认/DESC/zod×2/fromConfig×2/config 响应）', () => {
+await t('wiring：llmCorrect 设置十站（interface/默认/DESC/zod×2/fromConfig×2/config 响应）', () => {
   assert.ok((indexSrc.match(/llmCorrect: boolean/g) ?? []).length === 2, 'interface 两处缺（VoiceSettingsValue + Config）')
   assert.ok(indexSrc.includes('llmCorrect: false,'), '默认值缺')
   assert.ok(indexSrc.includes('llmCorrect: en.descLlmCorrect,'), 'DESC 缺')
@@ -141,17 +149,17 @@ t('wiring：llmCorrect 设置十站（interface/默认/DESC/zod×2/fromConfig×2
   assert.ok(indexSrc.includes('llmCorrect: vset.llmCorrect,'), '/config 响应透传缺')
 })
 
-t('wiring：strings 双语 label+desc', () => {
+await t('wiring：strings 双语 label+desc', () => {
   assert.ok(stringsSrc.includes("llmCorrectLabel: 'LLM 纠错'"), 'zh label 缺')
   assert.ok(stringsSrc.includes("llmCorrectLabel: 'LLM correction'"), 'en label 缺')
   assert.ok(stringsSrc.includes('descLlmCorrect:'), 'desc 缺')
 })
 
-t('wiring：settings-form 显式 Row', () => {
+await t('wiring：settings-form 显式 Row', () => {
   assert.ok(formSrc.includes('name="llmCorrect"'), '设置面板缺 Row')
 })
 
-t('wiring：client 四站（DEFAULT_BOOT/VoiceBootConfig/bootNow/fetchConfig）+ correctDraft', () => {
+await t('wiring：client 四站（DEFAULT_BOOT/VoiceBootConfig/bootNow/fetchConfig）+ correctDraft', () => {
   assert.ok((clientSrc.match(/llmCorrect: false/g) ?? []).length === 2, 'DEFAULT_BOOT+bootNow 缺')
   assert.ok(clientSrc.includes('llmCorrect: boolean'), 'VoiceBootConfig 缺')
   assert.ok(clientSrc.includes('llmCorrect: c.llmCorrect === true,'), 'fetchConfig 缺（=== true：默认关）')
@@ -162,19 +170,22 @@ t('wiring：client 四站（DEFAULT_BOOT/VoiceBootConfig/bootNow/fetchConfig）+
   assert.ok(win.includes('AbortSignal.timeout'), 'correctDraft 缺超时')
 })
 
-t('wiring：submitDraftNow 纠错预步（默认关才走+命令不纠错+失败回退 runSubmit）', () => {
+await t('wiring：submitDraftNow 纠错预步（默认关才走+命令不纠错+失败回退 runSubmit）', () => {
   const idx = clientSrc.indexOf("bootNow().llmCorrect === true")
   assert.ok(idx >= 0, '缺纠错分支条件')
-  const win = clientSrc.slice(idx - 100, idx + 400)
+  // 窗口取到纠错分支结束（下一个 '}, AUTO_SEND' 定时器注册处）而非固定长度：
+  // client 侧有效性复核块在历次审查中逐轮增厚，固定窗口会把 runSubmit 切在窗外。
+  const branchEnd = clientSrc.indexOf('}, AUTO_SEND', idx)
+  const win = clientSrc.slice(idx - 100, branchEnd > idx ? branchEnd : idx + 400)
   assert.ok(win.includes("draftSnapshot.startsWith('/')"), '命令草稿未排除（会绕过宿主 adjudication）')
   assert.ok(win.includes('correctDraft(draftSnapshot).then'), '未走 correctDraft')
   assert.ok(win.includes('runSubmit(finalText)'), '未回退 runSubmit（纠错失败=不发送）')
 })
 
-t('wiring 顺序（审查 I4）：纠错分支 correctDraft.then 后必须 return（删 return=双发）', () => {
+await t('wiring 顺序（审查 I4）：纠错分支 correctDraft.then 后必须 return（删 return=双发）', () => {
   const idx = clientSrc.indexOf('correctDraft(draftSnapshot).then')
   assert.ok(idx >= 0, '缺纠错调用')
-  const win = clientSrc.slice(idx, idx + 700)
+  const win = clientSrc.slice(idx, idx + 1400)
   const runIdx = win.indexOf('runSubmit(finalText)')
   assert.ok(runIdx >= 0, 'then 内未调 runSubmit')
   const returnIdx = win.indexOf('return', runIdx)
@@ -183,14 +194,19 @@ t('wiring 顺序（审查 I4）：纠错分支 correctDraft.then 后必须 retur
   assert.ok(tail.includes('runSubmit(draftSnapshot)'), 'then+return 之后未见非纠错路径的 runSubmit(draftSnapshot)')
 })
 
-t('wiring（审查 I1）：纠错 then 内必须有效性复核（RTT 内退出/改写 → 放弃发送）', () => {
+await t('wiring（审查 I1）：纠错 then 内必须有效性复核（RTT 内退出/改写 → 放弃发送）', () => {
   const idx = clientSrc.indexOf('correctDraft(draftSnapshot).then')
-  const win = clientSrc.slice(idx, idx + 700)
+  const win = clientSrc.slice(idx, idx + 1400)
   assert.ok(win.includes('submitInFlightRef.current'), '缺在途标记复核——退出/打字/抢占后幽灵提交')
-  assert.ok(win.includes("draftRef.current.trim() !== draftSnapshot"), '缺草稿未变复核——用户改写后旧 snapshot 覆盖用户文本')
+  // 草稿未变复核：早年为 !== 写法，Issue #15 UX-I2 起收敛为 valid 表达式里的
+  // === 判断（语义等价：任一条件不成立即放弃发送）。两种写法都接受。
+  assert.ok(
+    win.includes("draftRef.current.trim() !== draftSnapshot") || /draftRef\.current\.trim\(\) === draftSnapshot/.test(win),
+    '缺草稿未变复核——用户改写后旧 snapshot 覆盖用户文本',
+  )
 })
 
-t('wiring（审查 I2）：steer 守卫基线按写回是否落地取（wroteBack）', () => {
+await t('wiring（审查 I2）：steer 守卫基线按写回是否落地取（wroteBack）', () => {
   const idx = clientSrc.indexOf('wroteBack')
   assert.ok(idx >= 0, '缺写回成功跟踪')
   assert.ok(clientSrc.includes('wroteBack = true'), '写回成功未记录')

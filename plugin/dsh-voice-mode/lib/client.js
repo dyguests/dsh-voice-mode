@@ -513,6 +513,7 @@ function createAsrEngine(config, sessionId) {
   let partialFailStreak = 0;
   let detectFailStreak = 0;
   let salvagedSegment = false;
+  let yieldedSegment = false;
   const asrUrl = (final, offset, epoch) => `${location.origin}${config.basePath.replace(/\/+$/, "")}/asr?sessionId=${encodeURIComponent(sessionId)}&final=${final ? 1 : 0}` + (offset !== void 0 ? `&offset=${offset}` : "") + (epoch !== void 0 ? `&epoch=${epoch}` : "") + // 批 7N（ADR-0006）：manual 模式下上传带 &manual=1，host 服务端据此放行（防御性守卫）。
   // handleAudio 入口已先在 manual + !holdActive 时 early return，所以能到这儿的帧必然
   // holdActive=true；带 manual=1 仅是冗余信号（host 拿不到 holdActive 状态）。
@@ -536,6 +537,10 @@ function createAsrEngine(config, sessionId) {
       } catch {
       }
     }
+  };
+  const resetFailStreaks = () => {
+    partialFailStreak = 0;
+    detectFailStreak = 0;
   };
   const sliceChunks = (chunks, from) => {
     let total = 0;
@@ -571,17 +576,20 @@ function createAsrEngine(config, sessionId) {
       let res = await fetch(asrUrl(false, from, epoch), {
         method: "POST",
         headers: { "content-type": "application/octet-stream" },
-        body: samples.buffer
+        body: samples.buffer,
+        signal: AbortSignal.timeout(5e3)
       });
       if (res.status === 202) {
-        setState("loading-model");
+        if (state !== "wake") setState("loading-model");
         const retry = await new Promise((resolve) => {
           setTimeout(async () => {
             try {
               const r2 = await fetch(asrUrl(false, from, epoch), {
                 method: "POST",
                 headers: { "content-type": "application/octet-stream" },
-                body: samples.buffer
+                body: samples.buffer,
+                signal: AbortSignal.timeout(5e3)
+                // I1：重试同样要超时（否则重试挂起仍锁死 partialInFlight）
               });
               resolve(r2);
             } catch {
@@ -599,7 +607,9 @@ function createAsrEngine(config, sessionId) {
             res = await fetch(asrUrl(false, 0, epoch), {
               method: "POST",
               headers: { "content-type": "application/octet-stream" },
-              body: sliceSince(0).buffer
+              body: sliceSince(0).buffer,
+              signal: AbortSignal.timeout(5e3)
+              // I1：恢复重发同样要超时（挂起不 reject 会锁死 partialInFlight）
             });
           } catch {
           }
@@ -627,6 +637,7 @@ function createAsrEngine(config, sessionId) {
       emit(partialListeners, wakeConsumed ? stripWakePrefix(out.text ?? "", wakeWord) : out.text ?? "");
       if (config.backchannelYield !== false && // 默认 true（I10 豁免）；显式 false 时跳过
       speechActive && (config.isPlaying?.() ?? false) && matchBackchannel(out.text ?? "")) {
+        yieldedSegment = true;
         config.onBackchannel?.();
       }
       if (out.endpoint && active && speechActive && !holdActive) finalizeSegment();
@@ -724,6 +735,7 @@ function createAsrEngine(config, sessionId) {
     wakeSilenceMs = 0;
     wakeConsumed = false;
     salvagedSegment = false;
+    yieldedSegment = false;
     prePad = [];
     uploadedSamples = 0;
     void resetHostStream();
@@ -746,6 +758,8 @@ function createAsrEngine(config, sessionId) {
     wakeConsumed = false;
     const wasSalvaged = salvagedSegment;
     salvagedSegment = false;
+    const wasYielded = yieldedSegment;
+    yieldedSegment = false;
     forcePending = false;
     speechMs = 0;
     uploadedSamples = 0;
@@ -777,7 +791,6 @@ function createAsrEngine(config, sessionId) {
             body
           });
         } catch {
-          restoreState();
           if (attempt === MAX_FINAL_ATTEMPTS - 1) console.warn("[dsh-voice-mode] finalize fetch failed (retries exhausted)");
           continue;
         }
@@ -820,7 +833,6 @@ function createAsrEngine(config, sessionId) {
             }
           }
         }
-        restoreState();
         if (!res.ok) {
           if (attempt === MAX_FINAL_ATTEMPTS - 1) console.warn("[dsh-voice-mode] finalize 5xx (retries exhausted)");
           continue;
@@ -833,10 +845,13 @@ function createAsrEngine(config, sessionId) {
           continue;
         }
         if (segmentEpoch !== epochSnapshot + 1) return;
+        resetFailStreaks();
+        restoreState();
         const rawText = out.text ?? "";
         const finalText = consumedWake ? stripWakePrefix(rawText, wakeWord) : rawText;
         if (finalText) {
-          if (wasSalvaged && matchBackchannel(finalText)) {
+          if ((wasSalvaged || wasYielded) && matchBackchannel(finalText)) {
+            emit(noticeListeners, "backchannelDropped");
             if (active && wakeEnabled) setState("listening");
             return;
           }
@@ -846,6 +861,7 @@ function createAsrEngine(config, sessionId) {
         }
         return;
       }
+      restoreState();
       emitError("recognitionFail");
     })();
   };
@@ -992,6 +1008,8 @@ function createAsrEngine(config, sessionId) {
           segment = [];
           speechActive = false;
           salvagedSegment = false;
+          yieldedSegment = false;
+          resetFailStreaks();
           speechMs = 0;
           silenceMs = 0;
           segmentMs = 0;
@@ -1021,9 +1039,21 @@ function createAsrEngine(config, sessionId) {
       }
     }
   };
+  const abandonStart = async (myStream, myCtx) => {
+    try {
+      myStream.getTracks().forEach((t3) => t3.stop());
+    } catch {
+    }
+    if (stream === myStream) stream = null;
+    try {
+      await myCtx.close();
+    } catch {
+    }
+    if (audioCtx === myCtx) audioCtx = null;
+  };
   const startRecorder = async () => {
     const mySeq = startSeq;
-    stream = await navigator.mediaDevices.getUserMedia({
+    const myStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         echoCancellation: true,
@@ -1036,10 +1066,10 @@ function createAsrEngine(config, sessionId) {
       }
     });
     if (stopRequested || mySeq !== startSeq) {
-      stream.getTracks().forEach((t3) => t3.stop());
-      stream = null;
+      myStream.getTracks().forEach((t3) => t3.stop());
       return;
     }
+    stream = myStream;
     const aecOn = stream.getAudioTracks()[0]?.getSettings().echoCancellation === true;
     if (!aecOn) {
       console.warn("[dsh-voice-mode] native browser echoCancellation is not in effect (speakers may self-interrupt); use headphones or manual barge-in");
@@ -1049,10 +1079,15 @@ function createAsrEngine(config, sessionId) {
     }
     config.onAecState?.(aecOn);
     const AC = window.AudioContext ?? window.webkitAudioContext;
-    audioCtx = new AC({ sampleRate: SAMPLE_RATE2 });
+    const myCtx = new AC({ sampleRate: SAMPLE_RATE2 });
+    audioCtx = myCtx;
     try {
       await audioCtx.resume?.();
     } catch {
+    }
+    if (stopRequested || mySeq !== startSeq) {
+      await abandonStart(myStream, myCtx);
+      return;
     }
     ctxRate = audioCtx.sampleRate;
     const source = audioCtx.createMediaStreamSource(stream);
@@ -1062,6 +1097,10 @@ function createAsrEngine(config, sessionId) {
           workletBlobUrl = URL.createObjectURL(new Blob(['"use strict";\n(() => {\n  // src/resample.ts\n  function resampleLinear(src, srcRate, dstRate) {\n    if (srcRate === dstRate) return src;\n    if (src.length === 0) return src;\n    const ratio = srcRate / dstRate;\n    const outLen = Math.max(1, Math.floor(src.length / ratio));\n    const out = new Float32Array(outLen);\n    for (let i = 0; i < outLen; i++) {\n      const pos = i * ratio;\n      const i0 = Math.floor(pos);\n      const i1 = Math.min(i0 + 1, src.length - 1);\n      const frac = pos - i0;\n      out[i] = src[i0] + (src[i1] - src[i0]) * frac;\n    }\n    return out;\n  }\n\n  // src/audio-worklet.ts\n  var TARGET_RATE = 16e3;\n  var CHUNK = 1024;\n  var RATIO = sampleRate / TARGET_RATE;\n  var NEED = Math.ceil(CHUNK * RATIO);\n  var VoiceCaptureProcessor = class extends AudioWorkletProcessor {\n    acc = new Float32Array(0);\n    accLen = 0;\n    process(inputs) {\n      const ch = inputs[0]?.[0];\n      if (ch && ch.length > 0) this.push(ch);\n      this.drain();\n      return true;\n    }\n    push(ch) {\n      if (this.accLen + ch.length > this.acc.length) {\n        let cap = this.acc.length > 0 ? this.acc.length : NEED * 2;\n        while (cap < this.accLen + ch.length) cap *= 2;\n        const next = new Float32Array(cap);\n        next.set(this.acc.subarray(0, this.accLen));\n        this.acc = next;\n      }\n      this.acc.set(ch, this.accLen);\n      this.accLen += ch.length;\n    }\n    drain() {\n      while (this.accLen >= NEED) {\n        const src = sampleRate === TARGET_RATE ? this.acc.subarray(0, CHUNK) : resampleLinear(this.acc.subarray(0, NEED), sampleRate, TARGET_RATE);\n        const chunk = new Float32Array(CHUNK);\n        chunk.set(src.length >= CHUNK ? src.subarray(0, CHUNK) : src);\n        this.port.postMessage(chunk, [chunk.buffer]);\n        this.acc.copyWithin(0, NEED, this.accLen);\n        this.accLen -= NEED;\n      }\n    }\n  };\n  registerProcessor("voice-capture", VoiceCaptureProcessor);\n})();\n'], { type: "text/javascript" }));
         }
         await audioCtx.audioWorklet.addModule(workletBlobUrl);
+        if (stopRequested || mySeq !== startSeq) {
+          await abandonStart(myStream, myCtx);
+          return;
+        }
         workletNode = new AudioWorkletNode(audioCtx, "voice-capture", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
         workletNode.port.onmessage = (e) => {
           handleAudio(e.data);
@@ -1088,6 +1127,7 @@ function createAsrEngine(config, sessionId) {
     active = true;
   };
   const stopRecorder = async () => {
+    const myCtx = audioCtx;
     inFlush = true;
     segmentEpoch++;
     forcePending = false;
@@ -1099,6 +1139,7 @@ function createAsrEngine(config, sessionId) {
     speechMs = 0;
     wakeSilenceMs = 0;
     wakeConsumed = false;
+    yieldedSegment = false;
     uploadedSamples = 0;
     prePad = [];
     detectChunks = [];
@@ -1127,11 +1168,13 @@ function createAsrEngine(config, sessionId) {
     }
     stream = null;
     try {
-      await audioCtx?.close();
+      await myCtx?.close();
     } catch {
     }
-    audioCtx = null;
-    ctxRate = SAMPLE_RATE2;
+    if (audioCtx === myCtx) {
+      audioCtx = null;
+      ctxRate = SAMPLE_RATE2;
+    }
     inFlush = false;
   };
   return {
@@ -1167,6 +1210,10 @@ function createAsrEngine(config, sessionId) {
       preRollSeedWall = null;
       wasPlaying = false;
       salvagedSegment = false;
+      yieldedSegment = false;
+      latestResidualRms = 0;
+      echoFloorRms = 0;
+      echoPeak = 0;
       setState(wakeEnabled ? "wake" : "listening");
       try {
         await startRecorder();
@@ -1177,6 +1224,8 @@ function createAsrEngine(config, sessionId) {
     },
     async stop() {
       stopRequested = true;
+      startSeq++;
+      const myStopSeq = startSeq;
       const wasActive = active;
       active = false;
       if (!wasActive) {
@@ -1184,11 +1233,10 @@ function createAsrEngine(config, sessionId) {
         return;
       }
       await stopRecorder();
-      setState("idle");
+      if (startSeq === myStopSeq) setState("idle");
     },
     forceSend() {
-      const speechS = segment.reduce((n, c) => n + c.length, 0) / SAMPLE_RATE2;
-      if (speechActive && speechS >= 0.25) {
+      if (speechActive && speechMs >= MIN_SPEECH_MS) {
         forcePending = true;
         lastPollAt = 0;
         finalizeSegment();
@@ -1200,6 +1248,8 @@ function createAsrEngine(config, sessionId) {
       segmentEpoch++;
       wakeConsumed = false;
       salvagedSegment = false;
+      yieldedSegment = false;
+      resetFailStreaks();
       utteranceEndAt = null;
       segment = [];
       segmentMs = 0;
@@ -1225,6 +1275,7 @@ function createAsrEngine(config, sessionId) {
       wakeSilenceMs = 0;
       wakeConsumed = false;
       salvagedSegment = false;
+      yieldedSegment = false;
       speechActive = false;
       prePad = [];
       uploadedSamples = 0;
@@ -1274,10 +1325,13 @@ function createAsrEngine(config, sessionId) {
         segmentEpoch++;
         segment = [];
         salvagedSegment = false;
+        yieldedSegment = false;
+        resetFailStreaks();
         segmentMs = 0;
         silenceMs = 0;
         prePad = [];
         speechActive = false;
+        utteranceEndAt = null;
         forcePending = false;
         setState(wakeEnabled ? "wake" : "listening");
         return;
@@ -1288,6 +1342,7 @@ function createAsrEngine(config, sessionId) {
         finalizeSegment();
       } else {
         forcePending = false;
+        speechActive = false;
         setState(wakeEnabled ? "wake" : "listening");
       }
     },
@@ -1508,8 +1563,15 @@ var zh = {
   disabled: "\u8BED\u97F3\u6A21\u5F0F\u5DF2\u7981\u7528\uFF08\u63D2\u4EF6 enabled=false\uFF09",
   sendFailKept: "\u53D1\u9001\u5931\u8D25\uFF0C\u5DF2\u4FDD\u7559\u5728\u8349\u7A3F",
   micDenied: "\u9EA6\u514B\u98CE\u88AB\u62D2\u7EDD\uFF1A\u8BF7\u5728\u6D4F\u89C8\u5668\u5730\u5740\u680F\u5141\u8BB8\u9EA6\u514B\u98CE\u6743\u9650",
+  micBusy: "\u9EA6\u514B\u98CE\u88AB\u5176\u4ED6\u7A0B\u5E8F\u5360\u7528\uFF1A\u8BF7\u5173\u95ED\u5360\u7528\u7A0B\u5E8F\u540E\u91CD\u8BD5",
   micUnavailable: "\u9EA6\u514B\u98CE\u4E0D\u53EF\u7528",
   recognizing: "\u8BC6\u522B\u4E2D\u2026",
+  // UX-I1 联动态：纠错在途 / 纠错放弃回退 / 附和词忽略 / 语音按钮态文案。
+  correctFixing: "\u7EA0\u9519\u4E2D\u2026",
+  correctAbandoned: "\u5DF2\u4FDD\u7559\u539F\u6587\u5728\u8349\u7A3F",
+  backchannelDropped: "\u5DF2\u5FFD\u7565\u9644\u548C\u8BCD\uFF0C\u4E0D\u53D1\u9001",
+  buttonLoading: "\u52A0\u8F7D\u4E2D\u2026",
+  buttonListening: "\u8046\u542C\u4E2D",
   holdToTalk: "\u6309\u4F4F\u8BF4\u8BDD",
   releaseToSend: "\u677E\u5F00\u53D1\u9001",
   voiceDetected: "\u8BED\u97F3\u4E2D",
@@ -1518,7 +1580,7 @@ var zh = {
   ariaActive: "\u8BED\u97F3\u6A21\u5F0F\u8FDB\u884C\u4E2D",
   ariaEnter: "\u8FDB\u5165\u8BED\u97F3\u5BF9\u8BDD\u6A21\u5F0F",
   titleHold: "\u8BED\u97F3\u6A21\u5F0F\u8FDB\u884C\u4E2D \xB7 \u6309\u4F4F\u8BF4\u8BDD\u3001\u677E\u624B\u53D1\u9001\uFF1B\u77ED\u6309\u9000\u51FA\uFF1BEsc/\u5931\u53BB\u7126\u70B9\u653E\u5F03\uFF1BCtrl+Shift+V \u9000\u51FA",
-  titleToggle: "\u8BED\u97F3\u6A21\u5F0F\u8FDB\u884C\u4E2D \xB7 \u70B9\u51FB\u9000\u51FA\uFF08Ctrl+Shift+V\uFF09\xB7 \u6309\u4F4F Ctrl \u7ACB\u5373\u53D1\u9001",
+  titleToggle: "\u8BED\u97F3\u6A21\u5F0F\u8FDB\u884C\u4E2D \xB7 \u70B9\u51FB\u9000\u51FA\uFF08Ctrl+Shift+V\uFF09\xB7 \u8BF4\u8BDD\u65F6\u6309\u4F4F Ctrl \u7ACB\u5373\u53D1\u9001",
   titleEnter: "\u8FDB\u5165\u8BED\u97F3\u5BF9\u8BDD\u6A21\u5F0F\uFF08Ctrl+Shift+V\uFF09",
   loadingModel: "\u6B63\u5728\u52A0\u8F7D\u6A21\u578B\u2026",
   listening: "\u8046\u542C\u4E2D\u2026",
@@ -1570,7 +1632,7 @@ var zh = {
   descVoiceKokoro: "Kokoro \u4E2D\u82F1\u97F3\u8272\uFF08103 \u4E2A\u5168\u90E8\u5217\u51FA\uFF0C\u4E0B\u62C9\u9009\u6216 \u25C0\u25B6 \u5207\u6362\uFF1B48-51 \u4E2D\u6587\u540D\uFF0C\u5176\u4F59\u6309\u7F16\u53F7+\u5B9E\u6D4B\u6027\u522B\u6807\u6CE8\uFF0C\u4E2D\u82F1\u6DF7\u8BFB\u5747\u53EF\uFF09",
   descRate: "\u6717\u8BFB\u8BED\u901F\u500D\u7387\uFF080.5 \u6162\u901F \uFF5E 2.0 \u5FEB\u901F\uFF0C1.1 \u9ED8\u8BA4\uFF1B\u8BA9\u56DE\u590D\u66F4\u7D27\u51D1\uFF09",
   descInterrupt: "\u53D1\u58F0\u6253\u65AD\u7075\u654F\u5EA6\uFF080 \u9AD8\u95E8\u69DB \u22480.3s \u786E\u8BA4 / 1 \u4E2D\u95E8\u69DB \u22480.2s / 2 \u4F4E\u95E8\u69DB \u22480.1s\uFF0C\u6700\u7075\u654F\uFF09\uFF1B\u503C\u8D8A\u4F4E\u95E8\u69DB\u8D8A\u9AD8\uFF0C\u8D8A\u96BE\u6253\u65AD",
-  descBargeIn: "\u6253\u65AD\u65B9\u5F0F\uFF08detect \u81EA\u52A8\u63A2\u6D4B\u672C\u673A\u56DE\u58F0\u6D88\u9664\u72B6\u6001\u3001\u672A\u751F\u6548\u65F6\u5207\u4E3A\u957F\u6309\u6253\u65AD\uFF0C\u9ED8\u8BA4\uFF1Bauto \u5F3A\u5236\u81EA\u52A8\u6253\u65AD\uFF1A\u5F00\u53E3\u5373\u6253\u65AD\uFF0C\u8033\u673A/\u5B89\u9759\u73AF\u5883\u63A8\u8350\uFF1Bmanual \u624B\u52A8\u6253\u65AD\uFF1A\u5916\u653E\u63A8\u8350\u2014\u2014\u56DE\u58F0\u4E0D\u4F1A\u8BEF\u89E6\u53D1\u81EA\u6253\u65AD\uFF0C\u6309\u4F4F\u9EA6\u514B\u98CE/Ctrl \u663E\u5F0F\u6253\u65AD\uFF09",
+  descBargeIn: "\u6253\u65AD\u65B9\u5F0F\uFF08detect \u81EA\u52A8\u63A2\u6D4B\u672C\u673A\u56DE\u58F0\u6D88\u9664\u72B6\u6001\u3001\u672A\u751F\u6548\u65F6\u5207\u4E3A\u957F\u6309\u6253\u65AD\uFF0C\u9ED8\u8BA4\uFF1Bauto \u5F3A\u5236\u81EA\u52A8\u6253\u65AD\uFF1A\u5F00\u53E3\u5373\u6253\u65AD\uFF0C\u8033\u673A/\u5B89\u9759\u73AF\u5883\u63A8\u8350\uFF1Bmanual \u624B\u52A8\u6253\u65AD\uFF1A\u5916\u653E\u63A8\u8350\u2014\u2014\u56DE\u58F0\u4E0D\u4F1A\u8BEF\u89E6\u53D1\u81EA\u6253\u65AD\uFF0C\u6309\u4F4F\u9EA6\u514B\u98CE/Ctrl \u663E\u5F0F\u6253\u65AD\uFF09\u3002\u6CE8\u610F\uFF1Amanual\uFF08detect \u5728\u65E0\u539F\u751F\u56DE\u58F0\u6D88\u9664\u7684\u673A\u5668\u4E0A\u4E5F\u4F1A\u81EA\u52A8\u843D\u5165\uFF09\u4E0B\u975E\u6309\u538B\u671F\u7684\u8BED\u97F3\u4E0D\u88AB\u8BC6\u522B\u2014\u2014toggle \u6A21\u5F0F\u4EC5\u64AD\u653E\u4E2D\u53EF\u957F\u6309\u8BF4\u8BDD\uFF0C\u5F85\u673A\u65F6\u65E0\u6CD5\u8BED\u97F3\u8F93\u5165\uFF0C\u8BF7\u6539\u7528 hold \u6A21\u5F0F\u6216 auto/detect",
   bargeInDetect: "\u81EA\u52A8\u63A2\u6D4B",
   bargeInAuto: "\u81EA\u52A8",
   bargeInManual: "\u624B\u52A8",
@@ -1581,23 +1643,29 @@ var zh = {
   aecOffHint: "\u6D4F\u89C8\u5668\u539F\u751F\u56DE\u58F0\u6D88\u9664\u672A\u751F\u6548\uFF08\u5916\u653E\u53EF\u80FD\u81EA\u6253\u65AD\uFF09\uFF0C\u5EFA\u8BAE\u7528\u8033\u673A\u6216\u5207\u6362\u300C\u624B\u52A8\u6253\u65AD\u300D",
   // 批 7O（ADR-0006）：detect 模式第一级探测降级提示（状态条）。
   bargeInDetectFallback: "\u672C\u673A\u56DE\u58F0\u6D88\u9664\u672A\u751F\u6548\uFF0C\u5DF2\u5207\u4E3A\u957F\u6309\u6253\u65AD",
+  // R1 收尾（fix-client 直连 tk() 调用）：连续 3 次回声拒断的解释出口 + 快捷键非法停用提示。
+  echoRejectHint: "\u56DE\u58F0\u8F83\u5F3A\uFF0C\u6253\u65AD\u53EF\u80FD\u4E0D\u7075\u654F\u2014\u2014\u8FD9\u662F\u56DE\u58F0\u9632\u62A4\u5728\u751F\u6548\uFF0C\u53EF\u6234\u8033\u673A\u6216\u6539\u7528\u300C\u624B\u52A8\u6253\u65AD\u300D",
+  shortcutInvalid: "\u5FEB\u6377\u952E\u65E0\u6548\uFF0C\u5DF2\u505C\u7528\uFF08\u53EF\u5728\u8BBE\u7F6E\u91CC\u6539\u4E3A\u5982 Ctrl+Shift+V\uFF1B\u7559\u7A7A\u8868\u793A\u53EA\u7528\u9EA6\u514B\u98CE\u6309\u94AE\uFF09",
   elapsedHint: "\u5F53\u524D\u8BED\u97F3\u4F1A\u8BDD\u5DF2\u7528\u65F6\u957F",
   botLevelsHint: "AI \u6717\u8BFB\u97F3\u91CF\uFF08\u84DD\u8272\u6761 = \u6717\u8BFB\uFF0C\u7EFF\u8272\u6761 = \u9EA6\u514B\u98CE\uFF09",
   interruptConfirm: "\u6253\u65AD\u786E\u8BA4",
   sev0: "0 \u9AD8\u95E8\u69DB",
   sev1: "1 \u4E2D",
   sev2: "2 \u4F4E",
+  // 数值单位（设置卡片「当前生效值」用：中文汉字单位、英文国际缩写，避免「1500 ms」直出）
+  unitMs: "\u6BEB\u79D2",
+  unitMin: "\u5206\u949F",
+  unitDb: "\u5206\u8D1D",
   descSilence: "\u8BF4\u5B8C\u6574\u4E00\u53E5\u7684\u9759\u97F3\u505C\u987F\u6BEB\u79D2\u6570\uFF08\u9ED8\u8BA4 1500 \u6BEB\u79D2\uFF0C\u7ED9\u601D\u8003\u505C\u987F\u7559\u7A7A\u95F4\uFF1B\u81F3\u5C11 250ms \u8BED\u97F3\u624D\u5224\u53E5\uFF0C\u9632\u77ED\u4FC3\u566A\u58F0\u8BEF\u89E6\u53D1\uFF09",
-  descIdle: "\u65E0\u6D3B\u52A8\u81EA\u52A8\u9000\u51FA\u8BED\u97F3\u6A21\u5F0F\u7684\u5206\u949F\u6570\uFF08\u9ED8\u8BA4 5\uFF1B\u6279 G \u4EFB\u52A1 2 \u5DF2\u52A0 30s \u5012\u6570\u9884\u8B66\uFF09",
+  descIdle: "\u65E0\u6D3B\u52A8\u81EA\u52A8\u9000\u51FA\u8BED\u97F3\u6A21\u5F0F\u7684\u5206\u949F\u6570\uFF08\u9ED8\u8BA4 5\uFF1B\u9000\u51FA\u524D 30 \u79D2\u4F1A\u6709\u5012\u6570\u9884\u8B66\uFF09",
   descModelHost: "ASR \u6A21\u578B\u4E0B\u8F7D\u6E90\uFF08\u5B98\u65B9\u6E90 / \u56FD\u5185\u955C\u50CF\uFF0C\u6216\u9009\u300C\u81EA\u5B9A\u4E49\u300D\u586B\u4EFB\u610F\u955C\u50CF\uFF09",
-  descAutoSend: "\u9759\u97F3\u5230\u70B9\u81EA\u52A8\u53D1\u9001\uFF08\u8FDE\u7EED\u591A\u6BB5\u62FC\u6210\u4E00\u6761\uFF1B\u5173=\u53EA\u8FDB\u8349\u7A3F\uFF1B\u6309\u4F4F Ctrl / hold \u677E\u624B\u4ECD\u53D1\u9001\uFF09",
+  descAutoSend: "\u9759\u97F3\u5230\u70B9\u81EA\u52A8\u53D1\u9001\uFF08\u8FDE\u7EED\u591A\u6BB5\u62FC\u6210\u4E00\u6761\uFF1B\u5173=\u53EA\u8FDB\u8349\u7A3F\uFF1B\u8BF4\u8BDD\u8FC7\u7A0B\u4E2D\u6309\u4F4F Ctrl \u53EF\u7ACB\u5373\u53D1\u9001\uFF0Chold \u6A21\u5F0F\u677E\u624B\u5373\u53D1\u9001\uFF09",
   // 批 7N 重做 5/5：明确「开启后下次进入语音会话即生效」——消除「点完为何不立即恢复」的预期差。
   descAutoResume: "\u5207\u6362\u56DE\u4E0A\u6B21\u8BED\u97F3\u4F1A\u8BDD\u65F6\u81EA\u52A8\u6062\u590D\u8BED\u97F3\u6A21\u5F0F\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5F00\u542F\u540E\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u4F1A\u8BDD\u5373\u751F\u6548\u2014\u2014\u81EA\u52A8\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F + \u6062\u590D\u4E0A\u6B21\u4F1A\u8BDD\uFF1B\u5173\u95ED\u5219\u9700\u624B\u52A8\u6309 Ctrl+Shift+V \u91CD\u65B0\u8FDB\u5165\uFF09",
   descSpokenFormat: "\u8BED\u97F3\u4F1A\u8BDD\u6CE8\u5165\u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u56DE\u590D\u53E3\u8BED\u5316\u3001\u77ED\u53E5\u3001\u4E0D\u7528 Markdown \u6392\u7248\u7B26\u53F7\uFF0C\u6717\u8BFB\u66F4\u987A\u66F4\u5FEB\uFF1B\u9ED8\u8BA4\u5F00\uFF0C\u6539\u52A8\u5373\u65F6\u751F\u6548\uFF09",
   descSenseVoice: "\u8BC6\u522B\u6A21\u5F0F\uFF1A\u5F00 = \u51C6\u786E\u6A21\u5F0F\uFF08SenseVoice \u5B9A\u7A3F\uFF0C\u5E26\u6807\u70B9+\u6570\u5B57\u5F52\u4E00\u5316\uFF0C\u957F\u53E5\u5728 CPU \u4E0A\u53EF\u80FD\u7B49\u6570\u79D2\uFF09\uFF1B\u5173 = \u5FEB\u901F\u6A21\u5F0F\uFF08\u6D41\u5F0F\u7ED3\u679C\u76F4\u63A5\u5B9A\u7A3F\uFF0C\u4E0D\u7B49 228MB \u91CD\u8BD1\u6A21\u578B\uFF0C\u51C6\u786E\u5EA6\u7565\u964D\uFF09",
   recognizingSec: "\u8BC6\u522B\u4E2D\u2026 {sec}s",
   descToolBeep: '\u5DE5\u5177\u8C03\u7528\u63D0\u793A\u97F3\uFF08\u9ED8\u8BA4\u5173\uFF09\uFF1AAI \u601D\u8003/\u8C03\u7528\u5DE5\u5177\u65F6"\u6EF4"\u4E00\u58F0\uFF1B\u5ACC\u5435\u5C31\u4FDD\u6301\u5173\u95ED',
-  senseITN: "\u9006\u6587\u672C\u5F52\u4E00\u5316",
   descSenseITN: "SenseVoice \u6570\u5B57/\u65E5\u671F/\u683C\u5F0F\u89C4\u8303\u5316\uFF08\u9ED8\u8BA4\u5F00\uFF1B\u5173\u95ED\u540E\u8F93\u51FA\u66F4\u63A5\u8FD1\u53E3\u8BED\u539F\u6587\uFF09",
   descCaptionFontSize: "\u6D6E\u5C42\u5B57\u5E55\u5B57\u53F7\u6863\u4F4D\uFF08\u5C0F 12 / \u6807\u51C6 14 / \u5927 18 / \u7279\u5927 24 px\uFF1B\u9ED8\u8BA4\u5C0F\u4E0E\u73B0\u72B6\u5B57\u8282\u7B49\u4EF7\uFF09",
   descCaptionMaxWidth: "\u6D6E\u5C42\u5B57\u5E55\u5BBD\u5EA6\u6863\u4F4D\uFF0850vw / 70vw / 90vw\uFF1B\u9ED8\u8BA4 70vw\uFF1B24px \u591A\u884C\u65F6\u53D7 30vh \u9AD8\u5EA6\u7EA6\u675F\u4E0D\u76D6\u8F93\u5165\u6846\uFF09",
@@ -1608,23 +1676,20 @@ var zh = {
   captionWidth50: "\u7A84",
   captionWidth70: "\u4E2D",
   captionWidth90: "\u5BBD",
-  skipReading: "\u8DF3\u8FC7\u5F53\u524D\u6717\u8BFB",
-  backchannelYield: "\u77ED\u5E94\u7B54\u8BA9\u4F4D",
-  descBackchannelYield: "\u6717\u8BFB\u671F\u7528\u6237\u8BF4\u300C\u55EF/\u5BF9\u300D\u7B49\u77ED\u5E94\u7B54\u65F6\u81EA\u52A8\u8BA9\u4F4D\uFF08\u8DF3\u8FC7\u5F53\u524D TTS \u53E5 + \u77ED\u6682\u4E22\u5E27 1.5s\uFF1B\u771F\u8981\u8BF4\u5219\u539F hardBreak \u63A5\u7BA1\uFF1B\u5173 = \u4E0D\u8BA9\u4F4D\uFF0C\u884C\u4E3A\u7B49\u540C\u6539\u9020\u524D\uFF09",
+  // 跳过按钮：只跳当前 TTS 句（非整段朗读）——UX 审查歧义修正。
+  skipReading: "\u8DF3\u8FC7\u672C\u53E5",
+  descBackchannelYield: "\u6717\u8BFB\u671F\u7528\u6237\u8BF4\u300C\u55EF/\u5BF9\u300D\u7B49\u77ED\u5E94\u7B54\u65F6\u81EA\u52A8\u8BA9\u4F4D\uFF08\u8DF3\u8FC7\u5F53\u524D TTS \u53E5 + \u77ED\u6682\u4E22\u5E27 1.5s\uFF1B\u771F\u8981\u8BF4\u5219\u539F hardBreak \u63A5\u7BA1\uFF1B\u5173 = \u4E0D\u8BA9\u4F4D\uFF0C\u884C\u4E3A\u7B49\u540C\u6539\u9020\u524D\uFF09\u3002\u4EC5\u300C\u6309\u4F4F\u8BF4\u8BDD\u300D\u6A21\u5F0F\u64AD\u653E\u671F\u53EF\u89E6\u53D1\uFF1A\u300C\u6301\u7EED\u8046\u542C\u300D\u6A21\u5F0F\u64AD\u653E\u671F\u4E0D\u8BC6\u522B\u8BED\u97F3\uFF0C\u5F00\u53E3\u8BF4\u8BDD\u6309\u6253\u65AD\u5904\u7406",
   // Issue #15 批 1 / ADR-0012：打断语音抢救。
-  bargeInSalvage: "\u6253\u65AD\u8BED\u97F3\u62A2\u6551",
   descBargeInSalvage: "AI \u6717\u8BFB\u65F6\u4F60\u5F00\u53E3\u6253\u65AD\uFF1A\u81EA\u52A8\u4FDD\u7559\u4ECE\u5F00\u53E3\u5230\u6253\u65AD\u751F\u6548\u4E4B\u95F4\u4F60\u8BF4\u7684\u8BDD\uFF0C\u5E76\u5165\u8BC6\u522B\u7EE7\u7EED\u53D1\u9001\uFF08\u4FEE\u300C\u6253\u65AD\u5403\u53E5\u300D\uFF1B\u5173 = \u4E22\u5F03\u6253\u65AD\u524D\u8BED\u97F3\u2014\u2014\u4EC5\u5916\u653E\u4E14\u65E0\u56DE\u58F0\u6D88\u9664\u7684\u73AF\u5883\u5EFA\u8BAE\u5173\uFF09",
-  descLlmCorrect: "\u53D1\u9001\u524D\u7528\u5927\u6A21\u578B\u5BF9\u6574\u6761\u8BED\u97F3\u6587\u672C\u505A\u4E00\u6B21\u7EA0\u9519\uFF08\u53EA\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57/\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\uFF1B\u590D\u7528\u5BBF\u4E3B\u5DF2\u914D\u7F6E\u6A21\u578B\u3002\u5F00 = \u6BCF\u6761\u6D88\u606F\u591A\u4E00\u6B21\u7EA6 1 \u79D2\u7684\u7EA0\u9519\u7B49\u5F85\uFF1B\u7EA0\u9519\u5931\u8D25\u81EA\u52A8\u7528\u539F\u6587\uFF09",
-  // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
-  yieldMs: "\u8BA9\u4F4D\u7A97\u53E3",
-  descYieldMs: "\u8BA9\u4F4D\u8BED\u4E49\u89E6\u53D1\u540E\u7B49\u5F85\u65F6\u957F\uFF08\u6BEB\u79D2\uFF0C500-3000\uFF0C\u9ED8\u8BA4 1500\uFF1B\u7A97\u53E3\u5185\u7528\u6237\u771F\u8981\u8BF4\u5219\u539F hardBreak \u63A5\u7BA1\uFF0C\u7A97\u53E3\u5230\u70B9\u81EA\u52A8\u6062\u590D\u64AD\u653E\uFF09",
+  descLlmCorrect: "\u53D1\u9001\u524D\u7528\u5927\u6A21\u578B\u5BF9\u6574\u6761\u8BED\u97F3\u6587\u672C\u505A\u4E00\u6B21\u7EA0\u9519\uFF08\u53EA\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57/\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\uFF1B\u9700\u5BBF\u4E3B\u5DF2\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF0C\u672A\u914D\u7F6E\u5219\u81EA\u52A8\u7528\u539F\u6587\uFF09\u3002\u5F00 = \u6BCF\u6761\u6D88\u606F\u591A\u4E00\u6B21\u7EA0\u9519\u7B49\u5F85\uFF1A\u901A\u5E38 1 \u79D2\u5185\uFF0C\u6700\u957F\u7EA6 10 \u79D2\uFF1B\u6BCF\u5206\u949F\u6700\u591A 10 \u6B21\uFF0C\u8BED\u97F3\u6A21\u5F0F\u5173\u95ED\u6216\u89E6\u53D1\u9650\u6D41\u65F6\u6309\u539F\u6587\u53D1\u9001\u3002\u7EA0\u9519\u5931\u8D25\u6216\u8F93\u51FA\u5F02\u5E38\u540C\u6837\u81EA\u52A8\u7528\u539F\u6587",
+  descYieldMs: "\u8BA9\u4F4D\u8BED\u4E49\u89E6\u53D1\u540E\u7B49\u5F85\u65F6\u957F\uFF08\u6BEB\u79D2\uFF0C500-3000\uFF0C\u9ED8\u8BA4 1500\uFF1B\u7A97\u53E3\u5185\u7528\u6237\u771F\u8981\u8BF4\u5219\u539F hardBreak \u63A5\u7BA1\uFF0C\u7A97\u53E3\u5230\u70B9\u81EA\u52A8\u6062\u590D\u64AD\u653E\uFF09\u3002\u4EC5\u300C\u6309\u4F4F\u8BF4\u8BDD\u300D\u6A21\u5F0F\u64AD\u653E\u671F\u53EF\u89E6\u53D1",
   descMode: "\u4EA4\u4E92\u6A21\u5F0F\uFF08toggle \u6301\u7EED\u8046\u542C+\u9759\u97F3\u65AD\u53E5 / hold \u6309\u4F4F\u8BF4\u8BDD\uFF09",
   modeToggle: "\u6301\u7EED\u8046\u542C",
   modeHold: "\u6309\u4F4F\u8BF4\u8BDD",
-  descWakeWord: "\u5524\u9192\u8BCD\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5982\u300C\u4F60\u597D\u5C0FD\u300D\uFF09\uFF1A\u8BF4\u51FA\u8BCD\u5934\u624D\u8FDB\u5165\u8BC6\u522B\uFF0C\u907F\u514D\u8BEF\u89E6\u3002\u53EF\u4E0E\u547D\u4EE4\u8FDE\u8BF4\uFF08\u300C\u4F60\u597D\u5C0FD\uFF0C\u5E2E\u6211\u67E5\u5929\u6C14\u300D\u2014\u2014\u8BCD\u5934\u4F1A\u81EA\u52A8\u5265\u6389\u3001\u4E0D\u8FDB\u6D88\u606F\uFF09\uFF1B\u6BCF\u53E5\u65AD\u53E5\u6216\u6253\u65AD\u540E\u9700\u91CD\u8BF4\uFF1B\u4EC5 toggle \u6A21\u5F0F\u751F\u6548\uFF08hold / \u624B\u52A8\u6253\u65AD\u4E0B\u4E0D\u751F\u6548\uFF09\uFF1B\u6717\u8BFB\u671F\u8BF4\u5524\u9192\u8BCD\u4E0D\u89E6\u53D1\uFF08\u6253\u65AD\u4ECD\u6309 VAD \u5F00\u53E3\u5373\u6253\u65AD\uFF09\u3002\u5339\u914D\u5E26\u5BB9\u9519\uFF08\u540C\u97F3\u5B57 / \u524D\u5BFC\u8BED\u6C14\u8BCD\uFF09\uFF0C\u5EFA\u8BAE 3-4 \u5B57\uFF1B\u975E\u4E13\u7528 KWS \u5F15\u64CE\uFF0C\u5608\u6742\u73AF\u5883\u53EF\u80FD\u5EF6\u8FDF\u6216\u8BEF\u6FC0\u6D3B",
+  descWakeWord: "\u5524\u9192\u8BCD\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5982\u300C\u4F60\u597D\u5C0FD\u300D\uFF09\uFF1A\u8BF4\u51FA\u8BCD\u5934\u624D\u8FDB\u5165\u8BC6\u522B\uFF0C\u907F\u514D\u8BEF\u89E6\u3002\u53EF\u4E0E\u547D\u4EE4\u8FDE\u8BF4\uFF08\u300C\u4F60\u597D\u5C0FD\uFF0C\u5E2E\u6211\u67E5\u5929\u6C14\u300D\u2014\u2014\u8BCD\u5934\u4F1A\u81EA\u52A8\u5265\u6389\u3001\u4E0D\u8FDB\u6D88\u606F\uFF09\uFF1B\u6BCF\u53E5\u65AD\u53E5\u6216\u6253\u65AD\u540E\u9700\u91CD\u8BF4\uFF1B\u4EC5 toggle \u6A21\u5F0F\u751F\u6548\uFF08hold / \u624B\u52A8\u6253\u65AD\u4E0B\u4E0D\u751F\u6548\uFF1Bdetect \u81EA\u52A8\u63A2\u6D4B\u672A\u751F\u6548\u3001\u56DE\u843D manual \u65F6\u540C\u6837\u4E0D\u751F\u6548\u2014\u2014Safari \u7B49\u65E0\u539F\u751F\u56DE\u58F0\u6D88\u9664\u7684\u673A\u5668\u4F1A\u9ED8\u8BA4\u843D\u5230\u8FD9\u4E00\u6863\uFF09\uFF1B\u6717\u8BFB\u671F\u8BF4\u5524\u9192\u8BCD\u4E0D\u89E6\u53D1\uFF08\u6253\u65AD\u4ECD\u6309 VAD \u5F00\u53E3\u5373\u6253\u65AD\uFF09\u3002\u5339\u914D\u5E26\u5BB9\u9519\uFF08\u540C\u97F3\u5B57 / \u524D\u5BFC\u8BED\u6C14\u8BCD\uFF09\uFF0C\u5EFA\u8BAE 3-4 \u5B57\uFF1B\u975E\u4E13\u7528 KWS \u5F15\u64CE\uFF0C\u5608\u6742\u73AF\u5883\u53EF\u80FD\u5EF6\u8FDF\u6216\u8BEF\u6FC0\u6D3B",
   wakePlaceholder: "\u5982\uFF1A\u4F60\u597D\u5C0FD",
-  settingsCardDesc: "\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u9759\u97F3\u505C\u987F / \u7A7A\u95F2\u8D85\u65F6 / \u6A21\u578B\u955C\u50CF / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u9006\u6587\u672C\u5F52\u4E00\u5316 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3",
-  settingsEffectiveNote: "\u751F\u6548\u65F6\u673A\u5206\u56DB\u6863\uFF1A\u2460 \u5373\u65F6\u2014\u2014\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u5BF9\u540E\u7EED\u56DE\u590D\u751F\u6548\uFF09/ \u6A21\u578B\u955C\u50CF\uFF08\u4E0B\u6B21\u4E0B\u8F7D\u5C1D\u8BD5\u5373\u751F\u6548\uFF09\uFF1B\u2461 \u4E0B\u6B21\u8BC6\u522B\u65F6\u2014\u2014\u5B9A\u7A3F\u91CD\u8BD1\uFF08SenseVoice\uFF09/ \u9006\u6587\u672C\u5F52\u4E00\u5316\uFF1B\u2462 \u4E0B\u4E00\u6BB5\u8BDD\u2014\u2014\u9759\u97F3\u5224\u5B9A\u65F6\u957F\uFF08\u65AD\u53E5\u7AEF\u70B9\uFF1B\u53D1\u9001\u7B49\u5F85\u56FA\u5B9A 1.2 \u79D2\u4E0D\u53D7\u5F71\u54CD\uFF09\uFF1B\u2463 \u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u2014\u2014\u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u5FEB\u6377\u952E / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519 / \u7A7A\u95F2\u65F6\u957F\u3002\u5DF2\u4FDD\u5B58\u4F46\u672A\u751F\u6548\u7684\u9879\u4F1A\u5217\u5728\u5361\u7247\u9876\u90E8\uFF08\u542B\u5F53\u524D\u751F\u6548\u503C\uFF09\u3002",
+  settingsCardDesc: "\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u9759\u97F3\u505C\u987F / \u7A7A\u95F2\u8D85\u65F6 / \u6A21\u578B\u955C\u50CF / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u9006\u6587\u672C\u5F52\u4E00\u5316 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519",
+  settingsEffectiveNote: "\u751F\u6548\u65F6\u673A\u5206\u56DB\u6863\uFF1A\u2460 \u5373\u65F6\u2014\u2014\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / Kokoro \u6A21\u578B\u7CBE\u5EA6\uFF08\u5DF2\u7F13\u5B58\u5219\u5373\u65F6\uFF0C\u5426\u5219\u4E0B\u6B21\u4E0B\u8F7D\uFF09/ \u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u5BF9\u540E\u7EED\u56DE\u590D\u751F\u6548\uFF09/ \u6A21\u578B\u955C\u50CF\uFF08\u4E0B\u6B21\u4E0B\u8F7D\u5C1D\u8BD5\u5373\u751F\u6548\uFF09\uFF1B\u2461 \u4E0B\u6B21\u8BC6\u522B\u65F6\u2014\u2014\u5B9A\u7A3F\u91CD\u8BD1\uFF08SenseVoice\uFF09/ \u9006\u6587\u672C\u5F52\u4E00\u5316\uFF1B\u2462 \u4E0B\u4E00\u6BB5\u8BDD\u2014\u2014\u9759\u97F3\u5224\u5B9A\u65F6\u957F\uFF08\u65AD\u53E5\u7AEF\u70B9\uFF1B\u53D1\u9001\u7B49\u5F85\u56FA\u5B9A 1.2 \u79D2\u4E0D\u53D7\u5F71\u54CD\uFF09\uFF1B\u2463 \u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u2014\u2014\u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u5FEB\u6377\u952E / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519 / \u7A7A\u95F2\u65F6\u957F\u3002\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u624D\u751F\u6548\u7684\u9879\u4F1A\u5217\u5728\u5361\u7247\u9876\u90E8\uFF08\u542B\u5F53\u524D\u751F\u6548\u503C\uFF09\u3002",
   effectivePending: "\u6709 {count} \u9879\u4FEE\u6539\u5C06\u5728\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u65F6\u751F\u6548\uFF1A{items}",
   valueOn: "\u5F00",
   valueOff: "\u5173",
@@ -1667,7 +1732,6 @@ var zh = {
   ttsDownloadHint: "\u4E0B\u8F7D\u8BE5\u5F15\u64CE\u7684\u672C\u5730\u6A21\u578B\uFF1B\u4E0B\u8F7D\u5B8C\u6210\u540E\u7ACB\u5373\u5C31\u7EEA\uFF0C\u53EF\u8BD5\u542C/\u6717\u8BFB",
   ttsDeleteHint: "\u5220\u9664\u672C\u5730\u6A21\u578B\uFF08\u91CA\u653E\u7A7A\u95F4\uFF1B\u4E0B\u6B21\u4F7F\u7528\u4F1A\u81EA\u52A8\u91CD\u65B0\u4E0B\u8F7D\uFF09",
   dataFlowHint: "\u6570\u636E\u6D41\u5411\uFF1AASR \u8BC6\u522B\uFF08zipformer2+SenseVoice\uFF09\u59CB\u7EC8\u672C\u5730\uFF1BTTS \u6717\u8BFB\u53D6\u51B3\u4E8E\u5F15\u64CE\uFF08edge=\u5FAE\u8F6F\u4E91\u7AEF\uFF0Cvits/kokoro=\u672C\u5730\uFF09",
-  kokoroModel: "Kokoro \u6A21\u578B\u7CBE\u5EA6",
   kokoroModelInt8: "int8\uFF08\u9ED8\u8BA4\uFF09",
   kokoroModelFp32: "fp32\uFF08\u97F3\u8D28\u66F4\u597D\uFF09",
   descKokoroModel: "Kokoro \u6A21\u578B\u7CBE\u5EA6\uFF1Aint8 \u4F53\u79EF\u5C0F/\u52A0\u8F7D\u5FEB\uFF08\u7EAF CPU \u670D\u52A1\u5668\u6216\u4F4E\u5E26\u5BBD\u63A8\u8350\uFF0C\u9ED8\u8BA4\uFF09\uFF1Bfp32 \u97F3\u8D28\u66F4\u597D\u4F46\u7EA6 311MB\u3001\u66F4\u6162\uFF08\u6709\u72EC\u7ACB\u663E\u5361\u6216\u5927\u5185\u5B58\u673A\u5668\u63A8\u8350\uFF09\u3002\u4E24\u6863\u5171\u7528\u540C\u4E00\u5957 103 \u97F3\u8272\uFF0C\u5207\u6362\u5373\u65F6\u751F\u6548\u3002",
@@ -1678,17 +1742,17 @@ var zh = {
   secRecognition: "\u8BC6\u522B\u4E0E\u53E3\u8BED",
   secModel: "\u6A21\u578B\u4E0E\u955C\u50CF",
   telTotal: "\u5408\u8BA1",
-  // 批 C：FIELD_LABELS 镜像键（*Label 后缀；详见 settings-form.tsx 头部注释）。
-  // 临时双轨——与 FIELD_LABELS 并行维护同一组中文，未来整合批去掉 FIELD_LABELS，
-  // 统一改用 tr() 翻译键模式避免双轨漂移风险。en 段对应 stub 见下方 en 对象。
+  // 字段标题镜像键（*Label 后缀）：设置行标题经 settings-form 的 tr(`${name}Label`) 取值。
+  // 批 C 曾与 settings-form 的 FIELD_LABELS 中文双轨并行；整合批已删 FIELD_LABELS，
+  // *Label 键现在是行标题唯一真源（R1 M-2：孪生 base 键已删，防双轨漂移复发）。
   senseITNLabel: "\u9006\u6587\u672C\u5F52\u4E00\u5316",
   captionFontSizeLabel: "\u5B57\u5E55\u5B57\u53F7",
   captionMaxWidthLabel: "\u5B57\u5E55\u5BBD\u5EA6",
   backchannelYieldLabel: "\u77ED\u5E94\u7B54\u8BA9\u4F4D",
-  // Issue #15 批 1 / ADR-0012：打断语音抢救（*Label 镜像键）。
+  // Issue #15 批 1 / ADR-0012：打断语音抢救（行标题键）。
   bargeInSalvageLabel: "\u6253\u65AD\u8BED\u97F3\u62A2\u6551",
   llmCorrectLabel: "LLM \u7EA0\u9519",
-  // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
+  // 让位窗口（行标题键）。
   yieldMsLabel: "\u8BA9\u4F4D\u7A97\u53E3",
   // 批 G 任务 2：空闲预警 + 退出提示文案。
   idleWarn30s: "30 \u79D2\u540E\u81EA\u52A8\u9000\u51FA\uFF08\u8BBE\u7F6E\u91CC\u53EF\u8C03\u7A7A\u95F2\u65F6\u957F\uFF09",
@@ -1764,8 +1828,15 @@ var en = {
   disabled: "Voice mode disabled (plugin enabled=false)",
   sendFailKept: "Send failed; text kept in draft",
   micDenied: "Microphone denied: allow mic access for this site",
+  micBusy: "Microphone is in use by another program \u2014 close it and retry",
   micUnavailable: "Microphone unavailable",
   recognizing: "Recognizing\u2026",
+  // UX-I1 联动态：纠错在途 / 纠错放弃回退 / 附和词忽略 / 语音按钮态文案。
+  correctFixing: "Correcting\u2026",
+  correctAbandoned: "Original text kept in draft",
+  backchannelDropped: "Backchannel ignored, not sent",
+  buttonLoading: "Loading\u2026",
+  buttonListening: "Listening",
   holdToTalk: "Hold to talk",
   releaseToSend: "Release to send",
   voiceDetected: "Voice active",
@@ -1774,7 +1845,7 @@ var en = {
   ariaActive: "Voice mode active",
   ariaEnter: "Enter voice mode",
   titleHold: "Voice mode \xB7 hold to talk, release to send; tap to exit; Esc/blur cancels; Ctrl+Shift+V exits",
-  titleToggle: "Voice mode \xB7 click to exit (Ctrl+Shift+V) \xB7 hold Ctrl to send now",
+  titleToggle: "Voice mode \xB7 click to exit (Ctrl+Shift+V) \xB7 hold Ctrl while speaking to send now",
   titleEnter: "Enter voice mode (Ctrl+Shift+V)",
   loadingModel: "Loading model\u2026",
   listening: "Listening\u2026",
@@ -1824,7 +1895,7 @@ var en = {
   descVoiceKokoro: "Kokoro zh-en voices (103; \u25C0\u25B6 to cycle; 48-51 named Chinese, others numbered with measured gender; mixed zh-en supported)",
   descRate: "Speech rate (0.5 slow \u2013 2.0 fast, 1.1 default; more compact replies)",
   descInterrupt: "Interrupt sensitivity (0 high \u22480.3 s confirm / 1 medium \u22480.2 s / 2 low \u22480.1 s, most responsive); lower = higher barrier = harder to interrupt",
-  descBargeIn: "Barge-in mode (detect: auto-probe native echo cancellation, fall back to hold-to-talk when inactive \u2014 default; auto: force interrupt by speaking \u2014 headphones/quiet; manual: for loudspeaker, no echo-triggered self-interrupt \u2014 hold mic/Ctrl to interrupt)",
+  descBargeIn: "Barge-in mode (detect: auto-probe native echo cancellation, fall back to hold-to-talk when inactive \u2014 default; auto: force interrupt by speaking \u2014 headphones/quiet; manual: for loudspeaker, no echo-triggered self-interrupt \u2014 hold mic/Ctrl to interrupt). Note: in manual mode (including detect falling back to manual on machines without native echo cancellation) audio outside a press is not recognized \u2014 in toggle mode you can long-press to speak only while the agent is playing; when idle there is no voice input, so use hold mode or switch to auto/detect",
   bargeInDetect: "Auto-detect",
   bargeInAuto: "Auto",
   bargeInManual: "Manual",
@@ -1835,23 +1906,29 @@ var en = {
   aecOffHint: "Native echo cancellation is not active (speaker echo may self-interrupt); use headphones or Manual barge-in",
   // 批 7O（ADR-0006）：detect 模式第一级探测降级提示（英文）。
   bargeInDetectFallback: "Native echo cancellation is off \u2014 switched to hold-to-talk barge-in",
+  // R1 收尾（fix-client 直连 tk() 调用）：连续 3 次回声拒断的解释出口 + 快捷键非法停用提示。
+  echoRejectHint: "Strong echo detected \u2014 barge-in is limited by echo protection. Use headphones or switch to manual barge-in",
+  shortcutInvalid: "Invalid shortcut, disabled. Fix it in settings (e.g. Ctrl+Shift+V); leave empty to use the mic button only",
   elapsedHint: "Current voice session duration",
   botLevelsHint: "AI playback level (blue bar = TTS playback, green bar = microphone)",
   interruptConfirm: "interrupt confirm",
   sev0: "0 high",
   sev1: "1 medium",
   sev2: "2 low",
+  // 数值单位（设置卡片「当前生效值」用：中文汉字单位、英文国际缩写，避免「1500 ms」直出）
+  unitMs: "ms",
+  unitMin: "min",
+  unitDb: "dB",
   descSilence: "Silence pause before a sentence is committed (default 1500 ms; at least 250 ms of speech required, guards against noise triggers)",
-  descIdle: "Auto-exit voice mode after idle minutes (default 5; batch G added 30 s warning before exit)",
+  descIdle: "Auto-exit voice mode after idle minutes (default 5; a 30-second countdown warning appears before exit)",
   descModelHost: "ASR model download source (official source / mirror, or any custom URL)",
-  descAutoSend: "Auto-send once quiet (consecutive segments join into one message; off = draft only; Ctrl / hold still sends)",
+  descAutoSend: "Auto-send once quiet (consecutive segments join into one message; off = draft only; holding Ctrl while speaking sends immediately; in hold mode, releasing sends)",
   // 批 7N 重做 5/5：clarify that toggling takes effect on next session entry (not the current one).
   descAutoResume: "Auto-resume voice mode when switching back to the last voice session (default off; takes effect on next session entry \u2014 auto-enters voice mode and restores the last session; when disabled, you must press Ctrl+Shift+V to re-enter)",
   descSpokenFormat: "Inject spoken-format prompt into voice replies (colloquial, short sentences, no Markdown; default on, live)",
   descSenseVoice: "Recognition mode: on = accurate mode (SenseVoice finalization with punctuation + ITN; long utterances may take seconds on CPU); off = fast mode (streaming result finalized directly, skips the 228 MB re-transcription model, slightly less accurate)",
   recognizingSec: "Recognizing\u2026 {sec}s",
   descToolBeep: "Tool-call beep (default off): beep when the agent is thinking/calling tools; keep off if it annoys you",
-  senseITN: "Inverse text normalization",
   descSenseITN: "SenseVoice number/date/format normalization (default on; turn off to keep raw spoken form)",
   descCaptionFontSize: "Caption font size (Small 12 / Standard 14 / Large 18 / X-Large 24 px; default Small matches current behavior)",
   descCaptionMaxWidth: "Caption width (50vw / 70vw / 90vw; default 70vw; capped at 30vh height so multi-line 24px never overlaps the input box)",
@@ -1862,23 +1939,19 @@ var en = {
   captionWidth50: "Narrow",
   captionWidth70: "Medium",
   captionWidth90: "Wide",
-  skipReading: "Skip current reading",
-  backchannelYield: "Short-reply yielding",
-  descBackchannelYield: 'When the user says a short answer like "mm-hmm/right" while the agent is reading aloud, yield automatically (skip the current TTS sentence + drop frames for 1.5s; if the user really wants to speak, the existing hardBreak takes over; off = no yielding, behavior matches pre-batch-5)',
+  skipReading: "Skip this sentence",
+  descBackchannelYield: 'When the user says a short answer like "mm-hmm/right" while the agent is reading aloud, yield automatically (skip the current TTS sentence + drop frames for 1.5s; if the user really wants to speak, the existing hardBreak takes over; off = no yielding, behavior matches before this change). Only triggers in hold-to-talk mode: in continuous-listening mode speech is not recognized during playback (speaking is treated as an interrupt)',
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage.
-  bargeInSalvage: "Barge-in speech salvage",
   descBargeInSalvage: "When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)",
-  descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; reuses the host configured model). On = about one extra second per message; falls back to the original text if correction fails",
-  // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
-  yieldMs: "Yield window",
-  descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires)",
+  descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; requires a default model configured in the host \u2014 otherwise the original text is sent as-is). On = one extra correction round trip per message: usually under 1 second, at most ~10 seconds; at most 10 times per minute \u2014 when voice mode is off or the limit is hit, the original text is sent. Failed or abnormal output also falls back to the original text",
+  descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires). Hold-to-talk mode only, during playback",
   descMode: "Interaction mode (toggle: continuous listen + auto-send / hold: press to talk)",
   modeToggle: "Continuous listening",
   modeHold: "Hold to talk",
-  descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
+  descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
-  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window",
-  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / spoken format (applies to later replies) / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Saved-but-not-yet-effective items are listed at the top of this card with their current effective values.",
+  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
+  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
   effectivePending: "{count} change(s) will apply next time you enter voice mode: {items}",
   valueOn: "On",
   valueOff: "Off",
@@ -1918,7 +1991,6 @@ var en = {
   ttsDownloadHint: "Download this engine's local model; becomes ready immediately after",
   dataFlowHint: "Data flow: ASR recognition (zipformer2+SenseVoice) is always local; TTS playback depends on engine (edge=Microsoft cloud, vits/kokoro=local)",
   ttsDeleteHint: "Delete local models (frees space; auto re-downloads on next use)",
-  kokoroModel: "Kokoro model precision",
   kokoroModelInt8: "int8 (default)",
   kokoroModelFp32: "fp32 (better quality)",
   descKokoroModel: "Kokoro model precision: int8 is smaller/faster (CPU server or low bandwidth; default); fp32 sounds better but ~311MB and slower (GPU or large memory). Both share the same 103 voices; switches live.",
@@ -1933,10 +2005,10 @@ var en = {
   captionFontSizeLabel: "Caption size",
   captionMaxWidthLabel: "Caption width",
   backchannelYieldLabel: "Short-reply yielding",
-  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (*Label mirror key).
+  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (row title key).
   bargeInSalvageLabel: "Barge-in speech salvage",
   llmCorrectLabel: "LLM correction",
-  // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
+  // Yield window (row title key).
   yieldMsLabel: "Yield window",
   // 批 G 任务 2：空闲预警 + 退出提示文案。
   idleWarn30s: "Auto-exit in 30 seconds (adjustable in settings)",
@@ -2813,21 +2885,21 @@ function Row({ name: name2, desc, children }) {
   ] });
 }
 var NEXT_ENTRY_FIELDS = [
-  { key: "interruptLevel", label: "interruptLevelLabel" },
-  { key: "bargeInMode", label: "bargeInModeLabel" },
-  { key: "echoGateDb", label: "echoGateDbLabel", fmt: (v) => `${v} dB` },
+  { key: "interruptLevel", label: "interruptLevelLabel", fmt: (v) => t(v === 1 ? "sev1" : v === 2 ? "sev2" : "sev0") },
+  { key: "bargeInMode", label: "bargeInModeLabel", fmt: (v) => t(v === "auto" ? "bargeInAuto" : v === "manual" ? "bargeInManual" : "bargeInDetect") },
+  { key: "echoGateDb", label: "echoGateDbLabel", fmt: (v) => `${v} ${t("unitDb")}` },
   { key: "autoSend", label: "autoSendLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
   { key: "autoResume", label: "autoResumeLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
-  { key: "mode", label: "modeLabel" },
+  { key: "mode", label: "modeLabel", fmt: (v) => t(v === "hold" ? "modeHold" : "modeToggle") },
   { key: "wakeWord", label: "wakeWordLabel", fmt: (v) => v ? t("valueQuoted").replace("{value}", String(v)) : t("valueOff") },
   { key: "toolBeep", label: "toolBeepLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
-  { key: "captionFontSize", label: "captionFontSizeLabel" },
-  { key: "captionMaxWidth", label: "captionMaxWidthLabel" },
+  { key: "captionFontSize", label: "captionFontSizeLabel", fmt: (v) => t(v === 1 ? "captionSizeM" : v === 2 ? "captionSizeL" : v === 3 ? "captionSizeXL" : "captionSizeS") },
+  { key: "captionMaxWidth", label: "captionMaxWidthLabel", fmt: (v) => t(v === 0 ? "captionWidth50" : v === 2 ? "captionWidth90" : "captionWidth70") },
   { key: "backchannelYield", label: "backchannelYieldLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
-  { key: "yieldMs", label: "yieldMsLabel", fmt: (v) => `${v} ms` },
+  { key: "yieldMs", label: "yieldMsLabel", fmt: (v) => `${v} ${t("unitMs")}` },
   { key: "bargeInSalvage", label: "bargeInSalvageLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
   { key: "llmCorrect", label: "llmCorrectLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
-  { key: "idleTimeoutMinutes", label: "idleTimeoutMinutesLabel", fmt: (v) => `${v} min` },
+  { key: "idleTimeoutMinutes", label: "idleTimeoutMinutesLabel", fmt: (v) => `${v} ${t("unitMin")}` },
   { key: "shortcut", label: "shortcutLabel", fmt: (v) => v ? String(v) : t("valueOff") }
 ];
 function EffectivePending({ effective, value, ready }) {
@@ -3332,7 +3404,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "86d0566";
+var BUILD_TAG = "d92f43b";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3344,6 +3416,7 @@ var debugLog = (event, fields = {}) => {
   }
   console.log("[dsh-voice]", event, JSON.stringify(out));
 };
+var tk = (key) => t(key);
 var beepCtx = null;
 function playToolBeep() {
   try {
@@ -3469,7 +3542,9 @@ function apply(ctx) {
         id: "voice-mode",
         key: "voice-mode",
         order: 100,
-        label: t("stateVoiceMode")
+        // M13：函数形式（与下方 settings.section 注册一致）——注册时求值会把
+        // 切换语言前的旧文案冻在菜单里；函数形式每次渲染读当前语言。
+        label: () => t("stateVoiceMode")
       },
       () => React.createElement(VoiceSettingsCard, { scope })
     )
@@ -3710,7 +3785,6 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     }
   };
   const resetTelemetry = () => {
-    if (!telemetryEnabled) return;
     for (const k of Object.keys(telemetryStages)) delete telemetryStages[k];
     ui.telemetry = null;
     ui.interruptConfirmMs = void 0;
@@ -3827,11 +3901,13 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     // A2.5 双讲冻结：用户说话时暂停 NLMS 自适应。
     setFrozen: (frozen) => aec.setFrozen(frozen)
   };
+  const setUi = (patch) => {
+    if (patch.playing === false && ui.playing === true) playingEndAt = Date.now();
+    Object.assign(ui, patch);
+    notify();
+  };
   const engine = createAudioEngine(
-    (patch) => {
-      Object.assign(ui, patch);
-      notify();
-    },
+    setUi,
     () => stampTelemetry("first-audio-played"),
     (pcm, sampleRate, wallMs) => {
       pushRef(pcm, sampleRate, wallMs);
@@ -3858,6 +3934,10 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("open", () => {
       rejectSeqUpTo.clear();
       lastFinalSeq.clear();
+      curSentenceId = null;
+      curChunks = [];
+      curBytes = 0;
+      curChunkCount = 0;
       if (ui.sseDown) {
         ui.sseDown = false;
         notify();
@@ -4074,7 +4154,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     ui,
     subscribe(fn) {
       listeners.add(fn);
-      fn({ active: activeSessionId, ui: { ...ui, levels: [...ui.levels] } });
+      fn({ active: activeSessionId, ui: { ...ui, levels: [...ui.levels], botLevels: [...ui.botLevels] } });
       return () => {
         listeners.delete(fn);
       };
@@ -4091,11 +4171,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
         }
       }, 5e3);
     },
-    setUi(patch) {
-      if (patch.playing === false && ui.playing === true) playingEndAt = Date.now();
-      Object.assign(ui, patch);
-      notify();
-    },
+    setUi,
     /** isPlaying 尾音截止墙钟：playing 或尾音宽限期内均视为「AI 正在朗读」。 */
     playingTailUntil() {
       return playingEndAt + ECHO_TAIL_MS + refDelaySamples / SAMPLE_RATE_16K * 1e3;
@@ -4121,10 +4197,12 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
         return { ok: false, error: t("enterFail") };
       }
     },
-    async exit(sessionId) {
+    async exit(sessionId, keepAudio) {
       resetTelemetry();
       ui.turn = "idle";
-      doSkipAudio();
+      if (!keepAudio) {
+        doSkipAudio();
+      }
       try {
         const res = await fetch(`${location.origin}${basePath}/toggle`, {
           method: "POST",
@@ -4222,6 +4300,7 @@ function MicButton({
   const localRef = (0, import_react3.useRef)("off");
   const sidRef = (0, import_react3.useRef)(sessionId);
   const engineRef = (0, import_react3.useRef)(null);
+  const micReadyRef = (0, import_react3.useRef)(false);
   const actionsRef = (0, import_react3.useRef)(inputActions);
   const submitTimerRef = (0, import_react3.useRef)(null);
   const autoSendTimerRef = (0, import_react3.useRef)(null);
@@ -4262,8 +4341,12 @@ function MicButton({
   };
   useVoiceCss();
   const [, bumpUi] = (0, import_react3.useState)(0);
+  const uiKeyRef = (0, import_react3.useRef)("");
   (0, import_react3.useEffect)(
-    () => bus.subscribe(() => {
+    () => bus.subscribe(({ active, ui: u }) => {
+      const key = `${active}|${u.state}|${u.error ?? ""}|${u.notice ?? ""}|${u.mode}|${u.wakeWord}|${u.ttsNotice ?? ""}`;
+      if (key === uiKeyRef.current) return;
+      uiKeyRef.current = key;
       bumpUi((t3) => t3 + 1);
     }),
     [bus]
@@ -4306,6 +4389,7 @@ function MicButton({
         senseITN: c.senseITN === false ? false : true,
         senseVoice: c.senseVoice === false ? false : true
       };
+      if (next.shortcut && !parseShortcut(next.shortcut)) bus.setNotice(tk("shortcutInvalid"));
       bus.setUi({ boot: next, mode: next.mode, wakeWord: next.wakeWord });
       setRuntimeBoot(next);
       return next;
@@ -4346,16 +4430,16 @@ function MicButton({
       const sid = sidRef.current;
       if (localRef.current === "on" && sid) {
         const quitMsg = t("idleTimeoutQuit");
-        bus.setUi({
-          error: bus.ui.error ?? quitMsg
+        void exitModeRef.current("idle").then(() => {
+          bus.setUi({ error: bus.ui.error ?? quitMsg });
+          const prevClearError = idleClearErrorRef.current;
+          if (prevClearError) clearTimeout(prevClearError);
+          idleClearErrorRef.current = setTimeout(() => {
+            idleClearErrorRef.current = null;
+            if (bus.ui.error === quitMsg) bus.setUi({ error: null });
+          }, 3e3);
+        }).catch(() => {
         });
-        const prevClearError = idleClearErrorRef.current;
-        if (prevClearError) clearTimeout(prevClearError);
-        idleClearErrorRef.current = setTimeout(() => {
-          idleClearErrorRef.current = null;
-          if (bus.ui.error === quitMsg) bus.setUi({ error: null });
-        }, 3e3);
-        void exitModeRef.current("idle");
       }
     }, idleMs);
   };
@@ -4369,14 +4453,21 @@ function MicButton({
         cancelPendingSubmit();
         cancelAutoSend();
         clearBreakTimer();
+        if (breakDotsTimerRef.current) {
+          clearTimeout(breakDotsTimerRef.current);
+          breakDotsTimerRef.current = null;
+        }
         setHolding(false);
         isSpeechTrueCount = 0;
+        isSpeechFalseRun = 0;
         submitInFlightRef.current = false;
+        correctInFlightRef.current = false;
         breakRef.current = null;
         manualHoldRef.current = false;
         holdCtrlRef.current = false;
         const engine = engineRef.current;
         engineRef.current = null;
+        micReadyRef.current = false;
         if (engine) void engine.stop();
         bus.resetTelemetry();
         bus.setUi({ state: "idle", partial: "", levels: [], botLevels: [], error: null, model: null, ttsNotice: null, isSpeech: void 0 });
@@ -4396,6 +4487,7 @@ function MicButton({
     }
   };
   const correctDraft = async (text) => {
+    bus.setUi({ notice: t("correctFixing") });
     try {
       const r = await fetch(`${location.origin}${BASE_PATH2}/correct`, {
         method: "POST",
@@ -4404,11 +4496,14 @@ function MicButton({
         signal: AbortSignal.timeout(12e3)
         // 上限 12s——超时按原文发，不等纠错
       });
+      bus.setUi({ notice: null });
       if (!r.ok) return text;
       const out = await r.json();
       const corrected = typeof out.text === "string" ? out.text.trim() : "";
       return corrected || text;
-    } catch {
+    } catch (e) {
+      bus.setUi({ notice: null });
+      if (e instanceof DOMException && e.name === "TimeoutError") bus.setNotice(t("correctAbandoned"));
       return text;
     }
   };
@@ -4480,8 +4575,11 @@ function MicButton({
       submitViaQueue();
     };
     if (bootNow().llmCorrect === true && !draftSnapshot.startsWith("/")) {
+      correctInFlightRef.current = true;
       void correctDraft(draftSnapshot).then((finalText) => {
-        if (!submitInFlightRef.current || draftRef.current.trim() !== draftSnapshot) return;
+        const valid = correctInFlightRef.current && submitInFlightRef.current && draftRef.current.trim() === draftSnapshot && engineRef.current?.state !== "speech";
+        correctInFlightRef.current = false;
+        if (!valid) return;
         runSubmit(finalText);
       });
       return;
@@ -4499,14 +4597,20 @@ function MicButton({
       submitDraftNow();
     }, AUTO_SEND_EXTRA_MS);
   };
-  const exitMode = async (_reason) => {
+  const exitMode = async (reason) => {
     if (localRef.current === "off") return;
     setLocalMode("off");
     clearIdle();
     cancelPendingSubmit();
     cancelAutoSend();
     submitInFlightRef.current = false;
+    correctInFlightRef.current = false;
     isSpeechTrueCount = 0;
+    isSpeechFalseRun = 0;
+    if (breakDotsTimerRef.current) {
+      clearTimeout(breakDotsTimerRef.current);
+      breakDotsTimerRef.current = null;
+    }
     fixtureRecorder.save("exit");
     breakRef.current = null;
     manualHoldRef.current = false;
@@ -4514,16 +4618,19 @@ function MicButton({
     setHolding(false);
     const engine = engineRef.current;
     engineRef.current = null;
+    micReadyRef.current = false;
     if (engine) await engine.stop();
     bus.resetTelemetry();
     bus.setUi({ state: "idle", partial: "", levels: [], error: null, model: null, ttsNotice: null, isSpeech: void 0 });
     const sid = sidRef.current;
-    if (sid) await bus.exit(sid);
+    if (sid) await bus.exit(sid, reason === "typing");
   };
   const enterMode = async () => {
     const sid = sidRef.current;
     if (!sid || localRef.current !== "off") return;
     isSpeechTrueCount = 0;
+    isSpeechFalseRun = 0;
+    micReadyRef.current = false;
     setLocalMode("pending");
     try {
       const entered = await bus.enter(sid);
@@ -4546,6 +4653,7 @@ function MicButton({
       const interruptLevel = cfg.interruptLevel;
       const confirmFrames = INT_CONFIRM_FRAMES[interruptLevel] ?? 2;
       let bargeInMode = cfg.bargeInMode;
+      let echoRejectStreak = 0;
       debugLog("enter", {
         build: BUILD_TAG,
         mode: cfg.mode,
@@ -4558,6 +4666,9 @@ function MicButton({
       const hardBreak = async () => {
         bus.skipAudio();
         bus.unduckAudio();
+        cancelAutoSend();
+        submitInFlightRef.current = false;
+        correctInFlightRef.current = false;
         bus.setBackchannelHold(0);
         if (runningRef.current && sidRef.current) {
           bus.cancelTurn(sidRef.current);
@@ -4573,6 +4684,11 @@ function MicButton({
         if (engineRef.current && !engineRef.current.holding) await engineRef.current.discardSegment();
         await cancelP;
         bus.setUi({ partial: "\u2026" });
+        if (breakDotsTimerRef.current) clearTimeout(breakDotsTimerRef.current);
+        breakDotsTimerRef.current = setTimeout(() => {
+          breakDotsTimerRef.current = null;
+          if (bus.ui.partial === "\u2026") bus.setUi({ partial: "" });
+        }, 3e3);
       };
       breakRef.current = hardBreak;
       const engine = createAsrEngine(
@@ -4597,6 +4713,7 @@ function MicButton({
             if (!bus.ui.playing) {
               isSpeechTrueCount = 0;
               interruptFirstAt = 0;
+              echoRejectStreak = 0;
               bus.setUi({ isSpeech: speech, echoDelayMs: bus.echoDelayMs(), echoLevels: engineRef.current?.echoLevels() });
               return;
             }
@@ -4626,6 +4743,7 @@ function MicButton({
                   });
                   isSpeechTrueCount = 0;
                   interruptFirstAt = 0;
+                  if (++echoRejectStreak === 3) bus.setNotice(tk("echoRejectHint"));
                   return;
                 }
                 const confirmMs = interruptFirstAt > 0 ? Date.now() - interruptFirstAt : 0;
@@ -4639,6 +4757,7 @@ function MicButton({
                 });
                 interruptFirstAt = 0;
                 isSpeechTrueCount = 0;
+                echoRejectStreak = 0;
                 fixtureRecorder.mark("interrupt", `confirmMs=${confirmMs}`);
                 resetIdle();
                 bus.resetTelemetry();
@@ -4679,6 +4798,9 @@ function MicButton({
               bus.setUi({ boot: { ...bus.ui.boot, bargeInMode }, bargeInDetectFallback: !on2 });
             }
           },
+          // TODO（Issue #15 UX M10，产品决策待 PM 登记）：待机期（非播放期）附和词
+          //   无护栏——matchBackchannel 只在朗读期让位路径消费，待机期用户说「嗯/对」
+          //   会正常入段累积发送。是否加待机期短应答护栏需产品决策，此处只登记不改行为。
           // 批 5 / ADR-0008 Phase 1：backchannel 命中回调——
           //   立即 skipAudio 终止当前朗读 + 置 cfg.yieldMs hold 窗口，期间 TTS 帧丢（字幕同帧丢）。
           //   关 backchannelYield = 不挂回调，行为等同改造前（I10 豁免由 §7.0 ADR-0008 接受）。
@@ -4718,6 +4840,17 @@ function MicButton({
         bus.setUi({ error: t(key) });
       });
       engine.onNotice((key) => {
+        if (key === "backchannelDropped") {
+          if (lastPartialRef.current) {
+            const composed = composeDraft(draftRef.current, lastPartialRef.current, "");
+            lastPartialRef.current = "";
+            try {
+              actionsRef.current?.setDraft?.(composed);
+            } catch {
+            }
+          }
+          bus.setUi({ partial: "" });
+        }
         bus.setNotice(t(key));
       });
       engine.onLevel((l) => {
@@ -4726,6 +4859,7 @@ function MicButton({
         bus.setUi({ levels: next });
       });
       engine.onPartial((text) => {
+        if (engineRef.current !== engine) return;
         bus.setUi({ partial: text });
         if (!text) return;
         if (submitInFlightRef.current) {
@@ -4755,7 +4889,6 @@ function MicButton({
         lastPartialRef.current = "";
         try {
           if (typeof actions?.setDraft === "function") actions.setDraft(nextDraft);
-          else if (typeof actions?.setDraft === "function") actions.setDraft(nextDraft);
         } catch {
           try {
             actions?.setDraft?.(trimmed);
@@ -4787,14 +4920,20 @@ function MicButton({
       }
       if (bus.activeSessionId !== sid) {
         engineRef.current = null;
+        micReadyRef.current = false;
         await engine.stop();
         return;
       }
+      micReadyRef.current = true;
       setLocalMode("on");
       resetIdle();
     } catch (e) {
       setLocalMode("off");
-      const msg = e instanceof DOMException ? e.name === "NotAllowedError" ? t("micDenied") : t("micUnavailable") : t("startFail").replace("{err}", String(e instanceof Error ? e.message : e));
+      const msg = e instanceof DOMException ? e.name === "NotAllowedError" ? t("micDenied") : (
+        // UX：NotReadableError = 麦克风被占用（其他程序/标签页）——与「不可用」
+        // 混同时用户无从下手，分原因给可行动文案。
+        e.name === "NotReadableError" ? t("micBusy") : t("micUnavailable")
+      ) : t("startFail").replace("{err}", String(e instanceof Error ? e.message : e));
       bus.setUi({ error: msg });
       const sid2 = sidRef.current;
       if (sid2) void bus.exit(sid2);
@@ -4858,7 +4997,16 @@ function MicButton({
       cancelPendingSubmit();
       cancelAutoSend();
       submitInFlightRef.current = false;
+      correctInFlightRef.current = false;
+      micReadyRef.current = false;
       isSpeechTrueCount = 0;
+      isSpeechFalseRun = 0;
+      clearBreakTimer();
+      breakRef.current = null;
+      if (breakDotsTimerRef.current) {
+        clearTimeout(breakDotsTimerRef.current);
+        breakDotsTimerRef.current = null;
+      }
       if (autoResumeHintTimerRef.current) {
         clearTimeout(autoResumeHintTimerRef.current);
         autoResumeHintTimerRef.current = null;
@@ -4994,7 +5142,7 @@ function MicButton({
       } else if (pausedForHiddenRef.current && localRef.current === "on") {
         pausedForHiddenRef.current = false;
         void engineRef.current?.start().catch(() => {
-          setLocalMode("off");
+          void exitModeRef.current("manual");
         });
       }
     };
@@ -5010,7 +5158,7 @@ function MicButton({
       const sid = sidRef.current;
       if (localRef.current === "pending" || localRef.current === "on") {
         if (bus.activeSessionId === sid) {
-          setLocalMode("on");
+          if (localRef.current === "on" || micReadyRef.current) setLocalMode("on");
         } else if (localRef.current === "pending") {
           setLocalMode("off");
         }
@@ -5025,15 +5173,23 @@ function MicButton({
   draftRef.current = liveDraft;
   const lastPartialRef = (0, import_react3.useRef)("");
   const submitInFlightRef = (0, import_react3.useRef)(false);
+  const correctInFlightRef = (0, import_react3.useRef)(false);
   const livePhase = useInput ? useInput((s) => s?.phase ?? "") : "";
   const phaseRef = (0, import_react3.useRef)("");
   phaseRef.current = livePhase;
   const [holding, setHolding] = (0, import_react3.useState)(false);
-  const label = on ? busy ? t("recognizing") : holdMode ? holding ? t("releaseToSend") : t("holdToTalk") : bus.ui.state === "wake" ? t("sayWake").replace("{wake}", bus.ui.wakeWord || t("wakeWord")) : t("voiceDetected") : local === "pending" ? t("entering") : t("voiceBtn");
+  const label = on ? busy ? (
+    // UX：loading-model 是加载/下载模型而非识别——「识别中…」与状态不符。
+    bus.ui.state === "loading-model" ? t("buttonLoading") : t("recognizing")
+  ) : holdMode ? holding ? t("releaseToSend") : t("holdToTalk") : bus.ui.state === "wake" ? t("sayWake").replace("{wake}", bus.ui.wakeWord || t("wakeWord")) : (
+    // UX：纯聆听态「语音中」与状态不符（并未在说话）→「聆听中」。
+    t("buttonListening")
+  ) : local === "pending" ? t("entering") : t("voiceBtn");
   const holdPtrRef = (0, import_react3.useRef)(null);
   const toggleHoldRef = (0, import_react3.useRef)(false);
   const suppressClickUntilRef = (0, import_react3.useRef)(0);
   const breakTimerRef = (0, import_react3.useRef)(null);
+  const breakDotsTimerRef = (0, import_react3.useRef)(null);
   const clearBreakTimer = () => {
     if (breakTimerRef.current !== null) {
       clearTimeout(breakTimerRef.current);
@@ -5165,71 +5321,92 @@ function MicButton({
     setHolding(false);
     engineRef.current?.endHeld(true);
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
-    "button",
-    {
-      onClick: (e) => {
-        if (Date.now() < suppressClickUntilRef.current) return;
-        if (holdMode) {
-          if (e.detail !== 0) return;
-        }
-        toggle();
-      },
-      onPointerDown,
-      onPointerMove,
-      onPointerUp,
-      onPointerCancel,
-      onContextMenu: (e) => e.preventDefault(),
-      ref: btnRef,
-      "data-dshvm": "mic",
-      "aria-label": on ? t("ariaActive") : t("ariaEnter"),
-      "aria-pressed": on,
-      title: on ? holdMode ? t("titleHold") : t("titleToggle") : t("titleEnter"),
-      style: {
-        border: holding ? "1px solid rgba(248, 81, 73, 0.6)" : on ? holdMode ? "1px solid rgba(88, 166, 255, 0.45)" : "1px solid rgba(63, 185, 80, 0.45)" : "1px solid rgba(139, 148, 158, 0.35)",
-        background: holding ? "rgba(248, 81, 73, 0.2)" : on ? holdMode ? "rgba(88, 166, 255, 0.16)" : "rgba(63, 185, 80, 0.16)" : local === "pending" ? "rgba(88, 166, 255, 0.14)" : "rgba(139, 148, 158, 0.08)",
-        cursor: "pointer",
-        padding: "5px 10px",
-        borderRadius: 8,
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: 12,
-        fontFamily: "system-ui, sans-serif",
-        color: holding ? "#f85149" : on ? holdMode ? "#58a6ff" : "#2ea043" : local === "pending" ? "#58a6ff" : "#8b949e",
-        // 批 H 任务 3：toggle 模式「语音中」绿字加深（#3fb950 → #2ea043）+ fontWeight:600 双保险，
-        // 浅色主题下与浅绿底 (rgba 63,185,80,.16) 对比度 ≥ 4.5:1（WCAG AA 文本级）。
-        fontWeight: on && !holdMode ? 600 : void 0,
-        transition: "background 0.15s ease, color 0.2s ease, border-color 0.15s ease",
-        touchAction: "none",
-        // 触摸设备上让 pointer 事件独占（滑出取消可用）
-        userSelect: "none",
-        WebkitUserSelect: "none",
-        // iOS Safari 前缀，防长按选中文字
-        WebkitTouchCallout: "none"
-        // iOS 长按弹出「拷贝/选择」菜单
-      },
-      children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            "path",
-            {
-              fill: "currentColor",
-              d: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            "path",
-            {
-              fill: "currentColor",
-              d: "M17.3 11a.9.9 0 0 0-1.8 0 3.5 3.5 0 0 1-7 0 .9.9 0 0 0-1.8 0 5.3 5.3 0 0 0 4.4 5.2v1.9h-1.7a.9.9 0 0 0 0 1.8h5.2a.9.9 0 0 0 0-1.8h-1.7v-1.9A5.3 5.3 0 0 0 17.3 11Z"
-            }
-          )
-        ] }),
-        label
-      ]
-    }
-  );
+  const micHint = bus.activeSessionId !== sessionId ? bus.ui.error ?? bus.ui.notice ?? "" : "";
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+      "button",
+      {
+        onClick: (e) => {
+          if (Date.now() < suppressClickUntilRef.current) return;
+          if (holdMode) {
+            if (e.detail !== 0) return;
+          }
+          toggle();
+        },
+        onPointerDown,
+        onPointerMove,
+        onPointerUp,
+        onPointerCancel,
+        onContextMenu: (e) => e.preventDefault(),
+        ref: btnRef,
+        "data-dshvm": "mic",
+        "aria-label": on ? t("ariaActive") : t("ariaEnter"),
+        "aria-pressed": on,
+        title: on ? holdMode ? t("titleHold") : t("titleToggle") : t("titleEnter"),
+        style: {
+          border: holding ? "1px solid rgba(248, 81, 73, 0.6)" : on ? holdMode ? "1px solid rgba(88, 166, 255, 0.45)" : "1px solid rgba(63, 185, 80, 0.45)" : "1px solid rgba(139, 148, 158, 0.35)",
+          background: holding ? "rgba(248, 81, 73, 0.2)" : on ? holdMode ? "rgba(88, 166, 255, 0.16)" : "rgba(63, 185, 80, 0.16)" : local === "pending" ? "rgba(88, 166, 255, 0.14)" : "rgba(139, 148, 158, 0.08)",
+          cursor: "pointer",
+          padding: "5px 10px",
+          borderRadius: 8,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          fontFamily: "system-ui, sans-serif",
+          color: holding ? "#f85149" : on ? holdMode ? "#58a6ff" : "#2ea043" : local === "pending" ? "#58a6ff" : "#8b949e",
+          // 批 H 任务 3：toggle 模式「语音中」绿字加深（#3fb950 → #2ea043）+ fontWeight:600 双保险，
+          // 浅色主题下与浅绿底 (rgba 63,185,80,.16) 对比度 ≥ 4.5:1（WCAG AA 文本级）。
+          fontWeight: on && !holdMode ? 600 : void 0,
+          transition: "background 0.15s ease, color 0.2s ease, border-color 0.15s ease",
+          touchAction: "none",
+          // 触摸设备上让 pointer 事件独占（滑出取消可用）
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          // iOS Safari 前缀，防长按选中文字
+          WebkitTouchCallout: "none"
+          // iOS 长按弹出「拷贝/选择」菜单
+        },
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+              "path",
+              {
+                fill: "currentColor",
+                d: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+              "path",
+              {
+                fill: "currentColor",
+                d: "M17.3 11a.9.9 0 0 0-1.8 0 3.5 3.5 0 0 1-7 0 .9.9 0 0 0-1.8 0 5.3 5.3 0 0 0 4.4 5.2v1.9h-1.7a.9.9 0 0 0 0 1.8h5.2a.9.9 0 0 0 0-1.8h-1.7v-1.9A5.3 5.3 0 0 0 17.3 11Z"
+              }
+            )
+          ] }),
+          label
+        ]
+      }
+    ),
+    micHint && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+      "span",
+      {
+        "data-dshvm": "mic-hint",
+        role: "status",
+        "aria-live": "polite",
+        title: micHint,
+        style: {
+          fontSize: 11,
+          color: "#f85149",
+          maxWidth: 240,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap"
+        },
+        children: micHint
+      }
+    )
+  ] });
 }
 function VoiceStatusBar({ bus, sessionId }) {
   useLang();
@@ -5293,7 +5470,7 @@ function VoiceStatusBar({ bus, sessionId }) {
     const end = tel["first-audio-played"];
     if (begin !== void 0 && end !== void 0) telParts.push(`${t("telTotal")} ${fmt(end - begin)}`);
   }
-  if (b.ui.interruptConfirmMs !== void 0) {
+  if (telemetryEnabled && b.ui.interruptConfirmMs !== void 0) {
     telParts.push(`${t("interruptConfirm")} ${fmt(b.ui.interruptConfirmMs)}`);
   }
   if (telemetryEnabled && b.ui.echoLevels) {
@@ -5305,6 +5482,8 @@ function VoiceStatusBar({ bus, sessionId }) {
   return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
     "div",
     {
+      role: "status",
+      "aria-live": "polite",
       style: {
         display: "flex",
         flexDirection: "column",
@@ -5393,6 +5572,27 @@ function VoiceStatusBar({ bus, sessionId }) {
                 border: "1px solid rgba(255, 166, 87, 0.35)"
               },
               children: t("vadDetected")
+            }
+          ),
+          b.ui.ttsNotice && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+            "span",
+            {
+              title: b.ui.ttsNotice,
+              style: {
+                flexShrink: 0,
+                maxWidth: 200,
+                padding: "0 6px",
+                borderRadius: 8,
+                fontSize: 10,
+                lineHeight: "16px",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: "#ffa657",
+                background: "rgba(255, 166, 87, 0.15)",
+                border: "1px solid rgba(255, 166, 87, 0.35)"
+              },
+              children: b.ui.ttsNotice
             }
           ),
           elapsedSec > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
@@ -5565,7 +5765,7 @@ function VoiceOverlay({ bus }) {
               pointerEvents: "auto"
               // 仅此按钮可点
             },
-            children: t("skip")
+            children: t("skipReading")
           }
         )
       ]

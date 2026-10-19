@@ -189,6 +189,11 @@ const debugLog = (event: string, fields: Record<string, unknown> = {}): void => 
   console.log('[dsh-voice]', event, JSON.stringify(out))
 }
 
+/** 新 strings 键（键名+中英文案已列交接清单，由 i18n teammate 补入 strings.ts）经此
+ *  调用：string→TKey 下行转换，规避字面量收窄报错；键落地后与普通 t() 完全等价
+ *  （translateLocal 缺失时回退键名原文，不会崩）。 */
+const tk = (key: string): string => t(key as TKey)
+
 /** 工具提示音上下文（toolBeep 设置项，默认关；进入语音模式的手势栈内预热）。 */
 let beepCtx: AudioContext | null = null
 function playToolBeep(): void {
@@ -216,8 +221,12 @@ interface VoiceBus {
   subscribe(fn: (b: { active: string | null; ui: VoiceUiState }) => void): () => void
   setUi(patch: Partial<VoiceUiState>): void
   enter(sessionId: string): Promise<{ ok: boolean; error?: string; preempted?: boolean }>
-  exit(sessionId: string): Promise<void>
-  /** 音频分块帧到达（播放引擎消费前由客户端按句拼帧）。 */
+  /** 退出语音模式。keepAudio=true（打字退出，I2）时不停播——AI 朗读继续，
+   *  只停 ASR/让出 host（用户只是想打字，没让 AI 闭嘴）。 */
+  exit(sessionId: string, keepAudio?: boolean): Promise<void>
+  /** 音频分块帧到达（播放引擎消费前由客户端按句拼帧）。
+   *  M7：预留接口——当前 SSE 'audio' 帧由 bus 内部 audioListeners 直接消费
+   *  （拼帧→播放），无外部订阅方；保留发布面供宿主/调试工具挂载，不删接口。 */
   onAudioFrame(fn: (frame: TtsChunkFrame) => void): () => void
   /** 批 5：设置/清除 backchannel 让位窗口（hardBreak 路径清 0；onBackchannel 触发设 now+1500）。 */
   setBackchannelHold(untilMs: number): void
@@ -269,8 +278,12 @@ const AUTO_SEND_EXTRA_MS = 1200
 /** playing 从 true→false 后的回声尾音宽限（扬声器残响/硬件缓冲仍会被麦克风采到）。
  *  此窗口内 isPlaying 仍判 true，防「句播完瞬间的残响」漏入 ASR → 自聊/多重声音。 */
 const ECHO_TAIL_MS = 400
-/** 批 7O M8：backchannel 让位窗口内累计说话帧数阈值——≥2 帧说明 AI 正在播长句（非明确短应答），
- *  清 hold 让完整句播完；让位只作用于明确短应答（避免 1.5s hold 截断 AI 完整句）。 */
+/** 批 7O M8：backchannel 让位窗口内累计说话帧数阈值——hold 期内 TTS 帧一律丢弃；
+ *  累计达 2 帧（约一句：data+final）即清 hold，**第二句起**恢复播放。
+ *  I4（Issue #15）：原注释「清 hold 让完整句播完」与实现相反——hold 期到达阈值前
+ *  的帧（含首句 data+final）全部丢弃，首句整句不播；到达阈值只是让后续句恢复。
+ *  即「让完整句播完」仅对第二句起成立，当前短应答句是让位的代价（产品取舍，
+ *  PM 登记待用户确认，行为不改）。 */
 const HOLD_CLEAR_FRAMES = 2
 const WAVE_BARS = 14
 /** 插件 HTTP 命名空间（与 host 侧 BASE_PATH 常量一致，固定不可配置）。 */
@@ -400,7 +413,9 @@ export function apply(ctx: any): void {
         id: 'voice-mode',
         key: 'voice-mode',
         order: 100,
-        label: t('stateVoiceMode'),
+        // M13：函数形式（与下方 settings.section 注册一致）——注册时求值会把
+        // 切换语言前的旧文案冻在菜单里；函数形式每次渲染读当前语言。
+        label: () => t('stateVoiceMode'),
       },
       () => React.createElement(VoiceSettingsCard, { scope }),
     ),
@@ -715,7 +730,8 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     }
   }
   const resetTelemetry = (): void => {
-    if (!telemetryEnabled) return
+    // M1：不再以 telemetryEnabled 早退——interruptConfirmMs 等字段与埋点开关无关，
+    // 早退会让关埋点时打断确认数永驻 ui（展示门控在状态条，清理必须无条件）。
     for (const k of Object.keys(telemetryStages)) delete telemetryStages[k as TelemetryStage]
     ui.telemetry = null
     ui.interruptConfirmMs = undefined
@@ -860,14 +876,22 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     setFrozen: (frozen) => aec.setFrozen(frozen),
   }
 
+  // playing 降沿记录 + ui 合并 + notify——播放引擎与状态条/手势共用的唯一写入入口。
+  // Blocker 修复（Issue #15）：此前 createAudioEngine 首参传的是裸闭包
+  // （Object.assign+notify，不记降沿）→ playingEndAt 恒 0 → playingTailUntil()
+  // 恒 false → ECHO_TAIL_MS 400ms 回声尾音宽限（:1861 isPlaying 门）从未生效，
+  // 句播完瞬间的残响漏入 ASR。提取为命名函数后两方同源，降沿只此一处记录。
+  const setUi = (patch: Partial<VoiceUiState>): void => {
+    // 记录 playing 降沿（true→false），供 isPlaying 回声尾音宽限判定。
+    if (patch.playing === false && ui.playing === true) playingEndAt = Date.now()
+    Object.assign(ui, patch)
+    notify()
+  }
   // 播放引擎与 bus 的生命周期相同（apply 闭包单例）；setUi 闭包延迟解引用，
   // 事件回调触发时 notify 已就绪。onPlayed = P1-5 真实起播埋点；
   // onPlaybackRef = P3-2 回声参考回传。
   const engine = createAudioEngine(
-    (patch) => {
-      Object.assign(ui, patch)
-      notify()
-    },
+    setUi,
     () => stampTelemetry('first-audio-played'),
     (pcm, sampleRate, wallMs) => {
       pushRef(pcm, sampleRate, wallMs)
@@ -903,6 +927,12 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     source.addEventListener('open', () => {
       rejectSeqUpTo.clear()
       lastFinalSeq.clear()
+      // M14：同清拼帧缓冲——旧连接在途的半句 chunk 已随 TCP 断开丢失，残留缓冲会让
+      // 重连后的同序号句拼出坏音频（final 的 chunkId 校验不过 → 静默丢句）。
+      curSentenceId = null
+      curChunks = []
+      curBytes = 0
+      curChunkCount = 0
       // Issue #15 批 7：重连成功清除断连提示（首次连接时 sseDown 恒 false，no-op）。
       if (ui.sseDown) {
         ui.sseDown = false
@@ -1183,7 +1213,9 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     ui,
     subscribe(fn) {
       listeners.add(fn)
-      fn({ active: activeSessionId, ui: { ...ui, levels: [...ui.levels] } })
+      // M10：初始快照与 notify 同口径复制 levels/botLevels——波形数组是环形覆写
+      // （pushBotLevels Object.assign 同一数组引用），不复制会把内部数组泄漏给订阅方。
+      fn({ active: activeSessionId, ui: { ...ui, levels: [...ui.levels], botLevels: [...ui.botLevels] } })
       return () => {
         listeners.delete(fn)
       }
@@ -1200,12 +1232,7 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         }
       }, 5000)
     },
-    setUi(patch) {
-      // 记录 playing 降沿（true→false），供 isPlaying 回声尾音宽限判定。
-      if (patch.playing === false && ui.playing === true) playingEndAt = Date.now()
-      Object.assign(ui, patch)
-      notify()
-    },
+    setUi,
     /** isPlaying 尾音截止墙钟：playing 或尾音宽限期内均视为「AI 正在朗读」。 */
     playingTailUntil() {
       // 对抗审查 Minor#5：尾音窗随估计 bulk delay 扩展（回声到达麦克风比本地停播
@@ -1240,12 +1267,15 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         return { ok: false, error: t('enterFail') }
       }
     },
-    async exit(sessionId) {
+    async exit(sessionId, keepAudio?: boolean) {
       resetTelemetry()
       ui.turn = 'idle' // P2-4：退出复位回合状态
-      // 双重奏根治：退出即停 TTS，拒绝线保留（host toggle off 用 cancel 停推且 seq 连续，
-      // 重入后新句 seq > 线、旧帧 ≤ 线仍被拒）。
-      doSkipAudio()
+      // I2：keepAudio（打字退出）时不停 TTS——只让出 host/ASR，朗读继续。
+      if (!keepAudio) {
+        // 双重奏根治：退出即停 TTS，拒绝线保留（host toggle off 用 cancel 停推且 seq 连续，
+        // 重入后新句 seq > 线、旧帧 ≤ 线仍被拒）。
+        doSkipAudio()
+      }
       try {
         const res = await fetch(`${location.origin}${basePath}/toggle`, {
           method: 'POST',
@@ -1400,6 +1430,9 @@ export function MicButton({
   const localRef = useRef<'off' | 'pending' | 'on'>('off')
   const sidRef = useRef<string | undefined>(sessionId)
   const engineRef = useRef<AsrEngine | null>(null)
+  /** M11：麦克风真正采音中标记（engine.start() 成功才置真）——按钮 pending→on
+   *  的晋升门：权限框/getUserMedia 在途时 host 可能已确认活跃，但无麦。 */
+  const micReadyRef = useRef(false)
   const actionsRef = useRef(inputActions)
   const submitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 累积模式「静音到点才发」的延迟发送计时（区别于 submitTimerRef 的提交重试计时）。 */
@@ -1452,11 +1485,19 @@ export function MicButton({
 
   useVoiceCss()
 
-  // bus.ui 镜像（仅模式/自动发送变化才触发重渲染；电平高频更新不打扰）。
+  // bus.ui 镜像（仅关键字段变化才触发重渲染；电平高频更新不打扰）。
+  // M2：此前每次 notify 都 bump——电平/波形以 100ms 级推送，按钮会每拍重渲染；
+  // 按钮文案与常驻提示面只依赖下列关键字段，比较后再 bump。
   const [, bumpUi] = useState(0)
+  const uiKeyRef = useRef('')
   useEffect(
     () =>
-      bus.subscribe(() => {
+      bus.subscribe(({ active, ui: u }) => {
+        // 按钮文案/常驻提示面依赖：active（提示面让位门）+ state/error/notice/mode/wakeWord/ttsNotice。
+        // model 下载进度不在此列（按钮不渲染它；状态条有独立全量订阅）。
+        const key = `${active}|${u.state}|${u.error ?? ''}|${u.notice ?? ''}|${u.mode}|${u.wakeWord}|${u.ttsNotice ?? ''}`
+        if (key === uiKeyRef.current) return
+        uiKeyRef.current = key
         bumpUi((t) => t + 1)
       }),
     [bus],
@@ -1505,6 +1546,10 @@ export function MicButton({
         senseITN: c.senseITN === false ? false : true,
         senseVoice: c.senseVoice === false ? false : true,
       }
+      // Issue #15 UX：快捷键非法值的客户端提示入口（settings-form 失焦校验之外的
+      // 运行态兜底）——parseShortcut 对非法值返回 null（快捷键静默禁用），用户以为
+      // 生效却无反应；空串 = 主动关闭不提示。设置修正后下次进入即恢复。
+      if (next.shortcut && !parseShortcut(next.shortcut)) bus.setNotice(tk('shortcutInvalid'))
       bus.setUi({ boot: next, mode: next.mode, wakeWord: next.wakeWord })
       // Issue #15 批 6：刷新运行态 boot 镜像（设置卡片「当前生效值」的数据源——真语义是
       // 运行中会话在用的配置，不是 host vset 自比）。
@@ -1550,19 +1595,23 @@ export function MicButton({
       const sid = sidRef.current
       if (localRef.current === 'on' && sid) {
         // 批 G 任务 2：空闲退出时显示「空闲超时已自动退出（设置里可调时长）」3 秒后清。
+        // Issue #15 UX Blocker：提示必须在退出流程**之后**写——exitMode 内的
+        // clearIdle 会清掉此处 arm 的 3s 计时器、bus.setUi({error:null}) 会擦掉文案，
+        // 原顺序（先写提示再退出）下提示从未可见。退出完成后写入常驻提示面
+        // （mic 按钮旁红字，与 activeSessionId 解耦），退出/未激活状态也能看到。
         // 不打断已有的 error（让用户先看到错误）；仅当 error 为空时覆写。
-        // 设置时就取定文案（不在 3 秒后重新翻译再比较）：期间若用户切换了界面语言，重译会使相等比较失败、提示残留。
         const quitMsg = t('idleTimeoutQuit')
-        bus.setUi({
-          error: bus.ui.error ?? quitMsg,
+        void exitModeRef.current('idle').then(() => {
+          bus.setUi({ error: bus.ui.error ?? quitMsg })
+          const prevClearError = idleClearErrorRef.current
+          if (prevClearError) clearTimeout(prevClearError)
+          idleClearErrorRef.current = setTimeout(() => {
+            idleClearErrorRef.current = null
+            if (bus.ui.error === quitMsg) bus.setUi({ error: null })
+          }, 3000)
+        }).catch(() => {
+          // 退出流程异常：提示不写（退出态本身由订阅纠正），不留未处理 rejection
         })
-        const prevClearError = idleClearErrorRef.current
-        if (prevClearError) clearTimeout(prevClearError)
-        idleClearErrorRef.current = setTimeout(() => {
-          idleClearErrorRef.current = null
-          if (bus.ui.error === quitMsg) bus.setUi({ error: null })
-        }, 3000)
-        void exitModeRef.current('idle')
       }
     }, idleMs)
   }
@@ -1578,14 +1627,21 @@ export function MicButton({
         cancelPendingSubmit()
         cancelAutoSend()
         clearBreakTimer()
+        if (breakDotsTimerRef.current) {
+          clearTimeout(breakDotsTimerRef.current) // M3：抢占退出同清「…」计时器
+          breakDotsTimerRef.current = null
+        }
         setHolding(false) // 对抗审查 Important#2：被抢占退出时复位录音态红色
         isSpeechTrueCount = 0 // 打断根治：任何 host 驱动退出（状态条退出/被抢占/跨 tab 让出）都复位计数
+        isSpeechFalseRun = 0 // M5：同复位迟滞「假」运行计数（模块级，跨会话不重置会误衰减）
         submitInFlightRef.current = false // 批 3 复审 Minor-1：抢占路径直接退出不经 exitMode，须同口径清在途标记（防陈旧 true 跨 enterMode 存活致回填静默失效）
+        correctInFlightRef.current = false // Issue #15 UX-I2：抢占同步废纠错周期（防幽灵提交）
         breakRef.current = null
         manualHoldRef.current = false
         holdCtrlRef.current = false // 复位 Ctrl 按住态（防抢占后残留致下次手势错乱）
         const engine = engineRef.current
         engineRef.current = null
+        micReadyRef.current = false // M11：抢占退出同步废采音标记（下次进入重新起算）
         // Fix：先置 null 防重入，再异步 stop（stop 内部会阻止 handleAudio）
         if (engine) void engine.stop()
         bus.resetTelemetry() // P1-5：与 exitMode 同口径清埋点
@@ -1613,6 +1669,10 @@ export function MicButton({
   /** Issue #15 批 4：LLM 纠错（可选，llmCorrect 设置默认关）——发送前对整条草稿纠错一次。
    *  失败/超时/空结果一律回退原文（纠错是纯附加层，不阻断发送）。 */
   const correctDraft = async (text: string): Promise<string> => {
+    // Issue #15 UX：纠错 RTT 最坏 12s——期间给「纠错中…」提示（纠正是纯附加层，
+    // 但静默等待 12s 会被当成卡死）。不走 setNotice 的 5s 自清（纠错可超过 5s），
+    // 由本函数在返回前清理。
+    bus.setUi({ notice: t('correctFixing') })
     try {
       const r = await fetch(`${location.origin}${BASE_PATH}/correct`, {
         method: 'POST',
@@ -1620,11 +1680,15 @@ export function MicButton({
         body: JSON.stringify({ text, lang: activeLocale() === 'en' ? 'en' : 'zh' }),
         signal: AbortSignal.timeout(12000), // 上限 12s——超时按原文发，不等纠错
       })
+      bus.setUi({ notice: null })
       if (!r.ok) return text
       const out = (await r.json()) as { text?: unknown }
       const corrected = typeof out.text === 'string' ? out.text.trim() : ''
       return corrected || text
-    } catch {
+    } catch (e) {
+      bus.setUi({ notice: null })
+      // 超时放弃：提示一次（其余失败保持静默回退——纠错是纯附加层，不阻断发送）。
+      if (e instanceof DOMException && e.name === 'TimeoutError') bus.setNotice(t('correctAbandoned'))
       return text
     }
   }
@@ -1719,10 +1783,20 @@ export function MicButton({
     // Issue #15 批 4：LLM 纠错预步（可选默认关）——发送前整条一次；命令草稿不纠错
     // （'/' 开头走宿主 adjudication）；纠错 RTT 期间在途标记已置（partial 不回写）。
     if (bootNow().llmCorrect === true && !draftSnapshot.startsWith('/')) {
+      correctInFlightRef.current = true
       void correctDraft(draftSnapshot).then((finalText) => {
-        // 有效性复核（审查 I1）：纠错 RTT（最坏 12s）内用户退出/打字/抢占/改写草稿 →
-        // 放弃本次发送（文字留草稿可手动发）——不幽灵提交、不用旧 snapshot 覆盖用户文本。
-        if (!submitInFlightRef.current || draftRef.current.trim() !== draftSnapshot) return
+        // 有效性复核（审查 I1 + Issue #15 UX-I2）：纠错 RTT（最坏 12s）内用户退出/
+        // 打字/抢占/改写草稿/重新开口 → 放弃本次发送（文字留草稿可手动发）——
+        // 不幽灵提交、不用旧 snapshot 覆盖用户文本。correctInFlightRef 独立于
+        // submitInFlightRef：hardBreak（I1）/退出/新一轮提交会清它；speech 态 =
+        // 用户打断后又在说话，这句留给用户说完一起发。
+        const valid =
+          correctInFlightRef.current &&
+          submitInFlightRef.current &&
+          draftRef.current.trim() === draftSnapshot &&
+          engineRef.current?.state !== 'speech'
+        correctInFlightRef.current = false
+        if (!valid) return
         runSubmit(finalText)
       })
       return
@@ -1746,14 +1820,20 @@ export function MicButton({
     }, AUTO_SEND_EXTRA_MS)
   }
 
-  const exitMode = async (_reason: 'manual' | 'idle' | 'typing'): Promise<void> => {
+  const exitMode = async (reason: 'manual' | 'idle' | 'typing'): Promise<void> => {
     if (localRef.current === 'off') return
     setLocalMode('off')
     clearIdle()
     cancelPendingSubmit()
     cancelAutoSend()
     submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：退出清在途标记
+    correctInFlightRef.current = false // Issue #15 UX-I2：退出同步废纠错周期（防幽灵提交）
     isSpeechTrueCount = 0 // 打断根治：退出重置 isSpeech 计数（防残留）
+    isSpeechFalseRun = 0 // M5：同步重置迟滞「假」运行计数（模块级，不重置会跨会话误衰减）
+    if (breakDotsTimerRef.current) {
+      clearTimeout(breakDotsTimerRef.current) // M3：「…」占位计时器退出即清
+      breakDotsTimerRef.current = null
+    }
     fixtureRecorder.save('exit') // fixture 录制：退出即落盘（未开录时为 no-op）
     breakRef.current = null // 手动打断入口：退出即失效
     manualHoldRef.current = false
@@ -1761,12 +1841,15 @@ export function MicButton({
     setHolding(false) // 对抗审查 Important#2：退出复位录音态红色
     const engine = engineRef.current
     engineRef.current = null
+    micReadyRef.current = false // M11：退出同步废采音标记
     if (engine) await engine.stop() // Fix：等待 stop 完成，确保 handleAudio 停止
     bus.resetTelemetry() // P1-5：退出清空埋点链
     // Minor#3：清 VAD 徽标（manual 模式冻结不复位会跨会话残留）。
     bus.setUi({ state: 'idle', partial: '', levels: [], error: null, model: null, ttsNotice: null, isSpeech: undefined })
     const sid = sidRef.current
-    if (sid) await bus.exit(sid) // Fix：等待 host 退出完成，防 ASR 请求 403
+    // I2：打字退出（Q13 双通道不混入）只停 ASR/让出 host——keepAudio 跳过
+    // doSkipAudio，不掐断 AI 朗读（用户只是想打字，没让 AI 闭嘴）。
+    if (sid) await bus.exit(sid, reason === 'typing') // Fix：等待 host 退出完成，防 ASR 请求 403
   }
 
   const enterMode = async (): Promise<void> => {
@@ -1775,6 +1858,8 @@ export function MicButton({
     // 健壮性：每次进入语音模式重置 isSpeech 计数（模块级变量跨 enterMode 持久，
     // 残留计数会让新会话首帧误判「连续 2 次 true」而误打断）。
     isSpeechTrueCount = 0
+    isSpeechFalseRun = 0 // M5：同重置迟滞「假」运行计数（模块级，跨会话不重置会误衰减确认速度）
+    micReadyRef.current = false // M11：进入即废采音标记（start 成功才置真）
     setLocalMode('pending')
     try {
       const entered = await bus.enter(sid)
@@ -1802,6 +1887,10 @@ export function MicButton({
       // 批 7O（ADR-0006）：detect 模式下由 onAecState（第一级探测）在 getUserMedia 后
       // 改写为 'auto'/'manual'；auto/manual 显式取值保持不变。
       let bargeInMode = cfg.bargeInMode
+      // UX：回声门控连续拒断计数。拒断时行为上不打断、徽标却照显「VAD 检测到
+      // 语音」——用户感知矛盾（以为打断了，AI 还在读）。连续拒断只 debugLog、
+      // 无可感知出口；达 3 次给一次提示（单次抖动不噪，真回声环境才触发）。
+      let echoRejectStreak = 0
       debugLog('enter', {
         build: BUILD_TAG,
         mode: cfg.mode,
@@ -1820,6 +1909,11 @@ export function MicButton({
         // 立即停播 + 恢复音量：不等待慢操作（discardSegment 最多 5s、cancel 最多 3s）。
         bus.skipAudio()
         bus.unduckAudio()
+        // Issue #15 I1：打断即取消 pending 自动发送 + 清提交/纠错在途标记——否则纠错
+        // RTT（最坏 12s）内打断后旧文本被发出（幽灵提交，复核三条件全过）。文字留草稿。
+        cancelAutoSend()
+        submitInFlightRef.current = false
+        correctInFlightRef.current = false
         // 批 5：真打断优先——清 backchannel 让位窗口，避免 1.5s 丢帧阻塞用户新回合播放。
         bus.setBackchannelHold(0)
         // 立即取消当前回合（不等 cancelP/discardSegment）：否则其 3~5s 窗口内用户开口的
@@ -1843,7 +1937,14 @@ export function MicButton({
         // 打断只停 AI——否则按住说的前半句会被吃掉。
         if (engineRef.current && !engineRef.current.holding) await engineRef.current.discardSegment()
         await cancelP
+        // M3：hardBreak 后的「…」占位 3s 后自清——用户不再开口时不在状态条留残留
+        // 字幕（下一拍 onPartial/onSegment 会自然覆盖，此处只兜底）。
         bus.setUi({ partial: '…' })
+        if (breakDotsTimerRef.current) clearTimeout(breakDotsTimerRef.current)
+        breakDotsTimerRef.current = setTimeout(() => {
+          breakDotsTimerRef.current = null
+          if (bus.ui.partial === '…') bus.setUi({ partial: '' })
+        }, 3000)
       }
       // 手动打断入口：显式手势（按住麦克风/Ctrl）在播放中调用，回声无关、100% 可靠。
       breakRef.current = hardBreak
@@ -1875,6 +1976,7 @@ export function MicButton({
             if (!bus.ui.playing) {
               isSpeechTrueCount = 0
               interruptFirstAt = 0
+              echoRejectStreak = 0 // 非播放期无拒断概念，计数归零
               bus.setUi({ isSpeech: speech, echoDelayMs: bus.echoDelayMs(), echoLevels: engineRef.current?.echoLevels() })
               return
             }
@@ -1907,6 +2009,9 @@ export function MicButton({
                   })
                   isSpeechTrueCount = 0
                   interruptFirstAt = 0
+                  // 连续拒断 3 次给一次可感知提示（外放强回声环境下用户「说话打不断」
+                  // 的解释出口：不是失灵，是回声防护生效了——引导耳机/手动打断）。
+                  if (++echoRejectStreak === 3) bus.setNotice(tk('echoRejectHint'))
                   return
                 }
                 // 打断确认耗时 = VAD 首次判真 → 触发（真机标定 C-3 数据）。
@@ -1921,6 +2026,7 @@ export function MicButton({
                 })
                 interruptFirstAt = 0
                 isSpeechTrueCount = 0 // 重置计数防重复触发
+                echoRejectStreak = 0 // 真打断成功：拒断计数归零
                 fixtureRecorder.mark('interrupt', `confirmMs=${confirmMs}`)
                 resetIdle()
                 bus.resetTelemetry() // P1-5：打断 = 上一轮回复作废，链清空
@@ -1972,6 +2078,9 @@ export function MicButton({
               bus.setUi({ boot: { ...bus.ui.boot, bargeInMode }, bargeInDetectFallback: !on })
             }
           },
+          // TODO（Issue #15 UX M10，产品决策待 PM 登记）：待机期（非播放期）附和词
+          //   无护栏——matchBackchannel 只在朗读期让位路径消费，待机期用户说「嗯/对」
+          //   会正常入段累积发送。是否加待机期短应答护栏需产品决策，此处只登记不改行为。
           // 批 5 / ADR-0008 Phase 1：backchannel 命中回调——
           //   立即 skipAudio 终止当前朗读 + 置 cfg.yieldMs hold 窗口，期间 TTS 帧丢（字幕同帧丢）。
           //   关 backchannelYield = 不挂回调，行为等同改造前（I10 豁免由 §7.0 ADR-0008 接受）。
@@ -2020,6 +2129,21 @@ export function MicButton({
         bus.setUi({ error: t(key as 'recognitionFail') })
       })
       engine.onNotice((key) => {
+        // Issue #15 接口约定（asr 侧 backchannel 弃段时 emit 'backchannelDropped'）：
+        // 先剥掉草稿里的 live partial 尾——该段被弃，定稿永不到来，partial 尾若残留
+        // 会被下次 composeDraft 当已定稿内容拼进新草稿（ Ghost 文本）。
+        if (key === 'backchannelDropped') {
+          if (lastPartialRef.current) {
+            const composed = composeDraft(draftRef.current, lastPartialRef.current, '')
+            lastPartialRef.current = ''
+            try {
+              actionsRef.current?.setDraft?.(composed)
+            } catch {
+              // 写草稿失败不阻断——提示仍走 setNotice
+            }
+          }
+          bus.setUi({ partial: '' })
+        }
         // Issue #15 批 7：瞬态提示（识别通道连败 3 次等可自愈场景）——setNotice 内置
         // 5s 自动清除（仅当 notice 仍是本次文案才清，防冲掉用户新提示）。
         bus.setNotice(t(key as 'partialFail'))
@@ -2031,6 +2155,11 @@ export function MicButton({
         bus.setUi({ levels: next })
       })
       engine.onPartial((text) => {
+        // M6：退出后迟到 partial 不写草稿——asr.ts 的 emit 不查 active，退出后
+        // engineRef.current 已置 null；迟到回调若继续写，会把旧会话的半句写进
+        // 新会话草稿（退出后 state 为空串，wake 门恒真 + 无实例比对时必发生）。
+        // 比对进入时捕获的引擎实例（本闭包的创建者），过期即整条忽略。
+        if (engineRef.current !== engine) return
         bus.setUi({ partial: text })
         // 空 partial（刚起口未解出字）直接返回——不剥 live 尾（批 3 复审 OQ-2：剥了下一拍
         // 又补回，输入框可见闪烁；host partial 为段内累计，空即当前段尚无文本）。
@@ -2081,8 +2210,8 @@ export function MicButton({
         let nextDraft = composeDraft(draftRef.current, lastPartialRef.current, trimmed)
         lastPartialRef.current = ''
         try {
+          // M9：删 else-if 死分支——与 if 条件字面重复，永不可达。
           if (typeof actions?.setDraft === 'function') actions.setDraft(nextDraft)
-          else if (typeof (actions as any)?.setDraft === 'function') (actions as any).setDraft(nextDraft)
         } catch {
           try {
             actions?.setDraft?.(trimmed)
@@ -2123,9 +2252,13 @@ export function MicButton({
       // 订阅已置 off + 停麦；此处不得再置 on，否则按钮绿「语音中」但无引擎无麦（卡死态）。
       if (bus.activeSessionId !== sid) {
         engineRef.current = null
+        micReadyRef.current = false
         await engine.stop()
         return
       }
+      // M11：麦克风真正采音中才允许按钮晋升 on（start 成功 = getUserMedia+worklet 就绪）；
+      // 订阅侧晋升同读此标记，权限框在途时按钮保持 pending「进入中…」。
+      micReadyRef.current = true
       setLocalMode('on')
       resetIdle()
     } catch (e) {
@@ -2135,7 +2268,11 @@ export function MicButton({
         e instanceof DOMException
           ? e.name === 'NotAllowedError'
             ? t('micDenied')
-            : t('micUnavailable')
+            : // UX：NotReadableError = 麦克风被占用（其他程序/标签页）——与「不可用」
+              // 混同时用户无从下手，分原因给可行动文案。
+              e.name === 'NotReadableError'
+              ? t('micBusy')
+              : t('micUnavailable')
           : t('startFail').replace('{err}', String(e instanceof Error ? e.message : e))
       bus.setUi({ error: msg })
       const sid2 = sidRef.current
@@ -2218,7 +2355,16 @@ export function MicButton({
       cancelPendingSubmit()
       cancelAutoSend()
       submitInFlightRef.current = false // 批 4 复审 Minor-1a：卸载同样清在途标记（纠错 RTT 内切会话/导航 → promise resolve 后幽灵提交）
+      correctInFlightRef.current = false // Issue #15 UX-I2：卸载同步废纠错周期（同 Minor-1a 口径）
+      micReadyRef.current = false // M11：卸载同步废采音标记
       isSpeechTrueCount = 0 // 打断根治：卸载重置 isSpeech 计数（防残留）
+      isSpeechFalseRun = 0 // M5：卸载同重置迟滞「假」运行计数（模块级，跨会话不重置会误衰减）
+      clearBreakTimer() // M4：长按打断定时器卸载即清（组件已不在，回调无处可去）
+      breakRef.current = null // M4：手动打断入口卸载即失效
+      if (breakDotsTimerRef.current) {
+        clearTimeout(breakDotsTimerRef.current) // M3：「…」占位计时器卸载即清
+        breakDotsTimerRef.current = null
+      }
       // 批 H 任务 4：autoResume 引导提示定时器兜底清理。
       if (autoResumeHintTimerRef.current) {
         clearTimeout(autoResumeHintTimerRef.current)
@@ -2395,8 +2541,10 @@ export function MicButton({
       } else if (pausedForHiddenRef.current && localRef.current === 'on') {
         pausedForHiddenRef.current = false
         void engineRef.current?.start().catch(() => {
-          // 无手势恢复失败（Safari/iOS）→ 静默降级为退出，用户重新点麦克风。
-          setLocalMode('off')
+          // I3：无手势恢复失败（Safari/iOS）→ 完整退出语音模式（停 ASR + 让出 host）。
+          // 仅 setLocalMode('off') 不够：bus/host 侧仍活跃 → 「按钮 off + 状态条在 +
+          // AI 还在读」的分裂态（local 与 bus.active 漂移）。
+          void exitModeRef.current('manual')
         })
       }
     }
@@ -2414,7 +2562,10 @@ export function MicButton({
       const sid = sidRef.current
       if (localRef.current === 'pending' || localRef.current === 'on') {
         if (bus.activeSessionId === sid) {
-          setLocalMode('on')
+          // M11：pending 期 host 已确认活跃、但麦克风尚未真正采音（fetchConfig/
+          // getUserMedia 权限框在途）——不得置 on：按钮绿=采音中，实际无麦（用户
+          // 以为在说话）。仅 start() 成功（micReadyRef）或已在 on 才晋升。
+          if (localRef.current === 'on' || micReadyRef.current) setLocalMode('on')
         } else if (localRef.current === 'pending') {
           setLocalMode('off')
         }
@@ -2437,6 +2588,10 @@ export function MicButton({
   // Issue #15 批 3（审查 I-2）：提交在途标记——submitDraftNow 后宿主清草稿/re-render
   // 的窗口内，onPartial 不回写草稿（防已提交文本被写回且 steer 守卫跳过清草稿）。
   const submitInFlightRef = useRef(false)
+  // Issue #15 UX-I2：纠错 RTT 的独立在途标记——与 submitInFlightRef 分工：后者兼管
+  // onPartial 回写门（提交窗口语义），前者只标「本次纠错周期是否仍然有效」
+  // （hardBreak/退出/新一轮提交会使其失效 → 纠错 then 放弃发送，文字留草稿）。
+  const correctInFlightRef = useRef(false)
   const livePhase = useInput ? useInput((s: any) => (s?.phase as string) ?? '') : ''
   const phaseRef = useRef('')
   phaseRef.current = livePhase
@@ -2444,14 +2599,18 @@ export function MicButton({
   const [holding, setHolding] = useState(false)
   const label = on
     ? busy
-      ? t('recognizing')
+      ? // UX：loading-model 是加载/下载模型而非识别——「识别中…」与状态不符。
+        bus.ui.state === 'loading-model'
+        ? t('buttonLoading')
+        : t('recognizing')
       : holdMode
         ? holding
           ? t('releaseToSend')
           : t('holdToTalk')
         : bus.ui.state === 'wake'
           ? t('sayWake').replace('{wake}', bus.ui.wakeWord || t('wakeWord'))
-          : t('voiceDetected')
+          : // UX：纯聆听态「语音中」与状态不符（并未在说话）→「聆听中」。
+            t('buttonListening')
     : local === 'pending'
       ? t('entering')
       : t('voiceBtn')
@@ -2467,6 +2626,8 @@ export function MicButton({
   /** 长按打断定时器：按住 ≥250ms 才真正打断（对抗审查 Blocker——打断不能挂在
    *  pointerdown 上，否则短按退出也会取消正在生成的回复）。 */
   const breakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** M3：hardBreak 后「…」占位字幕的 3s 自清计时（下一拍 partial/定稿会自然覆盖）。 */
+  const breakDotsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const clearBreakTimer = (): void => {
     if (breakTimerRef.current !== null) {
       clearTimeout(breakTimerRef.current)
@@ -2623,8 +2784,17 @@ export function MicButton({
     engineRef.current?.endHeld(true)
   }
 
+  // Issue #15 UX Blocker：常驻提示面。bus.ui.error/notice 的唯一渲染处原是状态条，
+  // 而状态条仅 activeSessionId===sessionId 时渲染（VoiceStatusBar 早退）——
+  // micDenied、enabled=false（voice_disabled）、/toggle 429（rate_limited）、
+  // 空闲超时退出提示、autoResume 引导五条路径写在退出/未激活之后，用户永远看不到
+  // （strings 三条文案从未显示）。麦克风按钮常驻（conversation.input.right），
+  // 在按钮旁补一行红字；激活态由状态条展示，此处让位防双份显示。
+  const micHint = bus.activeSessionId !== sessionId ? (bus.ui.error ?? bus.ui.notice ?? '') : ''
+
   return (
-    <button
+    <>
+      <button
       onClick={(e: React.MouseEvent) => {
         // toggle 模式长按打断松手后，抑制合成的 click（防误触发 tap-to-exit）。
         if (Date.now() < suppressClickUntilRef.current) return
@@ -2699,7 +2869,26 @@ export function MicButton({
         />
       </svg>
       {label}
-    </button>
+      </button>
+      {micHint && (
+        <span
+          data-dshvm="mic-hint"
+          role="status"
+          aria-live="polite"
+          title={micHint}
+          style={{
+            fontSize: 11,
+            color: '#f85149',
+            maxWidth: 240,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {micHint}
+        </span>
+      )}
+    </>
   )
 }
 
@@ -2810,7 +2999,8 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
     if (begin !== undefined && end !== undefined) telParts.push(`${t('telTotal')} ${fmt(end - begin)}`)
   }
   // 打断确认耗时（打断后独立展示；埋点链已被打断清空，此处单列）。
-  if (b.ui.interruptConfirmMs !== undefined) {
+  // M1：telemetryEnabled 门控——诊断数据默认不暴露给普通用户（与 echoLevels 同口径）。
+  if (telemetryEnabled && b.ui.interruptConfirmMs !== undefined) {
     telParts.push(`${t('interruptConfirm')} ${fmt(b.ui.interruptConfirmMs)}`)
   }
   // 回声诊断（开发模式标定数据）：bulk delay / 回声地板 RMS / 当前残差 RMS。
@@ -2824,6 +3014,10 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
 
   return (
     <div
+      // 可访问性（Issue #15 UX）：状态条是语音模式唯一状态出口，补 role/aria-live
+      // 让屏幕阅读器能播报状态/提示变化（此前无任何语义标记）。
+      role="status"
+      aria-live="polite"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -2933,6 +3127,31 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
             }}
           >
             {t('vadDetected')}
+          </span>
+        )}
+        {/* Issue #15 UX：单句跳句提示角标。文本链里 ttsNotice 排在 playing 状态之后
+            （朗读中优先显示状态），跳句提示在朗读期间被遮蔽——用户看不到「有一句
+            跳过」。角标不依赖 playing，跳句后立即可见（完整文案仍在 title + 非播放期
+            文本链里）。 */}
+        {b.ui.ttsNotice && (
+          <span
+            title={b.ui.ttsNotice}
+            style={{
+              flexShrink: 0,
+              maxWidth: 200,
+              padding: '0 6px',
+              borderRadius: 8,
+              fontSize: 10,
+              lineHeight: '16px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: '#ffa657',
+              background: 'rgba(255, 166, 87, 0.15)',
+              border: '1px solid rgba(255, 166, 87, 0.35)',
+            }}
+          >
+            {b.ui.ttsNotice}
           </span>
         )}
         {/* P1-UX 状态条计时器：会话时长（mm:ss），活跃期间按秒递增 */}
@@ -3104,7 +3323,10 @@ export function VoiceOverlay({ bus }: OverlayProps): React.ReactElement {
           pointerEvents: 'auto', // 仅此按钮可点
         }}
       >
-        {t('skip')}
+        {/* Issue #15 UX：「跳过」二字有歧义（跳整段朗读 vs 跳当前句）。可见文案与
+            aria-label 统一用消歧键 skipReading（跳过本句）；原 skip 键随之闲置，
+            由 i18n teammate 决定去留。 */}
+        {t('skipReading')}
       </button>
     </div>
   )

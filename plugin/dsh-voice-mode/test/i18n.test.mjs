@@ -113,7 +113,7 @@ t('占位符：传 params 替换；不传则原样保留供调用方自行 repla
   dispose()
 })
 
-t('释放后可重新注册（热重载不因重复注册抛错）；并发布 revision', () => {
+t('释放后可重新注册（热重载不因重复注册抛错）', () => {
   const loc = makeFakeLocale('en')
   const d1 = M.bindLocale(loc)
   d1()
@@ -123,7 +123,7 @@ t('释放后可重新注册（热重载不因重复注册抛错）；并发布 r
   d2()
 })
 
-t('重复注册（未释放）→ 静默回退本地实现，不抛', () => {
+t('重复注册被捕获 → 回落本地词典（bind 替换后重绑触发 register 抛错，非「官方返回 key」路径）', () => {
   const loc = makeFakeLocale('en')
   const d1 = M.bindLocale(loc)
   const d2 = M.bindLocale(loc) // 第二次注册同 ns 会抛 → 内部捕获并回退
@@ -159,11 +159,11 @@ t('官方服务异常（getSnapshot 抛错）→ 回退不崩', () => {
   dispose()
 })
 
-t('键缺失（理论上不应发生）→ 官方返回 key 时回落本地词典', () => {
+t('bind 替换后重绑：重复注册抛错被捕获 → 回落本地词典（原名「键缺失」名实不符——官方返回 key 的路径未被走到）', () => {
   const loc = makeFakeLocale('en')
   const dispose = M.bindLocale(loc)
   loc.bind = () => (key) => key // 模拟查不到
-  // 重新绑定使用被替换的 bind
+  // 重新绑定使用被替换的 bind——register 因同 ns 重复注册抛错，走 catch 回退
   M.bindLocale(loc)
   assert.equal(M.t('stateVoiceMode'), 'Voice Mode')
   dispose()

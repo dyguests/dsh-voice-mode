@@ -7,7 +7,7 @@
 ## 背景
 
 - GitHub Issue #15（第三方用户真机反馈）：AI 朗读时用户开口打断，打断能生效，但**用户刚说的内容整段或丢开头**——既不回填输入框也不发送，长段落尤其明显。用户标为最严重问题。
-- 根因（第一性原理取证，`docs/plan/issue-15-ux-feedback.md` §1/§2.A）：播放期（isPlaying）AEC 后帧只进 detectChunks 做 VAD 打断检测、不进识别 segment（自聊防护，asr.ts:774/828-837）；hardBreak 确认（真机 confirmMs 252~597ms）后，非 hold 路径 host 端 `asr.reset(sessionId)`（index.ts:1273）+ 客户端 `discardSegment()`（client.tsx:1674）双清场，新段从零开始——**打断开口到打断生效之间说的全部语音从未进入识别路径**。
+- 根因（第一性原理取证，`docs/plan/issue-15-ux-feedback.md` §1/§2.A）：播放期（isPlaying）AEC 后帧只进 detectChunks 做 VAD 打断检测、不进识别 segment（自聊防护，asr.ts:892-893 `detectChunks.push` / 977-989 isPlaying 不入段分支）；hardBreak 确认（真机 confirmMs 252~597ms）后，非 hold 路径 host 端 `asr.reset(sessionId)`（index.ts:1456，/cancel handler 1432-1461）+ 客户端 `discardSegment()`（client.tsx:1938，hardBreak 1908-1944）双清场，新段从零开始——**打断开口到打断生效之间说的全部语音从未进入识别路径**。
 - 修复设计：asr.ts 维护 AEC 后墙钟 preRoll 环（固定 PRE_ROLL_MS=2000，从 detect 响应 isSpeech 前沿自跟踪语音起始时刻）；hardBreak 弃段时把环内「起始时刻-250ms」起的音频并入新识别段（absorbPreRoll），后续 partial/定稿走既有增量上行与 host fed 去重链路（asr-host.ts:514-518），epoch/resetGate 机制零改动。
 - 冲突：本仓库不变量 I10（新设置默认值必须让未配置用户行为逐字节不变）要求默认守恒；但**本 issue 的存在原因就是默认体验破损**—— salvage 默认关闭等于不修，与用户指令「逐个去执行修复」直接矛盾。
 

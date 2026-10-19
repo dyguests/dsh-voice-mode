@@ -164,6 +164,14 @@ t('bundle 含计数自增 + 清 hold 赋值（backchannelHoldUntil = 0）', () =
   assert.ok(/holdSpeechFrames\s*\+=\s*1/.test(clientSrc), 'bundle 缺 holdSpeechFrames += 1 计数')
   assert.ok(/backchannelHoldUntil\s*=\s*0/.test(clientSrc), 'bundle 缺 backchannelHoldUntil = 0 清 hold')
 })
+t('bundle 含 setBackchannelHold 重置 holdSpeechFrames = 0（每次设新窗口清零，防跨窗口残留）', () => {
+  // 真实 client.tsx setBackchannelHold(untilMs) { backchannelHoldUntil = untilMs; holdSpeechFrames = 0 }
+  // （批 7O M8）。下方镜像测试手工置零只是模拟——真重置由本 bundle 锁看守。
+  assert.ok(
+    /setBackchannelHold\(untilMs\)\s*\{[^}]*holdSpeechFrames\s*=\s*0/.test(clientSrc),
+    'bundle 缺 setBackchannelHold 内的 holdSpeechFrames = 0 重置——跨窗口计数残留会让新窗口少丢帧',
+  )
+})
 
 // --------------------------------------------------------------------------
 // 2) 行为测试：镜像帧回调全路径（hold 判定 + :998 完整性守卫 + 数据帧缓冲）
@@ -264,11 +272,12 @@ t('非 hold 期（backchannelHoldUntil=0）→ 直接走完整路径，不计数
   assert.equal(s.holdSpeechFrames, 0, '非 hold 期不应计数')
 })
 
-t('setBackchannelHold 新窗口重置计数（跨窗口不残留）', () => {
+t('新 hold 窗口重置计数（镜像模拟 setBackchannelHold 的 holdSpeechFrames=0 语义；真重置由上方 bundle 锁看守）', () => {
   const now = Date.now()
   const s = newState(now)
   processFrame(s, { sentenceId: 1, chunkId: 0, final: false }, now) // 计数=1
-  // 新 hold 窗口（如 onBackchannel 再次触发）：setBackchannelHold 重置计数为 0
+  // 新 hold 窗口（如 onBackchannel 再次触发）：真实路径由 setBackchannelHold 重置计数为 0，
+  // 镜像无该方法，手工置零模拟同一语义（bundle 锁①已钉死真实重置存在）。
   s.holdSpeechFrames = 0
   s.backchannelHoldUntil = now + 1000
   const r = processFrame(s, { sentenceId: 1, chunkId: 0, final: false }, now)

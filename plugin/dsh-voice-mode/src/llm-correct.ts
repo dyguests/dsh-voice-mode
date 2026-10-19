@@ -4,7 +4,8 @@
  * 背景（用户反馈问题⑤）：本地 zipformer2 流式识别几乎每句都有同音字/错别字/标点问题；
  * SenseVoice 只做一次整句重转写，不改语义层错字。修复：发送前对整条草稿做一次
  * 「只改错别字/同音字/纯标点，保持原意」的 LLM 纠错（复用 DSH 已配置模型，不引入
- * 新凭据）；失败/无模型/空结果一律回退原文——纠错是纯附加层，不阻断发送。
+ * 新凭据）；失败/无模型/空结果/输出异常（超长或带前言，R1 I-3 护栏）一律回退原文
+ * ——纠错是纯附加层，不阻断发送。
  *
  * 调用点：host 路由 POST /voice-mode/correct（客户端发送前调一次，每消息一次 RTT）。
  * 避自 tap：本调用不传 sessionId（index.ts 的 llm/stream tap 只拦本会话无 purpose 流，
@@ -44,6 +45,12 @@ export function correctionSystem(lang: 'zh' | 'en'): string {
     : '你是中文语音识别纠错器。用户的话来自语音识别（ASR），可能有同音字、错别字、标点缺失或错误。请只做最小修正：改错别字/同音字、补标点，保持原意与口语风格；不要改写句子、不要补充内容、不要回答问题、不要改变数字和专业术语。只输出修正后的文本，不要任何解释。如果原文没有明显错误，原样返回。'
 }
 
+/** 前言前缀形态（R1 I-3 护栏）：弱模型爱加「修正后：」「这是修正后的文本：」「Corrected:」
+ *  等说明头。锚定行首、限长（防误伤正文里偶合的词）。命中即回退原文——纠正是纯附加层，
+ *  零护栏时用户消息会被模型的发挥静默替换。 */
+const CORRECTION_PREAMBLE_RE =
+  /^(?:以下是|这是)?(?:修正|纠正|更正|纠错|修改)[^。！？\n]{0,12}[：:]|^(?:here is (?:the )?)?(?:corrected|correction)\b/i
+
 /**
  * 纠错一条文本。任何失败（无 ctx.get / 无 llm 服务 / 无默认模型 / stream 抛错 /
  * 空结果）都原样返回——纠错不可用时行为与关闭设置一致（纯附加层）。
@@ -76,6 +83,11 @@ export async function correctText(
       if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') out += chunk.text
     }
     const corrected = out.trim()
+    // R1 I-3：模型输出护栏——零护栏时弱模型加前言/复述/作答，用户消息被静默替换。
+    // 廉价启发式，命中一律回退原文（宁可不纠，也不能把用户的话换成模型的发挥）：
+    //   ① 超长（> max(64, 原文×3)）＝复述/作答形态（纠错不应让文本膨胀数倍）；
+    //   ② 前言前缀（「修正后：」「Corrected:」等）＝带说明输出。
+    if (corrected.length > Math.max(64, trimmed.length * 3) || CORRECTION_PREAMBLE_RE.test(corrected)) return text
     return corrected || text
   } catch {
     return text

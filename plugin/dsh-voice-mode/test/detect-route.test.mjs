@@ -10,8 +10,8 @@ import { EventEmitter } from 'node:events'
 import { handleAsrRequest } from '../src/asr-host.ts'
 
 let passed = 0
-const t = (name, fn) => {
-  fn()
+const t = async (name, fn) => {
+  await fn()
   passed++
   console.log(`  ✓ ${name}`)
 }
@@ -40,13 +40,20 @@ const fakeRes = () => {
   }
   res.end = (chunk) => {
     if (chunk) res.body += String(chunk)
+    res.ended = true
+    res.onEnd?.()
   }
   return res
 }
-/** 等待 handler 的异步链路（data/end 事件 + promise 微任务）走完。 */
+/**
+ * 等待 handler 的异步链路走完：以 res.end 实际发生为完成信号。
+ * M8：旧实现双 setImmediate 是时序耦合——链路多一跳微任务（或 handler 内再 await 一次）
+ * 就假绿/假红；改 Promise 化后与 handler 内部结构解耦。
+ */
 const settle = (res) =>
   new Promise((resolve) => {
-    setImmediate(() => setImmediate(() => resolve(res)))
+    if (res.ended) return resolve(res)
+    res.onEnd = () => resolve(res)
   })
 
 /** AsrRuntime 桩：feed/detect 可记录调用。 */
@@ -62,7 +69,7 @@ const stubAsr = (feed, detect) => ({
 const SID = 's-1'
 const pcm = new Float32Array([0.1, -0.2, 0.3, 0.4])
 
-t('vadOnly=1：走 detect 通道，feed 不被调用，响应 {isSpeech:true}，PCM 原样送达', async () => {
+await t('vadOnly=1：走 detect 通道，feed 不被调用，响应 {isSpeech:true}，PCM 原样送达', async () => {
   let feedCalled = false
   let detectSamples = null
   const asr = stubAsr(
@@ -84,7 +91,7 @@ t('vadOnly=1：走 detect 通道，feed 不被调用，响应 {isSpeech:true}，
   assert.ok(Math.abs(detectSamples[0] - 0.1) < 1e-6)
 })
 
-t('vadOnly=1 + VAD 缺失（fail-closed）：响应 {isSpeech:false}，不抛错', async () => {
+await t('vadOnly=1 + VAD 缺失（fail-closed）：响应 {isSpeech:false}，不抛错', async () => {
   const asr = stubAsr(async () => ({ text: '' }), async () => ({ isSpeech: false }))
   const res = fakeRes()
   handleAsrRequest(asr, SID, fakeReq(`/asr?sessionId=${SID}&vadOnly=1`, pcm), res)
@@ -92,7 +99,7 @@ t('vadOnly=1 + VAD 缺失（fail-closed）：响应 {isSpeech:false}，不抛错
   assert.deepEqual(JSON.parse(res.body), { isSpeech: false })
 })
 
-t('普通 partial：isSpeech 序列化透传（回归：曾断链致打断整体失效）', async () => {
+await t('普通 partial：isSpeech 序列化透传（回归：曾断链致打断整体失效）', async () => {
   const asr = stubAsr(async () => ({ text: '你好', isSpeech: true }))
   const res = fakeRes()
   handleAsrRequest(asr, SID, fakeReq(`/asr?sessionId=${SID}&final=0&offset=0&epoch=1`, pcm), res)
@@ -102,7 +109,7 @@ t('普通 partial：isSpeech 序列化透传（回归：曾断链致打断整体
   assert.equal(body.isSpeech, true, 'isSpeech 必须在 HTTP 层透传')
 })
 
-t('普通 partial + isSpeech undefined：不序列化该字段（旧客户端兼容）', async () => {
+await t('普通 partial + isSpeech undefined：不序列化该字段（旧客户端兼容）', async () => {
   const asr = stubAsr(async () => ({ text: 'x' }))
   const res = fakeRes()
   handleAsrRequest(asr, SID, fakeReq(`/asr?sessionId=${SID}&epoch=1`, pcm), res)
@@ -112,7 +119,7 @@ t('普通 partial + isSpeech undefined：不序列化该字段（旧客户端兼
   assert.equal('isSpeech' in body, false, 'undefined 不落键，兼容旧客户端')
 })
 
-t('vadOnly=1 + 非活跃会话：403，detect 不被调用', async () => {
+await t('vadOnly=1 + 非活跃会话：403，detect 不被调用', async () => {
   let detectCalled = false
   const asr = stubAsr(async () => ({ text: '' }), async () => {
     detectCalled = true
@@ -125,7 +132,7 @@ t('vadOnly=1 + 非活跃会话：403，detect 不被调用', async () => {
   assert.equal(detectCalled, false)
 })
 
-t('vadOnly=1 + 空 body（非 final）：400', async () => {
+await t('vadOnly=1 + 空 body（非 final）：400', async () => {
   const asr = stubAsr()
   const res = fakeRes()
   handleAsrRequest(asr, SID, fakeReq(`/asr?sessionId=${SID}&vadOnly=1`, null), res)

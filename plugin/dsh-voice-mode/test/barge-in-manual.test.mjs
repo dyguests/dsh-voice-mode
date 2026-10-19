@@ -103,8 +103,8 @@ await build({
 const { createAsrRuntime } = await import(pathToFileURL(out).href)
 
 let passed = 0
-const t = (name, fn) => {
-  fn()
+const t = async (name, fn) => {
+  await fn()
   passed++
   console.log('  ✓ ' + name)
 }
@@ -127,7 +127,7 @@ const samples = new Float32Array(1600)
 
 console.log('bargeInMode=manual 守卫')
 
-t('manual + manualPressed=true → feed 入流', async () => {
+await t('manual + manualPressed=true → feed 入流', async () => {
   const asr = freshRuntime('manual')
   try {
     const out = await asr.feed('s1', samples, false, 0, 0, true)
@@ -139,7 +139,7 @@ t('manual + manualPressed=true → feed 入流', async () => {
   }
 })
 
-t('manual + manualPressed=false → feed 直接返回 { text: "" }，未入段', async () => {
+await t('manual + manualPressed=false → feed 直接返回 { text: "" }，未入段', async () => {
   const asr = freshRuntime('manual')
   try {
     const out = await asr.feed('s2', samples, false, 0, 0, false)
@@ -150,7 +150,7 @@ t('manual + manualPressed=false → feed 直接返回 { text: "" }，未入段',
   }
 })
 
-t('manual + manualPressed 缺省 → 同 false（保守拒收）', async () => {
+await t('manual + manualPressed 缺省 → 同 false（保守拒收）', async () => {
   const asr = freshRuntime('manual')
   try {
     const out = await asr.feed('s3', samples, false)
@@ -161,7 +161,7 @@ t('manual + manualPressed 缺省 → 同 false（保守拒收）', async () => {
   }
 })
 
-t('manual + final=true + manualPressed=false → 仍 early return', async () => {
+await t('manual + final=true + manualPressed=false → 仍 early return', async () => {
   const asr = freshRuntime('manual')
   try {
     const out = await asr.feed('s4', samples, true, 0, 0, false)
@@ -174,31 +174,34 @@ t('manual + final=true + manualPressed=false → 仍 early return', async () => 
 
 console.log('bargeInMode=auto 模式（行为不变）')
 
-t('auto + manualPressed=true → feed 入流', async () => {
+await t('auto + manualPressed=true → feed 入流', async () => {
   const asr = freshRuntime('auto')
   try {
     const out = await asr.feed('s5', samples, false, 0, 0, true)
     assert.equal(out.loading, undefined)
+    assert.ok(globalThis.__sherpaStreamCreateCalls > 0, 'auto 必须真的建识别流（counter>0）——否则 manual 守卫被误扩大至 auto')
   } finally {
     asr.dispose()
   }
 })
 
-t('auto + manualPressed=false → feed 仍入流', async () => {
+await t('auto + manualPressed=false → feed 仍入流', async () => {
   const asr = freshRuntime('auto')
   try {
     const out = await asr.feed('s6', samples, false, 0, 0, false)
     assert.equal(out.loading, undefined)
+    assert.ok(globalThis.__sherpaStreamCreateCalls > 0, 'auto 不按 manualPressed 拒收（counter>0 证入流）')
   } finally {
     asr.dispose()
   }
 })
 
-t('auto + manualPressed 缺省 → feed 仍入流', async () => {
+await t('auto + manualPressed 缺省 → feed 仍入流', async () => {
   const asr = freshRuntime('auto')
   try {
     const out = await asr.feed('s7', samples, false)
     assert.equal(out.loading, undefined)
+    assert.ok(globalThis.__sherpaStreamCreateCalls > 0, 'auto 缺省 manualPressed 也入流（counter>0 证入流）')
   } finally {
     asr.dispose()
   }
@@ -206,7 +209,7 @@ t('auto + manualPressed 缺省 → feed 仍入流', async () => {
 
 console.log('运行时设置切换（getter 实时读）')
 
-t('bargeInMode getter 实时切换：auto → manual', async () => {
+await t('bargeInMode getter 实时切换：auto → manual', async () => {
   let mode = 'auto'
   const asr = createAsrRuntime({
     cacheDir: tmp,
@@ -219,8 +222,10 @@ t('bargeInMode getter 实时切换：auto → manual', async () => {
     bargeInMode: () => mode,
   })
   try {
+    const c0 = globalThis.__sherpaStreamCreateCalls
     const before = await asr.feed('s8a', samples, false, 0, 0, false)
     assert.equal(before.loading, undefined)
+    assert.ok(globalThis.__sherpaStreamCreateCalls > c0, '切换前 auto 必须真的入流（counter 递增）')
     mode = 'manual'
     const after = await asr.feed('s8b', samples, false, 0, 0, false)
     assert.deepEqual(after, { text: '' })

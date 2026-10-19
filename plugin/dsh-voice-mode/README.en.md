@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue)](./LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases)](https://github.com/qishuilalala/dsh-voice-mode/releases)
 [![npm version](https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange)](https://www.npmjs.com/package/dsh-voice-mode)
-[![Tests: 440 passing](https://img.shields.io/badge/tests-440%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
+[![Tests: 583 passing](https://img.shields.io/badge/tests-583%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
 
 Full-duplex voice conversation mode for DeepSeek Harness (dsh): speak, get a
 spoken answer. Streamed zipformer2 ASR → editable draft → auto send → the
@@ -29,7 +29,7 @@ interrupts playback and the running turn. No API key.
 - **Long segments**: continuous listening stitches consecutive segments into one message (internally chunked at 30 s and concatenated across chunks); 1500 ms silence split by default; hold keeps pauses from splitting;
 - **Hardening**: session-existence check, loopback + Origin guards, per-endpoint rate limits, model SHA256 pinning, download-host allowlist.
 
-> ℹ️ The `demo-voice-flow.gif` at the top is a **real recording of the current UI** (voice mode → live transcription → pause auto-send → sentence-by-sentence read-aloud with live captions), produced by driving the real pipeline via `screenshots/scripts/capture-demo.mjs`.
+> ℹ️ The `demo-voice-flow.gif` at the top is a **real recording of the current UI** (voice mode → live transcription → pause auto-send → sentence-by-sentence read-aloud with live captions), produced by driving the real pipeline via `screenshots/scripts/capture-demo.mjs`; the UI keeps evolving, so the actual interface prevails.
 
 ---
 
@@ -37,7 +37,7 @@ interrupts playback and the running turn. No API key.
 
 - **Voice mode**: toggle with the microphone button in the input toolbar or the global shortcut `Ctrl+Shift+V`; globally single-active (only one session is in voice mode at a time; switching sessions yields automatically)
 - **Two interaction modes (switchable in settings, plus a mode-switch button beside the mic)**:
-  - `toggle` (default) continuous listening: RMS VAD segmentation → streaming zipformer2 ASR (words appear as you speak, live caption preview) → automatic sentence split after 1500 ms of silence into the draft, consecutive segments joined into one message, then auto-sent after ~1500 ms more of silence (≈3 s total); hold `Ctrl` to force an immediate send
+  - `toggle` (default) continuous listening: RMS VAD segmentation → streaming zipformer2 ASR (words appear as you speak, live caption preview) → automatic sentence split after 1500 ms of silence into the draft, consecutive segments joined into one message, then auto-sent after ~1.2 s more of silence (≈2.7 s total); hold `Ctrl` to force an immediate send
   - `hold` push-to-talk: short tap to enter/exit, **hold the mic button to talk, release to send** (swipe up to cancel, `Esc`/blur abandons the segment; pauses do not split while held, up to 10 min); hold `Ctrl` to record-by-keyboard, release to send
 - **Wake word (optional, off by default)**: after setting `wakeWord`, entering voice mode starts in standby, and recognition only begins once the wake word is spoken (e.g. `你好小D`). **You may say it together with your command** ("wake word, check the weather") — the wake word is stripped from the transcript/caption and never sent; matching is fault-tolerant (homophone substitutions, a wrong first char, leading fillers); 3-4 characters recommended; in standby the status bar live-shows "say '<word>' · what it heard". Boundaries (important): **toggle mode only** (inactive with `hold` / manual barge-in); **it must be repeated after each completed utterance or barge-in** (if you only said the wake word, the engine keeps listening so you may pause before the command); **saying it while the agent is reading does not trigger** (barge-in is VAD-based and unrelated to the wake word)
 - **Caption tiers (batch 3)**: `captionFontSize` 4 levels (0=12px / 1=14px / 2=18px / 3=24px) + `captionMaxWidth` 3 levels (0=50vw / 1=70vw / 2=90vw); adapts to narrow viewports
@@ -45,8 +45,8 @@ interrupts playback and the running turn. No API key.
 - **Output pipeline**: only the final answer's `text-delta` is read (reasoning/tool calls are skipped), streamed sentence-by-sentence (Edge cloud by default; local VITS / Kokoro, int8/fp32, optional) with a live caption overlay at the bottom-right; tool calls trigger a beep; the full text is still written to the chat; in voice mode a spoken-format system prompt is injected (short natural sentences, no Markdown decoration), and the reader side strips markers as well for a smoother listening experience
 - **Barge-in**: three sensitivity levels of voice-onset detection → local mute + host synth queue invalidation (epoch) + running turn cancellation (the half-finished part is kept and naturally flows into your new message). With a wake word set, barge-in **remains speak-to-interrupt** (the gate is the VAD, not the wake word; the engine returns to standby afterwards)
 - **Lazy model download with progress**: the zipformer2 Chinese streaming model (~160 MB, `.part` resumable) is downloaded on first use with live progress in the status bar; `npm run prefetch` can pre-download it
-- **Resilience**: mic-denied red hint, visible model-download failure, TTS unreachable status hint (auto retry), failed submit keeps the text in the draft, SSE auto-reconnect
-- **Settings**: location depends on your dsh version (see Settings below), with voice / rate / interrupt sensitivity / silence pause / idle timeout / model mirror / auto send / interaction mode / wake word / ITN / caption tiers / yield semantics; **voices are previewable** (the "试听/Preview" button synthesizes and plays the current voice at the current rate instantly, no need to enter voice mode; custom ShortNames are previewable too)
+- **Resilience and diagnostics**: mic-denied red hint, visible model-download failure, TTS unreachable status hint (auto retry), failed submit keeps the text in the draft, SSE auto-reconnect; the status bar also hints when the recognition / barge-in detect channel fails several times in a row or the state sync drops (self-healing transient failures stay quiet); when SenseVoice finalization takes over 2 s the status bar counts up "recognizing… Ns"; a "copy diagnostics" button copies version / runtime state / settings snapshot / phase timings in one click — **never any transcript text** (privacy)
+- **Settings**: location depends on your dsh version (see Settings below), with voice / rate / interrupt sensitivity / silence pause / idle timeout / model mirror / auto send / interaction mode / wake word / ITN / caption tiers / yield semantics / yield window / barge-in salvage / LLM correction; **voices are previewable** (the "试听/Preview" button synthesizes and plays the current voice at the current rate instantly, no need to enter voice mode; custom ShortNames are previewable too)
 - **Interface language**: follows dsh's language setting (Settings → General → Language) and **switches instantly, no reload** — the settings page, voice status bar, captions, voice names/gender/accent and error messages all follow it, and the LLM spoken-style prompt is chosen in English or Chinese accordingly. Dictionaries are registered in dsh's official locale service under the `voice-mode` namespace, so community language packs can add more languages (missing ones fall back to English). The plugin's name and description in the Plugins page are localized too.
 - **Idle exit**: auto-exit and mic release after 5 minutes of inactivity (reading counts as activity; batch J 10→5)
 
@@ -57,7 +57,7 @@ interrupts playback and the running turn. No API key.
 | Gesture | Behaviour |
 | --- | --- |
 | Click the mic button / `Ctrl+Shift+V` | Enter / exit voice mode |
-| Just speak, pause ~1500 ms (toggle) | Accumulate into draft, auto-send after ~3 s of quiet |
+| Just speak, pause ~1500 ms (toggle) | Accumulate into draft, auto-send after ~2.7 s of quiet |
 | Hold `Ctrl` (toggle, ≥250 ms speech) | Force-send the current segment immediately |
 | **Hold the mic button (hold)** | Hold to talk, release to send; swipe up / `Esc` / blur abandons the segment; <250 ms tap exits the mode |
 | Hold `Ctrl` (hold, ≥600 ms) | Keyboard push-to-talk, release to send |
@@ -101,7 +101,7 @@ npm run prefetch          # run inside the plugin dir; writes to the platform ca
 **First run**:
 
 1. Click the mic button in the input toolbar (or press `Ctrl+Shift+V`) to enter voice mode; a status bar appears above the input box
-2. Choose how to speak: just talk and let the ~1500 ms pause split and ~3 s of quiet auto-send (toggle); or hold the mic button and release to send (hold)
+2. Choose how to speak: just talk and let the ~1500 ms pause split and ~2.7 s of quiet auto-send (toggle); or hold the mic button and release to send (hold)
 3. The AI answer is read sentence-by-sentence with a caption overlay at the bottom-right; click "Skip" or just start speaking to interrupt
 4. Click "Exit" in the status bar (or press `Ctrl+Shift+V` again) to leave voice mode
 
@@ -120,7 +120,7 @@ If a wake word is configured, you land in standby first (the status bar prompts 
 - On dsh 0.1.7+ the values are stored in the plugin's own file `~/.dsh/voice-mode.settings.json` (under `$DSH_HOME`) and take precedence over same-named keys in the profile config. The first run migrates the old `voice-mode:` block from `settings.yaml(.imported)` once. To reset, set the file's content to `{}` (do not delete it).
 
 
-### Full 23-key settings table
+### Full 25-key settings table
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -146,9 +146,11 @@ If a wake word is configured, you land in standby first (the status bar prompts 
 | `captionFontSize` | `0` | Caption font tier 0=12px / 1=14px / 2=18px / 3=24px (default 0 is byte-equivalent to legacy) |
 | `captionMaxWidth` | `1` | Caption width tier 0=50vw / 1=70vw / 2=90vw |
 | `backchannelYield` | `true` | Yield semantics (ADR-0008); saying `嗯 / 对` while reading auto-pauses for 1.5 s; genuine speech still triggers hard barge-in; off = behavior identical to pre-change |
+| `bargeInSalvage` | `true` | Barge-in salvage (Issue #15 batch 1 / ADR-0012): when you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation) |
+| `llmCorrect` | `false` | LLM correction (Issue #15 batch 4, off by default): before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; reuses the host configured model). On = about one extra second per message; falls back to the original text if correction fails |
 | `yieldMs` | `1500` | Yield-window length (ms, 500-3000): how long TTS frames are dropped after `backchannelYield` triggers; if you really want to speak in the window the normal `hardBreak` takes over, and playback resumes when the window ends |
 
-Effect timing: `voice`/`rate`/`ttsEngine`/`kokoroModel`/`spokenFormat` take effect **immediately** (TTS hot-swap); the rest apply on the next voice-mode entry. Defaults come from the plugin config (`base` layer) — they follow the config unless explicitly changed.
+Effect timing, in four tiers: ① immediately — engine / voice / rate / spoken format (applies to later replies) / model mirror (next download attempt); ② next recognition — finalization re-transcription (SenseVoice) / ITN; ③ next utterance — silence threshold (endpoint; the send wait stays a fixed 1.2 s); ④ next time you enter voice mode — interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Saved-but-not-yet-effective items are listed at the top of the settings card with their current effective values. Defaults come from the plugin config (`base` layer) — they follow the config unless explicitly changed.
 
 ### Common voices (full list: `node scripts/list-voices.mjs`)
 
@@ -208,7 +210,9 @@ You can also edit the `voice-mode:` section of `~/.dsh/settings.yaml` directly (
 | `POST /voice-mode/asr` | Raw f32 LE 16k PCM payload → `{text}` (streaming zipformer2); returns `202 {loading}` until the model is ready; `?reset=1` discards the in-flight segment (used on wake-word hit) |
 | `POST /voice-mode/cancel` | `{sessionId}` invalidates the TTS queue and drops the in-flight ASR segment |
 | `POST /voice-mode/preview` | `{voice, rate?}` one-shot synthesis preview → `audio/mpeg` (400 missing voice / voice too long; 502 synthesis failure, e.g. invalid ShortName; 403 when the plugin's `enabled=false`). Does not require voice mode to be active; uses an isolated synthesis connection and does not affect the reading queue |
-| `GET /voice-mode/config` | Client bootstrap parameters (silence threshold / sensitivity / voice and rate, etc.) — includes the ASR-side fields `senseITN` / `senseVoice` / `captionFontSize` / `captionMaxWidth` / `backchannelYield` |
+| `GET /voice-mode/config` | Client bootstrap parameters (silence threshold / sensitivity / voice and rate, etc.) — includes the ASR-side fields `senseITN` / `senseVoice` / `captionFontSize` / `captionMaxWidth` / `backchannelYield` / `yieldMs` / `bargeInSalvage` / `llmCorrect` |
+| `POST /voice-mode/correct` | `{text}` one LLM correction pass before sending (typos/homophones/punctuation only; reuses the host-configured model) → `{text}`; on failure/timeout/no model it falls back to the original text and never blocks sending |
+| `GET /voice-mode/voices` | Full Edge voice list (fetched when Edge is selected in settings; the client falls back to the common list on network failure) |
 | `GET /voice-mode` | Health check `{ok, name, enabled, active}` |
 
 ---
@@ -372,7 +376,7 @@ After changing dependencies run `npm pack --dry-run`, `npm test` and `bash scrip
 
 ```sh
 pnpm install && pnpm build    # esbuild: lib/index.js (host) + lib/client.js (browser) + lib/msedge-tts.cjs
-pnpm test                     # 34 test files chained: unit tests + harnesses (fake browser driving the real engine) + structure guards + pre-release self-check (no network)
+pnpm test                     # 48 test files chained: unit tests + harnesses (fake browser driving the real engine) + structure guards + pre-release self-check (no network)
 bash scripts/smoke-runtime.sh <dsh-core-bin.js> <port>   # boot an isolated dsh core: endpoints, mic button, settings page, i18n
 bash scripts/full-e2e.sh <dsh-core-bin.js> <port>        # real-LLM end to end: create → toggle → prompt → SSE audio frames
 systemctl restart dsh         # Linux; restart the dsh process on other platforms

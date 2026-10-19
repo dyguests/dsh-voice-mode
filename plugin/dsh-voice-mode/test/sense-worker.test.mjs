@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { createSenseWorkerClient } from '../src/sense-worker.ts'
 
 let passed = 0
-const t = (name, fn) => { try { fn(); passed++; console.log('  ✓ ' + name) } catch (e) { console.error('  ✗ ' + name); throw e } }
+const t = async (name, fn) => { try { await fn(); passed++; console.log('  ✓ ' + name) } catch (e) { console.error('  ✗ ' + name); throw e } }
 
 /** 极简 mock worker：记录发出的消息，可手动回执/触发 error/exit。 */
 function mockWorker() {
@@ -22,7 +22,7 @@ function mockWorker() {
   }
 }
 
-t('decode 成功：按 id 配对回执文本', async () => {
+await t('decode 成功：按 id 配对回执文本', async () => {
   const w = mockWorker()
   const c = createSenseWorkerClient(w)
   const p = c.request('decode', new Float32Array(16))
@@ -33,7 +33,7 @@ t('decode 成功：按 id 配对回执文本', async () => {
   assert.equal(await p, '你好。')
 })
 
-t('decode 失败（ok:false）：resolve null（上层降级 zipformer）', async () => {
+await t('decode 失败（ok:false）：resolve null（上层降级 zipformer）', async () => {
   const w = mockWorker()
   const c = createSenseWorkerClient(w)
   const p = c.request('decode', new Float32Array(16))
@@ -41,7 +41,7 @@ t('decode 失败（ok:false）：resolve null（上层降级 zipformer）', asyn
   assert.equal(await p, null)
 })
 
-t('多请求并发：id 各自配对不串扰', async () => {
+await t('多请求并发：id 各自配对不串扰', async () => {
   const w = mockWorker()
   const c = createSenseWorkerClient(w)
   const p1 = c.request('decode', new Float32Array(8))
@@ -49,7 +49,7 @@ t('多请求并发：id 各自配对不串扰', async () => {
   const p3 = c.request('decode', new Float32Array(8))
   assert.equal(w.sent.length, 3)
   const ids = w.sent.map((m) => m.id)
-  assert.deepEqual(ids, [p1 !== undefined ? 0 : -1, 1, 2]) // 排序 id 0,1,2
+  assert.deepEqual(ids, [0, 1, 2]) // 排序 id 0,1,2（旧实现 p1 !== undefined ? 0 : -1 是死分支——p1 恒为 Promise）
   w.resolve(ids[1], true, '第二句')
   w.resolve(ids[0], true, '第一句')
   w.resolve(ids[2], false, undefined)
@@ -58,7 +58,7 @@ t('多请求并发：id 各自配对不串扰', async () => {
   assert.equal(await p3, null)
 })
 
-t('worker 崩溃（error）：在途请求 reject', async () => {
+await t('worker 崩溃（error）：在途请求 reject', async () => {
   const w = mockWorker()
   const c = createSenseWorkerClient(w)
   const p = c.request('decode', new Float32Array(16))
@@ -68,7 +68,7 @@ t('worker 崩溃（error）：在途请求 reject', async () => {
   await assert.rejects(c.request('decode', new Float32Array(4)), /dead/)
 })
 
-t('terminate：清空在途并置 dead', async () => {
+await t('terminate：清空在途并置 dead', async () => {
   const w = mockWorker()
   const c = createSenseWorkerClient(w)
   const p = c.request('decode', new Float32Array(16))
@@ -77,7 +77,7 @@ t('terminate：清空在途并置 dead', async () => {
   await assert.rejects(c.request('decode', new Float32Array(4)), /dead/)
 })
 
-t('create 请求回执 true（worker 内 recognizer 建好）', async () => {
+await t('create 请求回执 true（worker 内 recognizer 建好）', async () => {
   const w = mockWorker()
   const c = createSenseWorkerClient(w)
   const p = c.request('create')
@@ -86,7 +86,7 @@ t('create 请求回执 true（worker 内 recognizer 建好）', async () => {
   assert.equal(await p, true)
 })
 
-t('onDeath：worker 崩溃时通知持有方（清引用以便重建）', async () => {
+await t('onDeath：worker 崩溃时通知持有方（清引用以便重建）', async () => {
   const w = mockWorker()
   const c = createSenseWorkerClient(w)
   let died = false
@@ -97,7 +97,7 @@ t('onDeath：worker 崩溃时通知持有方（清引用以便重建）', async 
   await assert.rejects(c.request('decode', new Float32Array(4)), /dead/)
 })
 
-t('崩溃后重建：新 client 可正常解码', async () => {
+await t('崩溃后重建：新 client 可正常解码', async () => {
   // 模拟 asr-host 的 crash-rebuild：old client dead → 建 new client 复用 mockWorker
   const w1 = mockWorker()
   const c1 = createSenseWorkerClient(w1)

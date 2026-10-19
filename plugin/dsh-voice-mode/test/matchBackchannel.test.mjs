@@ -2,7 +2,8 @@
  * matchBackchannel 守卫端到端补测（批 7N 重做 3/5，glm-5.3 对抗性审查 + 批 F I1）。
  * 运行：node test/matchBackchannel.test.mjs
  *
- * 目的：验证 asr.ts:388-397 的 backchannel 守卫逻辑实际生效：
+ * 目的：验证 asr.ts 的 backchannel 守卫逻辑实际生效（行段 478-489，Issue #15 R1 修复时
+ * 实测；行号随 src 演进而漂移，真锚点是下方正则抓取的守卫表达式文本，非行号）：
  *   ① undefined 默认走通（I10 豁免）—— backchannel 命中 → 触发 onBackchannel；
  *   ② 显式 false 短路 —— backchannel 不触发（CPU 节流修复）；
  *   ③ onBackchannel 回调触发后 bus.skipAudio + setBackchannelHold 时序正确。
@@ -12,7 +13,7 @@
  *     createAsrEngine + matchBackchannel 两个公开符号；
  *  2) 由于 createAsrEngine 链路涉及 AudioContext/MediaStream/fetch 等浏览器 API，
  *     本测试不走「真 start() → 录音 → 触发 partial」完整路径，而是：
- *     a) 从 bundle 源码提取守卫布尔表达式字面（asr.ts:388-397 verbatim）；
+ *     a) 从 bundle 源码提取守卫布尔表达式字面（asr.ts:478-489 verbatim，R1 修复时实测行号）；
  *     b) 单元化重建：shouldTriggerBackchannel(config, speechActive, partialText)
  *        —— 与源码守卫同形（4 个条件 AND），eval 验证；
  *     c) 用 matchBackchannel 纯函数命中测试（「嗯」/「ok」/「so」等正例词表）；
@@ -107,17 +108,16 @@ t('bundle 含 matchBackchannel(out.text ?? "") 守卫条件', () => {
     'bundle 缺 matchBackchannel(out.text) 调用——守卫核心失效',
   )
 })
-t('bundle 含 config.isPlaying?.() 守卫条件（朗读期才判 backchannel）', () => {
-  assert.ok(
-    asrSrc.includes('isPlaying'),
-    'bundle 缺 isPlaying?.() 守卫条件——非朗读期误触发风险',
-  )
-})
-t('bundle 含 speechActive 守卫条件（本地 VAD 判用户已开口）', () => {
-  assert.ok(
-    asrSrc.includes('speechActive'),
-    'bundle 缺 speechActive 守卫条件——自言自语误让位风险',
-  )
+t('bundle 含 speechActive + config.isPlaying?.() 复合守卫（锚定 matchBackchannel 调用点）', () => {
+  // 旧实现 includes('isPlaying') / includes('speechActive') 可被 asr.ts 内他家引用满足
+  // （isPlaying 在 :638/:840/:932 等处、speechActive 在 :231/:669/:679 等处均出现）——
+  // 删掉守卫条件测试仍绿。改锚定 matchBackchannel(out.text) 调用点前的守卫窗口
+  // （asr.ts:478-483 现行形态：backchannelYield !== false && speechActive && isPlaying?.() && matchBackchannel）。
+  const idx = asrSrc.indexOf('matchBackchannel(out.text')
+  assert.ok(idx > 0, '锚点缺失：matchBackchannel(out.text) 调用')
+  const win = asrSrc.slice(Math.max(0, idx - 400), idx)
+  assert.ok(/speechActive/.test(win), 'matchBackchannel 调用前缺 speechActive 守卫——用户未开口（自言自语/回声）也误让位')
+  assert.ok(/config\.isPlaying\s*\?\./.test(win), 'matchBackchannel 调用前缺 config.isPlaying?.() 守卫——非朗读期误让位')
 })
 t('bundle 含 config.onBackchannel?.() 触发路径', () => {
   assert.ok(
@@ -160,12 +160,12 @@ t('词表负例：普通短句（不在词表）', () => {
 
 // --------------------------------------------------------------------------
 // 3) 守卫端到端：shouldTriggerBackchannel(config, speechActive, partialText)
-//    重建守卫表达式（verbatim 复刻 asr.ts:388-397 4 个条件 AND）
+//    重建守卫表达式（verbatim 复刻 asr.ts:478-489 4 个条件 AND，R1 修复时实测行号）
 // --------------------------------------------------------------------------
 console.log('守卫端到端（4 条件 AND）')
 
 /**
- * 重建守卫表达式：asr.ts:388-397 verbatim。
+ * 重建守卫表达式：asr.ts:478-489 verbatim（R1 修复时实测行号；真锚点是表达式文本）。
  * @param {object} config AsrConfig
  * @param {boolean} speechActive 本地 VAD：用户是否已开口
  * @param {string} partialText host 返回的段内累计识别文本
@@ -250,7 +250,7 @@ const mockBus = {
   setBackchannelHold: (untilMs) => busLog.push({ type: 'setHold', until: untilMs, at: Date.now() }),
 }
 
-// 镜像 client.tsx:1707-1711 的闭包表达式：在 mockBus 上 eval，把闭包挂到 cfg.onBackchannel。
+// 镜像 client.tsx:2081-2086 的闭包表达式（R1 修复时实测行号）：在 mockBus 上 eval，把闭包挂到 cfg.onBackchannel。
 // 闭包捕获 cfg + bus，触发时执行 bus.skipAudio() + bus.setBackchannelHold(now + cfg.yieldMs ?? 1500)。
 const cfgForCb = { backchannelYield: true, yieldMs: 2000, onBackchannel: null }
 // eslint-disable-next-line no-new-func

@@ -92,6 +92,9 @@ const MP3_MAGIC = 0xff
 /** setMetadata 的统一选项：句子/词边界回调都不需要（帧内无字幕元数据）。 */
 const TTS_METADATA = { wordBoundaryEnabled: false, sentenceBoundaryEnabled: false } as const
 
+/** Edge 音色列表请求超时（ms）：库内 axios 无超时，调用侧 race 兜底（M4）。 */
+const EDGE_VOICES_TIMEOUT_MS = 30000
+
 function prosodyFromRate(rate?: number): ProsodyOptions | undefined {
   if (rate !== undefined && rate > 0 && rate !== 1) return { rate }
   return undefined
@@ -154,7 +157,18 @@ export async function listEdgeVoices(force = false): Promise<Array<{ ShortName: 
   if (edgeVoicesCache && !force) return edgeVoicesCache
   const tts = new MsEdgeTTS()
   try {
-    const voices = await tts.getVoices()
+    // M4（Issue #15 审查 Minor）：补超时。MsEdgeTTS.getVoices() 内部是无超时的
+    // axios.get（msedge-tts 2.1.0 只给 WebSocket 连接/合成设了 deadline，音色列表
+    // 这条 REST 不在其列）——上游挂住时 /voices 路由的 Promise 永不 settle，
+    // 设置面板「选 Edge 音色」转圈到浏览器超时，且 tts 实例悬挂。库不暴露信号，
+    // 故在调用侧用 Promise.race 兜底（库内超时只覆盖 WS，与 models.ts 同思路：
+    // 只兜「上游不响应」，不限制正常往返）。
+    const voices = await Promise.race([
+      tts.getVoices(),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('edge voices request timed out')), EDGE_VOICES_TIMEOUT_MS).unref?.()
+      }),
+    ])
     edgeVoicesCache = voices.map((v) => ({
       ShortName: v.ShortName,
       Locale: v.Locale,
@@ -215,13 +229,27 @@ export class TtsQueue {
   }
 
   /**
-   * 运行时切换引擎（设置面板「朗读引擎」即时生效）：
-   * 关闭旧引擎、清空所有会话队列；新句子用新引擎合成。
+   * 运行时切换引擎（设置面板「朗读引擎」即时生效 / Kokoro 精度切换 / 清理模型缓存后重建）：
+   * 关闭旧引擎、作废所有会话的在途与积压；新句子用新引擎合成。
+   *
+   * B1（Issue #15 审查 Blocker）：早年实现只 `this.queues.clear()`——不升各队列的
+   * epoch，也不保留队列本身，两处都错：
+   *  1) 孤儿泵不停播：在途 synthesize 完成后 `item.epoch === q.epoch` 恒真，旧引擎的
+   *     帧继续下行，与新引擎的帧双轨广播（prune() 已修同一反模式，setEngine 漏修）；
+   *  2) seq 归零撞拒绝线：删队列后重入的新 SessionQueue seq 从 0 起算，而 client 的
+   *     sentenceId 拒绝线（rejectSeqUpTo）是「旧会话遗留的最大句号」，新回复前 N 句
+   *     全部 ≤ 线被静默丢弃——正是 /toggle 用 cancel 而非 prune 保 seq 连续的同一条
+   *     不变式（index.ts:1086-1091 / 1118-1120）。
+   * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身
+   * （seq 连续递增，跨引擎切换不归零）。
    */
   setEngine(engine: TtsEngine): void {
     const old = this.engine
     this.engine = engine
-    this.queues.clear()
+    for (const q of this.queues.values()) {
+      q.epoch++ // 作废在途句：孤儿泵在下一句检查时 break，不再广播旧引擎帧
+      q.pending.length = 0 // 弃掉积压（旧引擎的音色/语速已不适用）
+    }
     void old.close().catch(() => {})
   }
 

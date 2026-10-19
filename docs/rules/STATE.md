@@ -497,4 +497,4 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 7. **批 6 已闭环** `bf09967`+`86d0566`+`3bb0519`（四档生效文案+当前生效值提示（runtime-boot 镜像源，审查 I-1 后修）+静默路径提示/SSE 断连/诊断复制（批 7）；两路审查 fail 项全修——批 6 I-1 镜像口径/I-2 补字段、批 7 B1 补提测试文件/I1 mtime/I2 锁紧/I3 计划收窄登记）。
 8. **批 8 已入库**：0.2.1-rc.2 runtime 冒烟全量通过（含设置卡片 16 断言）；0.2.1-alpha.5 设置卡片探针稳定失败 3/3 但经发布包 0.7.25 A/B 实证非插件回归（compat-contract §20）；桌面 Electron 冒烟无桌面环境未跑（用户侧 Windows 先例，已登记真机项）。
 9. **收口完成**：CHANGELOG [Unreleased] Issue #15 条目、CONTEXT.md 设置语义刷新、`docs/issue-15-reply.md` 回复稿（待用户直发——注意本机 GitHub token 是 fine-grained PAT 无跨仓库 discussions:write 权限，需用户网页端发或提供 classic token，同 #8250 排查结论）。
-10. **待用户拍板**：发版（建议 patch 0.7.26）；issue 回帖；桌面冒烟补跑；alpha.5 探针复跑。npm test 518 全绿。
+10. **待用户拍板**：发版（建议 patch 0.7.26）；issue 回帖；桌面冒烟补跑；alpha.5 探针复跑。npm test 583 项全绿（48 个测试文件；口径 = 各文件「N 项通过」之和 = `npm test 2>&1 | grep -c '✓'` 行数 = 583，两种求和法一致，2026-10-19 集成轮实测）。计数沿革：R1 docs 审查时为 41 文件 / 518 项（22:36 实测）；R1 测试审查 B1 发现 `steer-submit` 9 处 + `llm-correct` 10 处漏 await 曾使这两个文件 summary 在 19 个用例执行完前提前打印、自报少 19（修复后两口径一致）；集成轮 fix-test 新增 7 个登记文件 + 31 项行为测试 → 48 文件 / 583 项。

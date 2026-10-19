@@ -2,9 +2,10 @@
  * Backchannel 让位语义单测（批 5 / ADR-0008 Phase 1）。
  * 运行：node test/backchannel.test.mjs
  *
- * 覆盖 §7.3 词表 ~12 例 + hold 窗口 3 例：
+ * 覆盖 §7.3 词表 ~12 例 + hold 窗口 5 例：
  *   matchBackchannel 词表正/负例 + 整段匹配 + 长度边界 + 与 wakeWord 区别
- *   hold 丢帧逻辑（mock audioListeners callback）
+ *   hold 丢帧逻辑（mock audioListeners callback，镜像 client.tsx:1094-1103 现行
+ *     HOLD_CLEAR_FRAMES=2 帧语义；完整路径镜像+bundle 锁在 hold-clear.test.mjs）
  *
  * matchBackchannel 通过 esbuild bundle asr.ts 提取（asr.ts 顶层模块函数可独立测试；
  * bundle: true + 标记未使用 import 为 external 解决 native worker_threads 等依赖）。
@@ -95,38 +96,61 @@ t('backchannel: 整段匹配——"嗯你好" 长度 3 但不在词表 → 不�
   assert.equal(matchBackchannel('嗯你好'), false)
 })
 
-console.log('hold 窗口逻辑（mock audioListeners + backchannelHoldUntilRef）')
+console.log('hold 窗口逻辑（镜像 client.tsx:1094-1103 现行语义：HOLD_CLEAR_FRAMES=2 帧后清 hold 放行）')
+// 镜像对象：backchannelHoldUntilRef.current（到期时刻）+ 帧计数（同 client.tsx holdSpeechFrames）。
+const HOLD_CLEAR_FRAMES = 2
 function makeFrameCallback(holdRef) {
   return (frame) => {
     if (frame.sessionId !== 'active') return
-    if (holdRef.current && Date.now() < holdRef.current) return
+    if (holdRef.current && Date.now() < holdRef.current) {
+      holdRef.frames += 1
+      if (holdRef.frames >= HOLD_CLEAR_FRAMES) {
+        holdRef.current = 0 // 清 hold
+        holdRef.frames = 0
+        // 本帧不再因 hold 丢弃，继续放行（client.tsx:1096-1099）
+      } else {
+        return // 未达阈值：丢帧
+      }
+    }
     return frame
   }
 }
 
-t('hold 窗口外（过期）→ 帧通过守卫', () => {
-  const holdRef = { current: 0 }
+t('hold 窗口外（过期/未设）→ 帧通过守卫', () => {
+  const holdRef = { current: 0, frames: 0 }
   const cb = makeFrameCallback(holdRef)
   const result = cb({ sessionId: 'active' })
   assert.deepEqual(result, { sessionId: 'active' }, 'hold=0 时不应丢帧')
 })
 
-t('hold 窗口内（1500ms 未到期）→ 帧被丢弃', () => {
-  const holdRef = { current: Date.now() + 1000 }
+t('hold 窗口内第 1 帧（未达 HOLD_CLEAR_FRAMES=2）→ 帧被丢弃', () => {
+  const holdRef = { current: Date.now() + 1000, frames: 0 }
   const cb = makeFrameCallback(holdRef)
   const result = cb({ sessionId: 'active' })
-  assert.equal(result, undefined, 'hold 未到期时帧应被丢（无返回值 = 丢帧）')
+  assert.equal(result, undefined, 'hold 未到期且未达 2 帧阈值时帧应被丢（无返回值 = 丢帧）')
+  assert.equal(holdRef.frames, 1, '丢帧应累计帧计数')
+})
+
+t('hold 窗口内第 2 帧达到 HOLD_CLEAR_FRAMES=2 → 清 hold 且本帧放行（批 7O M8 现行语义）', () => {
+  const holdRef = { current: Date.now() + 1000, frames: 0 }
+  const cb = makeFrameCallback(holdRef)
+  assert.equal(cb({ sessionId: 'active' }), undefined, '第 1 帧仍应被丢')
+  const second = cb({ sessionId: 'active' })
+  assert.deepEqual(second, { sessionId: 'active' }, '第 2 帧达阈值后本帧应放行')
+  assert.equal(holdRef.current, 0, '达阈值后 hold 应被清')
+  assert.equal(holdRef.frames, 0, '达阈值后帧计数应重置')
 })
 
 t('sessionId 不匹配 → 直接 return，与 hold 无关', () => {
-  const holdRef = { current: Date.now() + 1000 }
+  const holdRef = { current: Date.now() + 1000, frames: 0 }
   const cb = makeFrameCallback(holdRef)
   const result = cb({ sessionId: 'other' })
   assert.equal(result, undefined, 'sessionId 不匹配 = 旧 sessionId 帧丢弃（已有逻辑）')
+  assert.equal(holdRef.frames, 0, 'sessionId 不匹配不得累计 hold 帧计数')
 })
 
-t('hardBreak 清 hold 后帧立即恢复（模拟：hardBreak 路径 backchannelHoldUntilRef.current = 0）', () => {
-  const holdRef = { current: Date.now() + 1000 }
+t('hardBreak 清 hold 后帧立即恢复（模拟：hardBreak 路径 backchannelHoldUntil = 0）', () => {
+  const holdRef = { current: Date.now() + 1000, frames: 1 }
   holdRef.current = 0 // 模拟 hardBreak
   const cb = makeFrameCallback(holdRef)
   const result = cb({ sessionId: 'active' })

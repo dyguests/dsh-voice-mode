@@ -12,12 +12,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue" alt="License: MIT"></a>
   <a href="https://github.com/qishuilalala/dsh-voice-mode/releases"><img src="https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases" alt="Latest release"></a>
   <a href="https://www.npmjs.com/package/dsh-voice-mode"><img src="https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange" alt="npm version"></a>
-  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-440%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 440 passing"></a>
+  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-583%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 583 passing"></a>
 </p>
 
 ![dsh-voice-mode 全双工语音对话](assets/hero-banner.png)
 
-> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-rc.2，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§19）。440 项测试全绿（34 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
+> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-rc.2，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§20）。583 项测试全绿（48 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
 
 ---
 
@@ -25,7 +25,7 @@
 
 在 DeepSeek Harness 的会话里，点一下麦克风就能用语音完成整轮对话：
 
-- 🎤 **你说** —— 一边说一边**实时出字**（流式识别），停顿约 **1500ms 断句进草稿**，再静音约 1500ms 自动发送；
+- 🎤 **你说** —— 一边说一边**实时出字**（流式识别），停顿约 **1500ms 断句进草稿**，再静音约 1.2 秒（合计约 2.7 秒）自动发送；
 - 🔊 **它答** —— 最终回复**按句朗读**，全程实时字幕跟随；
 - ⏸️ **随时打断** —— AI 还在朗读时**开口即打断**，你的话直接被听见。
 
@@ -57,7 +57,7 @@
 
 ![语音模式真实录制：流式转写 → 自动发送 → 按句朗读 + 实时字幕](plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
 
-> 上图为**当前界面的真实录制**（由 `screenshots/scripts/capture-demo.mjs` 驱动真实链路产出，非 UI 摆拍）。设置面板见 [使用说明](plugin/dsh-voice-mode/README.md)。
+> 上图为**当前界面的真实录制**（由 `screenshots/scripts/capture-demo.mjs` 驱动真实链路产出，非 UI 摆拍；UI 持续演进，以实际界面为准）。设置面板见 [使用说明](plugin/dsh-voice-mode/README.md)。
 
 ---
 
@@ -79,7 +79,7 @@ systemctl restart dsh   # Linux；其他平台重启 dsh 进程
 | 手势 | 作用 |
 | --- | --- |
 | `Ctrl+Shift+V` | 进入 / 退出语音模式 |
-| 直接说话（toggle） | 边说边出字，停顿约 1500ms 断句进草稿、再静音约 1500ms 自动发送；按住 `Ctrl` 强制立即发送 |
+| 直接说话（toggle） | 边说边出字，停顿约 1500ms 断句进草稿、再静音约 1.2 秒（合计约 2.7 秒）自动发送；按住 `Ctrl` 强制立即发送 |
 | 按住麦克风按钮（hold） | 松手发送；短按退出；滑出 / `Esc` / 失焦放弃本段 |
 | 点输入框旁模式按钮 | 在「持续聆听 ⇄ 按住说」间切换（保存到设置） |
 | AI 朗读时开口说话 | 打断朗读并取消当前回合 |
@@ -114,7 +114,7 @@ systemctl restart dsh   # Linux；其他平台重启 dsh 进程
 
 > 字段名保持向后兼容，旧 `~/.dsh/settings.yaml` 可直接沿用。
 
-完整 23 项设置表见 [使用说明 · 设置](plugin/dsh-voice-mode/README.md)。
+完整 25 项设置表见 [使用说明 · 设置](plugin/dsh-voice-mode/README.md)。
 
 ---
 
@@ -148,7 +148,7 @@ flowchart LR
     VAD -.->|唤醒词/打断| Host
 ```
 
-详细架构决策：见 [`docs/adr/`](docs/adr/README.md) 11 个 ADR。
+详细架构决策：见 [`docs/adr/`](docs/adr/README.md) 12 个 ADR。
 
 ---
 
@@ -205,7 +205,7 @@ flowchart LR
 | [完整使用说明（中文）](plugin/dsh-voice-mode/README.md) | 功能 / 手势 / 设置 / 配置 / 已知限制 / 故障排查 |
 | [English docs](plugin/dsh-voice-mode/README.en.md) | Same, in English |
 | [docs/ 索引](docs/README.md) | 架构决策 / 实施计划 / 真机验收 / 规则 / 调研 / 竞品 |
-| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 440 项） |
+| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 583 项） |
 | [CHANGELOG.md](CHANGELOG.md) | Keep a Changelog 格式 |
 | [RELEASE-NOTES.md](RELEASE-NOTES.md) | 60 天时间线 |
 
@@ -215,7 +215,7 @@ flowchart LR
 
 **License**: [MIT](LICENSE)
 
-**Contributing**: PR 欢迎，但请先读 [`docs/adr/`](docs/adr/README.md) 11 个 ADR + [`CONTEXT.md`](CONTEXT.md) + [`docs/rules/STATE.md`](docs/rules/STATE.md)。
+**Contributing**: PR 欢迎，但请先读 [`docs/adr/`](docs/adr/README.md) 12 个 ADR + [`CONTEXT.md`](CONTEXT.md) + [`docs/rules/STATE.md`](docs/rules/STATE.md)。
 
 **Acknowledgments**：
 

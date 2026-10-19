@@ -102,7 +102,7 @@ t('flush 输出剩余缓冲', () => {
   assert.deepEqual(s.flush(), ['没有标点的一段话'])
   assert.deepEqual(s.flush(), [])
 })
-t('纯标点尾巴不输出', () => {
+t('收尾标点（……）并入句子输出（不丢尾部标点）', () => {
   const s = new SentenceSegmenter()
   s.feed('好。…')
   assert.deepEqual(s.feed('好。…')[0], '好。…')

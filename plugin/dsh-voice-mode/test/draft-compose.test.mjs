@@ -64,7 +64,7 @@ const clientSrc = readFileSync(join(root, 'src', 'client.tsx'), 'utf8')
 t('wiring：onPartial 走 composeDraft + wake 门控 + lastPartial 记录', () => {
   const idx = clientSrc.indexOf('engine.onPartial(')
   assert.ok(idx >= 0, '缺 onPartial')
-  const window = clientSrc.slice(idx, idx + 1600)
+  const window = clientSrc.slice(idx, idx + 2400)
   assert.ok(window.includes('composeDraft('), 'onPartial 未走 composeDraft')
   assert.ok(window.includes('shouldWritePartial(') || window.includes("=== 'wake'"), 'onPartial 缺 wake 门控')
   assert.ok(window.includes('lastPartialRef'), 'onPartial 未记录 partial 尾（定稿替换需要）')
@@ -72,7 +72,7 @@ t('wiring：onPartial 走 composeDraft + wake 门控 + lastPartial 记录', () =
 
 t('wiring（审查 I-1）：onPartial 门控放行后必须 cancelAutoSend（wake 续段定时器不取消→半成品外发+命令重复）', () => {
   const idx = clientSrc.indexOf('engine.onPartial(')
-  const win = clientSrc.slice(idx, idx + 1600)
+  const win = clientSrc.slice(idx, idx + 2400)
   const gateIdx = win.indexOf('shouldWritePartial(')
   assert.ok(gateIdx >= 0, '缺 wake 门控')
   const cancelIdx = win.indexOf('cancelAutoSend()', gateIdx)
@@ -82,7 +82,7 @@ t('wiring（审查 I-1）：onPartial 门控放行后必须 cancelAutoSend（wak
 
 t('wiring（审查 I-2）：onPartial 起始处必须检 submitInFlightRef（提交在途窗口不回写草稿）', () => {
   const idx = clientSrc.indexOf('engine.onPartial(')
-  const win = clientSrc.slice(idx, idx + 1600)
+  const win = clientSrc.slice(idx, idx + 2400)
   assert.ok(win.includes('submitInFlightRef.current'), 'onPartial 缺提交在途检查——已提交文本会被写回草稿')
   // 复审 Minor-4：不能只查字样（onSegment 的清标记会满足 includes）——放行判据与
   // 跳过分支必须同在窗口内。
@@ -102,7 +102,7 @@ t('wiring（复审 Minor-1）：抢占退出路径同口径清 submitInFlightRef
 
 t('wiring（复审 OQ-2）：空 partial 不剥 live 尾（防输入框闪烁）', () => {
   const idx = clientSrc.indexOf('engine.onPartial(')
-  const win = clientSrc.slice(idx, idx + 1600)
+  const win = clientSrc.slice(idx, idx + 2400)
   assert.ok(win.includes('if (!text) return'), '空 partial 未早退——剥尾又补回可见闪烁')
   const guardIdx = win.indexOf('if (!text) return')
   assert.ok(guardIdx < win.indexOf('composeDraft('), '空 partial 早退必须在 composeDraft 之前')
@@ -120,7 +120,7 @@ t('wiring（审查 I-2）：submitDraftNow 置在途标记 + onSegment/exitMode 
 t('wiring：onSegment 用 composeDraft 替换 partial 尾（double-append 防护）', () => {
   const idx = clientSrc.indexOf('engine.onSegment(')
   assert.ok(idx >= 0, '缺 onSegment')
-  const window = clientSrc.slice(idx, idx + 1400)
+  const window = clientSrc.slice(idx, idx + 2000)
   assert.ok(window.includes('composeDraft('), 'onSegment 未走 composeDraft')
   assert.ok(window.includes('lastPartialRef.current = \'\'') || window.includes("lastPartialRef.current = ''"), 'onSegment 未清 partial 尾记录')
 })

@@ -42,11 +42,22 @@ t('运行时依赖里没有 msedge-tts（已内联），它在 devDependencies�
 })
 t('运行时依赖的已安装清单均不带 preinstall/install/postinstall（pnpm 11 严格策略 / npm 都能装）', () => {
   const bad = []
+  const skipped = []
   for (const dep of Object.keys(pkg.dependencies ?? {})) {
     const f = join(root, 'node_modules', dep, 'package.json')
-    if (!existsSync(f)) continue // 未安装则跳过（CI 干净环境会装）
+    if (!existsSync(f)) {
+      skipped.push(dep)
+      continue
+    }
     const sc = JSON.parse(readFileSync(f, 'utf8')).scripts ?? {}
     for (const k of ['preinstall', 'install', 'postinstall']) if (sc[k]) bad.push(`${dep}:${k}=${sc[k]}`)
+  }
+  // 显式 skip 判定（M5）：旧实现未安装即静默 continue——依赖缺失时本测试「退化绿」。
+  // 已装工作区（node_modules 在）不允许跳过：缺依赖即红；完全干净环境才大声 SKIP。
+  if (existsSync(join(root, 'node_modules'))) {
+    assert.deepEqual(skipped, [], `运行时依赖未安装（应先 pnpm install）：${skipped.join(', ')}`)
+  } else if (skipped.length > 0) {
+    console.warn(`  ⚠ SKIP：无 node_modules，未检查安装脚本的依赖：${skipped.join(', ')}`)
   }
   assert.deepEqual(bad, [], '运行时依赖带安装脚本会让用户安装失败')
 })
@@ -87,7 +98,15 @@ t('package.json files 覆盖全部运行时产物与许可说明', () => {
 })
 t('THIRD_PARTY_NOTICES.md 覆盖全部被内联的第三方包（有 metafile 时校验）', () => {
   const meta = join(root, 'lib/.msedge-tts.meta.json')
-  if (!existsSync(meta)) return // 无构建元数据则跳过（先 node build.mjs）
+  if (!existsSync(meta)) {
+    // 显式 skip 判定（M5）：产物已构建（lib/index.js 在）而 metafile 缺失 = build.mjs 的
+    // metafile 输出被改 → 红；完全未构建才大声 SKIP（防旧实现静默 return 的退化绿）。
+    if (existsSync(join(root, 'lib/index.js'))) {
+      assert.fail('lib/index.js 已构建但缺 lib/.msedge-tts.meta.json——build.mjs 的 metafile 输出被改？')
+    }
+    console.warn('  ⚠ SKIP：未构建（缺 lib/.msedge-tts.meta.json）——第三方 notices 覆盖检查未执行')
+    return
+  }
   const notices = readFileSync(join(root, 'THIRD_PARTY_NOTICES.md'), 'utf8')
   const names = new Set()
   for (const input of Object.keys(JSON.parse(readFileSync(meta, 'utf8')).inputs)) {

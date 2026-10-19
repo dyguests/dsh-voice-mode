@@ -1,5 +1,7 @@
 // fork 集成测试：直接加载构建产物 lib/index.js，以假 Context 验证
 // ① 安全守卫（回环/Origin/会话存在性/限流）② 本地 VITS 试听合成全链路。
+// 注意（Issue #15 R1 M6）：参数化手动脚本，不在 npm test 链——需本地模型缓存目录
+// （CI 干净环境无 200MB+ 模型，串联会假绿或超时），按需手动跑。
 // 用法：node test/integration-fork.mjs <model-cache-dir>
 const CACHE = process.argv[2]
 if (!CACHE) {

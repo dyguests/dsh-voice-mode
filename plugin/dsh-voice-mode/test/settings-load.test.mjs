@@ -121,14 +121,21 @@ t('旧 payload 解析不抛错（残留键不导致加载崩溃）', () => {
 console.log('② 已砍键被安全忽略（不在 schema 声明字典，不参与校验）')
 
 t('schema 声明字典不含 asrHotwords / asrHotwordsScore / recognitionLanguage', () => {
-  const declared = Object.keys(schema.dict)
+  // schemastery 3.18.4 无「列声明键」公共 API，只能读 object schema 的内部 .dict 字段
+  // （M5：耦合内部字段）。加形状容错：dict 缺失/形态变动时给可读失败，而非 TypeError——
+  // 届时需改走行为证据（未知键透传，见下方「schemastery object 真实行为」条）。
+  const dict = schema?.dict
+  assert.ok(dict && typeof dict === 'object', 'schema.dict 形态失效（schemastery 内部字段变动？需改公共 API 或行为证据取声明键）')
+  const declared = Object.keys(dict)
   for (const k of REMOVED_KEYS) {
     assert.ok(!declared.includes(k), `已砍键 ${k} 仍残留在 schema 声明字典（批 7M 未砍干净）`)
   }
 })
 
 t('schema 声明字典仍含合法字段 silenceMs（未误删）', () => {
-  assert.ok(Object.keys(schema.dict).includes('silenceMs'), 'silenceMs 不在 schema 声明字典')
+  const dict = schema?.dict
+  assert.ok(dict && typeof dict === 'object', 'schema.dict 形态失效（schemastery 内部字段变动？需改公共 API 或行为证据取声明键）')
+  assert.ok(Object.keys(dict).includes('silenceMs'), 'silenceMs 不在 schema 声明字典')
 })
 
 console.log('③ 合法字段值正常通过')

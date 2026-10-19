@@ -285,6 +285,11 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
   let detectFailStreak = 0
   /** 当前段是否抢救段（定稿时 backchannel 弃段守卫用）。 */
   let salvagedSegment = false
+  /** I4：当前段是否「让位段」（onBackchannel 触发过；定稿时整段命中 backchannel 一并弃段）。
+   *  让位后残留段被 finalizeSegment 入口的 isPlaying 守卫丢弃而不清段，speechActive 常驻
+   *  → 恢复播放后 detect 通道饿死（整轮无法语音打断）；本标记 + 定稿弃段守卫兜底，
+   *  防残留「嗯」段最终作为消息/草稿发出。随段清理复位（同 salvagedSegment）。 */
+  let yieldedSegment = false
 
   const asrUrl = (final: boolean, offset?: number, epoch?: number): string =>
     `${location.origin}${config.basePath.replace(/\/+$/, '')}/asr?sessionId=${encodeURIComponent(sessionId)}&final=${final ? 1 : 0}` +
@@ -317,6 +322,18 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         // ignore
       }
     }
+  }
+
+  /**
+   * Issue #15 批 7（审查 M1）：段边界统一重置连败计数——防跨段累积把下一段首次失败
+   * 凑成 3 次误提示。finalize 成功 / 短噪声弃段 / beginHeld / endHeld cancel 四处段
+   * 边界此前漏重置；clearWakeSegment/discardSegment/start 三处既有重置保留字面
+   * （test/silent-path-hints.test.mjs 以 700 字窗口锁 'partialFailStreak = 0' 字面，
+   * 迁到本助手需同步改那把源码锁）。
+   */
+  const resetFailStreaks = (): void => {
+    partialFailStreak = 0
+    detectFailStreak = 0
   }
 
   /** 从分块缓冲的 from 样本起切片（增量上传；不做全量 concat）。 */
@@ -363,14 +380,22 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     const epoch = segmentEpoch
     partialInFlight = true
     try {
+      // I1：partial 是唯一无 AbortSignal.timeout 的上行通道（对照 detect/reset 5s、
+      // final 25s）——host 挂起时 fetch 永不 settle，partialInFlight 永真 → 实时字幕与
+      // host VAD 端点静默死亡，且挂起不 reject 使连败提示也不触发（无头故障）。
       let res = await fetch(asrUrl(false, from, epoch), {
         method: 'POST',
         headers: { 'content-type': 'application/octet-stream' },
         body: samples.buffer as ArrayBuffer,
+        signal: AbortSignal.timeout(5000),
       })
       if (res.status === 202) {
-        // 模型下载中：5s 后重试同一载荷（Q16 重试提示在状态条展示）
-        setState('loading-model')
+        // 模型下载中：5s 后重试同一载荷（Q16 重试提示在状态条展示）。
+        // B1 修复：wake 待机期**不得**切 loading-model——唤醒分支判据是 state==='wake'，
+        // 一次 202 把 state 切走会让唤醒门失效到下一段定稿：待机语音落入正常分段路径，
+        // 静音到点即定稿，唤醒词随语音泄漏进消息/草稿（issue #10 症状回归，无测试覆盖）。
+        // 待机期保持 'wake'，5s 重试成功仍在 wake 分支内匹配唤醒词。
+        if (state !== 'wake') setState('loading-model')
         const retry = await new Promise<Response>((resolve) => {
           setTimeout(async () => {
             try {
@@ -378,6 +403,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
                 method: 'POST',
                 headers: { 'content-type': 'application/octet-stream' },
                 body: samples.buffer as ArrayBuffer,
+                signal: AbortSignal.timeout(5000), // I1：重试同样要超时（否则重试挂起仍锁死 partialInFlight）
               })
               resolve(r2)
             } catch {
@@ -399,6 +425,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
               method: 'POST',
               headers: { 'content-type': 'application/octet-stream' },
               body: sliceSince(0).buffer as ArrayBuffer,
+              signal: AbortSignal.timeout(5000), // I1：恢复重发同样要超时（挂起不 reject 会锁死 partialInFlight）
             })
           } catch {
             // 重试失败：静默（下轮 partial 自动覆盖）
@@ -454,6 +481,10 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         (config.isPlaying?.() ?? false) &&
         matchBackchannel(out.text ?? '')
       ) {
+        // I4：让位段打标——让位后残留段靠 isPlaying 守卫丢弃而不清段，speechActive 常驻，
+        // 该段最终定稿时若整段仍是 backchannel（「嗯」），须与抢救段同口径**引擎侧弃段**：
+        // 只跳 submit 不清段会让「嗯」留草稿、随后续定稿段的 autoSend 发出（幽灵消息）。
+        yieldedSegment = true
         config.onBackchannel?.()
       }
       // P2-1：host Silero VAD 端点提示（静音 ≥0.5s 判句完成）→ 立即定稿。
@@ -591,6 +622,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     wakeSilenceMs = 0
     wakeConsumed = false
     salvagedSegment = false // Issue #15 批 1：新段不继承抢救标记（防 backchannel 误抑制）
+    yieldedSegment = false // I4：新段不继承让位标记（同防误抑制）
     prePad = []
     uploadedSamples = 0
     void resetHostStream()
@@ -628,6 +660,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     // Issue #15 批 1（ADR-0012）：抢救段标记快照（弃段守卫用；随本段消费）。
     const wasSalvaged = salvagedSegment
     salvagedSegment = false
+    // I4：让位段标记快照（同弃段守卫；随本段消费）。
+    const wasYielded = yieldedSegment
+    yieldedSegment = false
     forcePending = false
     speechMs = 0 // P1-3：新段重新起算纯语音时长
     uploadedSamples = 0
@@ -661,7 +696,8 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
             body,
           })
         } catch {
-          restoreState()
+          // M6：fetch 失败不在此 restore——保持 'transcribing'，重试间隙不闪变
+          // （原每 attempt restore 会让状态条在 transcribing↔speech/wake 反复跳）。
           if (attempt === MAX_FINAL_ATTEMPTS - 1) console.warn('[dsh-voice-mode] finalize fetch failed (retries exhausted)')
           continue
         }
@@ -705,8 +741,8 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
             }
           }
         }
-        // 段已被清（stop/新段）时世代变化，结果作废。
-        restoreState()
+        // M6：重试期间保持 'transcribing'（不在此 restore）；结果落定才统一 restore
+        // ——下方「成功」一处（epoch 校验后）与「耗尽」一处（emitError 前）。
         if (!res.ok) {
           if (attempt === MAX_FINAL_ATTEMPTS - 1) console.warn('[dsh-voice-mode] finalize 5xx (retries exhausted)')
           continue
@@ -722,6 +758,11 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         // 校验本段世代（快照+1）：仅当定稿期间又推进（新段/打断/stop）时作废；
         // 历史 bug：比较快照本身（snap!==now）必然不等 → 定稿恒被丢弃 → onSegment 永不触发。
         if (segmentEpoch !== epochSnapshot + 1) return
+        // M1：定稿成功即段边界，重置连败计数（防跨段累积把下一段首次失败凑成 3 次误提示）。
+        resetFailStreaks()
+        // M6：状态只在「结果落定」（成功/耗尽）时统一 restore——原每 attempt 都调，
+        // 3 次重试间隙状态在 transcribing↔speech/wake/listening 反复闪变（状态条抖动）。
+        restoreState()
         // 唤醒词头剥离（content-preserving）：连说场景下词头仍在段首，剥掉后再进草稿；
         // 找不到唤醒词时 stripWakePrefix 原样返回——宁可不剥也不丢命令内容。
         const rawText = out.text ?? ''
@@ -732,7 +773,16 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
           // （现状是静默丢弃，修打断吃句不能顺带制造幽灵消息）。**engine 侧弃段**而非
           // 「跳过 submit」：累积草稿语义下只跳 submit 会让「嗯」留草稿并随后续定稿段
           // 的 autoSend 发出（复审 Important#1）。范围严格限抢救段+整段命中。
-          if (wasSalvaged && matchBackchannel(finalText)) {
+          // I4 扩展：让位段（onBackchannel 触发过的残留段）同口径弃段——播放期不入段
+          // （自聊防护）与触发条件 speechActive&&isPlaying 结构性矛盾，让位后残留段被
+          // 上方 isPlaying 守卫丢弃而不清段，speechActive 常驻，该段最终定稿时整段仍是
+          // 「嗯」，不拦就会作为消息/草稿发出（恢复播放后 detect 通道还已被饿死）。
+          if ((wasSalvaged || wasYielded) && matchBackchannel(finalText)) {
+            // I4：弃段时 emit 瞬态提示键 backchannelDropped。客户端侧「剥草稿尾 + 清 partial
+            // + 提示」消费属 client.tsx/strings.ts 待接线项——本引擎只负责 emit（当前客户端
+            // onNotice 透传 t(key)，未知键落 setNotice(undefined) 走兜底分支：不显示也不乱）。
+            // notice 与 onError（硬失败、持续显示）区分：由客户端 5s 自动清除。
+            emit(noticeListeners, 'backchannelDropped')
             // 终态与短噪声弃段对齐（审查 M4）：唤醒用户丢「嗯」后保持 listening（打断=已
             // engaged，ADR-0012 决策 3），不回待机态要求重说唤醒词。
             if (active && wakeEnabled) setState('listening')
@@ -748,6 +798,8 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         return
       }
       // 3 次重试耗尽仍失败：触发 onError → 状态条「识别失败，请重试」（防静默丢句）。
+      // M6：耗尽同属「结果落定」——统一 restore 一次（重试间隙一直是 transcribing）。
+      restoreState()
       emitError('recognitionFail')
     })()
   }
@@ -876,6 +928,12 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       segmentMs += durationMs
       silenceMs = 0
       segment.push(data)
+      // M7 明示接受：播放中（isPlaying）的滚段定稿会被 finalizeSegment 入口的自聊守卫
+      // （config.isPlaying?.() && !forcePending && !force → return）丢弃，段可超过
+      // MAX_SEGMENT_MS 持续增长——**有意接受，不加滚窗**：hold+播放=用户在 AI 朗读中
+      // 刻意按住麦克风说话（manual 打断），整段都是明确意图语音，滚窗丢最旧帧会吃掉
+      // 句首（比内存增长更糟）；段实际由按压时长界定（松手 endHeld 即定稿），hold 与
+      // 朗读并存是非常态组合。段长上限（MAX_SEGMENT_MS）在非播放期仍正常兜底。
       if (segmentMs > MAX_SEGMENT_MS) finalizeSegment()
     } else if (config.mode === 'hold') {
       // hold 模式且未按住：不持续聆听（不建段、不 auto-send），底部 ticker 照跑（无数据自然跳过）。
@@ -967,6 +1025,8 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
           segment = []
           speechActive = false
           salvagedSegment = false // Issue #15 批 1：弃段即弃抢救标记（防下一段误抑制）
+          yieldedSegment = false // I4：弃段即弃让位标记（同防下一段误抑制）
+          resetFailStreaks() // M1：段边界重置连败计数（同 clearWakeSegment 口径）
           speechMs = 0
           silenceMs = 0
           segmentMs = 0
@@ -1007,12 +1067,35 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
 
 
 
+  /**
+   * I2：在途启动被抢占（stop() 或更新的启动）时，释放**本启动**独有的麦克风与
+   * AudioContext。identity 守卫（模块级引用仍指向本启动对象才清）防误伤更新启动
+   * 已装配的流/上下文——旧续体与启动 B 并发时无条件置空会制造「active=true 但
+   * 静默无收音」。调用方须已在每个 await 后复检 stopRequested||mySeq!==startSeq。
+   */
+  const abandonStart = async (myStream: MediaStream, myCtx: AudioContext): Promise<void> => {
+    try {
+      myStream.getTracks().forEach((t) => t.stop())
+    } catch {
+      // ignore
+    }
+    if (stream === myStream) stream = null
+    try {
+      await myCtx.close()
+    } catch {
+      // ignore
+    }
+    if (audioCtx === myCtx) audioCtx = null
+  }
+
 const startRecorder = async (): Promise<void> => {
     // 捕获本启动序号：getUserMedia 异步授权返回期间若发生 stop→start（或再次 start），
     // startSeq 被推进，据此放弃本启动。此前用模块级 curStartSeq 比较——新 start() 会覆盖
     // curStartSeq，旧启动返回时 curStartSeq===startSeq 恒真、守卫失效（对抗审查 Blocker）。
     const mySeq = startSeq
-    stream = await navigator.mediaDevices.getUserMedia({
+    // I3：先赋局部变量，抢占检查通过后才赋模块级 stream。此前先赋模块级后检查——
+    // 旧启动(A)迟到续体会停掉新启动(B)已赋值的流 → active=true 但静默无收音。
+    const myStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         echoCancellation: true,
@@ -1028,10 +1111,10 @@ const startRecorder = async (): Promise<void> => {
     // （序号落后 → 双路开麦防呆）则立即释放麦克风。注意不能用 active 判断——
     // 它在函数末尾才置 true。
     if (stopRequested || mySeq !== startSeq) {
-      stream.getTracks().forEach((t) => t.stop())
-      stream = null
+      myStream.getTracks().forEach((t) => t.stop()) // I3：只停本启动的流
       return
     }
+    stream = myStream // I3：检查通过后才赋模块级（弃用分支只停 myStream）
     // A1：验证浏览器原生 AEC 是否真正生效。约束在首次 getUserMedia 建立处理链时生效，
     // track.getSettings() 是唯一可见信号；false 时外放回声几乎必然漏进 → 自打断。
     const aecOn = stream.getAudioTracks()[0]?.getSettings().echoCancellation === true
@@ -1046,13 +1129,21 @@ const startRecorder = async (): Promise<void> => {
     config.onAecState?.(aecOn)
     const AC: typeof AudioContext =
       window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    audioCtx = new AC({ sampleRate: SAMPLE_RATE })
+    const myCtx = new AC({ sampleRate: SAMPLE_RATE })
+    audioCtx = myCtx
     // iOS Safari：非手势栈创建的上下文初始为 suspended，不恢复则 onaudioprocess
     // 永不触发（进入语音模式后静默无反应）——在 getUserMedia 手势栈内尝试恢复。
     try {
       await audioCtx.resume?.()
     } catch {
       // 恢复失败不阻塞（部分场景仍可用；状态条会提示收音异常）
+    }
+    // I2：resume await 后复检抢占。此前唯一抢占检查在 getUserMedia 返回点，stop()
+    // 落入 resume/addModule 异步窗口时被吞（stop 在 wasActive=false 时早返、不停
+    // tracks、不递增 startSeq）→ 麦道常开 + 幽灵上行（stop 后 partial 仍在飞）。
+    if (stopRequested || mySeq !== startSeq) {
+      await abandonStart(myStream, myCtx)
+      return
     }
     // 浏览器可能忽略 sampleRate 选项（Safari 等）：记录真实采样率供重采样。
     ctxRate = audioCtx.sampleRate
@@ -1065,6 +1156,12 @@ const startRecorder = async (): Promise<void> => {
           workletBlobUrl = URL.createObjectURL(new Blob([__AUDIO_WORKLET__], { type: 'text/javascript' }))
         }
         await audioCtx.audioWorklet.addModule(workletBlobUrl)
+        // I2：addModule await 后同样复检（Safari/慢宿主上 addModule 可达数百 ms，
+        // 期间 stop() 随时可能落入）。此时 workletNode 尚未创建，无节点需断开。
+        if (stopRequested || mySeq !== startSeq) {
+          await abandonStart(myStream, myCtx)
+          return
+        }
         workletNode = new AudioWorkletNode(audioCtx, 'voice-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
         workletNode.port.onmessage = (e: MessageEvent<Float32Array>) => {
           handleAudio(e.data)
@@ -1094,6 +1191,13 @@ const startRecorder = async (): Promise<void> => {
 
   const stopRecorder = async (): Promise<void> => {
     // 根治 403：active 已在 stop() 中置 false，此处不再检查（否则清理逻辑被跳过）。
+    // 观察项 2 修复（Issue #15 批 8）：捕获本次收尾的 ctx 引用，收尾按 identity 重置。
+    // stop() 的 await 期间新 start() 可能已装配新 AudioContext（active 已被 stop 置
+    // false，start 不被挡）——旧收尾无条件 `audioCtx = null` 会把新 ctx 置空：新 start
+    // 后续读 audioCtx 抛错、麦道遗留，且新 ctx 永无人 close（泄漏）。与 abandonStart
+    // 同构：只清「仍属于本次收尾」的模块级引用。processor/workletNode/stream 的停止
+    // 与置空在本函数首个 await 之前同步完成，新启动无从插入，故不需 identity 守卫。
+    const myCtx = audioCtx
     inFlush = true
     segmentEpoch++ // 迟到的请求结果全部作废
     forcePending = false
@@ -1105,6 +1209,7 @@ const startRecorder = async (): Promise<void> => {
     speechMs = 0
     wakeSilenceMs = 0 // issue #10：待机静音计时随会话清场
     wakeConsumed = false // 会话清场即作废词头消费标记
+    yieldedSegment = false // I4：会话清场即作废让位标记
     uploadedSamples = 0 // P1-4：会话结束清除已传水位
     prePad = []
     detectChunks = [] // 打断根治：退出清检测通道
@@ -1137,12 +1242,17 @@ const startRecorder = async (): Promise<void> => {
     }
     stream = null
     try {
-      await audioCtx?.close()
+      await myCtx?.close()
     } catch {
       // ignore
     }
-    audioCtx = null
-    ctxRate = SAMPLE_RATE
+    // identity 守卫：仅当模块级引用仍属于本次收尾才重置（新启动已接管时不动它的 ctx/rate）。
+    if (audioCtx === myCtx) {
+      audioCtx = null
+      ctxRate = SAMPLE_RATE
+    }
+    // inFlush 不按 identity 守卫：新启动借本次收尾末尾解除帧屏蔽——若也守卫，inFlush
+    // 会永真（没人再把它置 false），新会话全程丢帧。
     inFlush = false
   }
 
@@ -1184,6 +1294,12 @@ const startRecorder = async (): Promise<void> => {
       preRollSeedWall = null
       wasPlaying = false
       salvagedSegment = false
+      yieldedSegment = false // I4：进入清让位标记（不跨会话残留）
+      // M5：回声水位随会话重置——跨会话残留会让上一会话的地板/峰值污染本次打断门控
+      // （段内地板不清空是有意决策，见 handleAudio 内注释；会话边界必须归零）。
+      latestResidualRms = 0
+      echoFloorRms = 0
+      echoPeak = 0
       // 配置了唤醒词（且非 hold 模式）→ 先进 wake 待机态；否则直接聆听。
       setState(wakeEnabled ? 'wake' : 'listening')
       try {
@@ -1196,6 +1312,16 @@ const startRecorder = async (): Promise<void> => {
     async stop() {
       // Fix8：即使 active=false（授权挂起中被抢占）也要标记取消，让授权返回后释放。
       stopRequested = true
+      // I2：递增启动序号作废在途启动。此前 wasActive=false 时早返不递增——stop()
+      // 落入 startRecorder 的 resume/addModule 异步窗口会被吞（那些窗口无抢占复检），
+      // 麦道常开 + 幽灵上行。startRecorder 现已在每个 await 后复检
+      // stopRequested||mySeq!==startSeq，此处递增让窗口内的续体看到序号落后而放弃。
+      startSeq++
+      // 观察项 3 修复（Issue #15 批 8）：捕获本次 stop 的启动世代——收尾（stopRecorder）
+      // 跨过新 start() 完成时不踩新会话状态。旧实现末尾无条件 setState('idle')：新会话已置
+      // 'wake'/'listening' 且 active=true 在收音，却被旧收尾踩成 'idle'（状态条误显退出）。
+      // 早返分支（!wasActive）在此之前无 await 点、新启动无从插入，故不需守卫。
+      const myStopSeq = startSeq
       // 根治 403：stop 立即置 active=false，阻止 handleAudio 在 stopRecorder 异步完成前继续发请求。
       const wasActive = active
       active = false
@@ -1204,12 +1330,14 @@ const startRecorder = async (): Promise<void> => {
         return
       }
       await stopRecorder()
-      setState('idle')
+      // 收尾期间发生过新 start（startSeq 已推进）→ 新会话自管状态，不踩。
+      if (startSeq === myStopSeq) setState('idle')
     },
     forceSend() {
-      // 至少 250ms 语音才强制发送（≥250ms 防误触，Q5）；标记 force 供 autoSend=false 兜底
-      const speechS = segment.reduce((n, c) => n + c.length, 0) / SAMPLE_RATE
-      if (speechActive && speechS >= 0.25) {
+      // 至少 250ms 语音才强制发送（≥250ms 防误触，Q5）；标记 force 供 autoSend=false 兜底。
+      // M4：判**纯语音**时长 speechMs——原判段总样本数（含 prePad 与静音尾巴），与注释
+      // 「≥250ms 语音」不符：一段全是 prePad/静音的段也会过门被强制发出。
+      if (speechActive && speechMs >= MIN_SPEECH_MS) {
         forcePending = true
         lastPollAt = 0
         finalizeSegment()
@@ -1223,6 +1351,8 @@ const startRecorder = async (): Promise<void> => {
       segmentEpoch++ // 作废迟到的 wake/旧段 partial
       wakeConsumed = false // 新段重新起算词头消费
       salvagedSegment = false // Issue #15 批 1：hold 新段不继承抢救标记（防误抑制）
+      yieldedSegment = false // I4：hold 新段不继承让位标记（同防误抑制）
+      resetFailStreaks() // M1：hold 新段=段边界，重置连败计数（防跨段累积误提示）
       utteranceEndAt = null // P1-5：新按压段重新起算说完时刻
       segment = []
       segmentMs = 0
@@ -1250,6 +1380,7 @@ const startRecorder = async (): Promise<void> => {
       wakeSilenceMs = 0 // issue #10：待机静音计时不跨打断残留
       wakeConsumed = false // 弃段即作废词头消费标记
       salvagedSegment = false // Issue #15 批 1：不变量——段已空，标记随下方条件 seed 重建
+      yieldedSegment = false // I4：让位标记随弃段复位（不变量同上）
       speechActive = false
       prePad = []
       uploadedSamples = 0
@@ -1311,10 +1442,13 @@ const startRecorder = async (): Promise<void> => {
         segmentEpoch++
         segment = []
         salvagedSegment = false // Issue #15 批 1：取消段不遗留抢救标记
+        yieldedSegment = false // I4：取消段不遗留让位标记
+        resetFailStreaks() // M1：取消=段边界，重置连败计数（防跨段累积误提示）
         segmentMs = 0
         silenceMs = 0
         prePad = []
         speechActive = false
+        utteranceEndAt = null // M2：取消段重置「说完」标记（对齐 beginHeld——否则 30s 滚段定稿置过的 utteranceEndAt 会让下一段 chain 不上报）
         forcePending = false // 对抗性审查 Fix：取消段不得泄漏 force 标记（否则下段静默绕过 autoSend=false）
         setState(wakeEnabled ? 'wake' : 'listening')
         return
@@ -1326,6 +1460,9 @@ const startRecorder = async (): Promise<void> => {
         finalizeSegment()
       } else {
         forcePending = false
+        // M3：空段（快按秒松）也释放 speechActive——否则残留 true 会让后续静音帧走
+        // 「已开口」分支把静音推进空段，白跑一轮短噪声弃段 + host reset。
+        speechActive = false
         setState(wakeEnabled ? 'wake' : 'listening')
       }
     },

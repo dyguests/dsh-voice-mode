@@ -14,6 +14,8 @@
  *     （非手工重建，规避「测试与源码漂移」；模块私有函数无法直接 import）。
  *  2) 断言四个类别的归类正确 + 至少 2 个负例（不误判为已知三类的普通错误）。
  *  3) bundle 源码存在性断言：防 classifyPreviewError 或某正则被误删/改名后测试失明。
+ *  4) 「host 不发中文试听文案」锁扫**原始 src/index.ts**（非 bundle）：esbuild 默认
+ *     ascii 会把中文串转义成 \uXXXX，扫产物永不命中（曾因此空洞化）；注释行除外。
  *
  * 不变量 I1-I10 守住：本测试仅读取 + mock + bundle，不修改 src/。
  */
@@ -172,11 +174,16 @@ t('负例 2：包含 engine 字样但不属引擎错误的普通文本不误判�
 
 console.log('⑥ 响应协议：host 只发稳定错误码，不发任何自然语言（用户文案由客户端按界面语言翻译）')
 
-t('四类归类各映射到 preview_* 错误码；host 源码里不再有中文试听文案', () => {
+t('四类归类各映射到 preview_* 错误码；host 源码不再有中文试听文案', () => {
   const codesStart = src.indexOf('var PREVIEW_ERROR_CODES')
   const codes = new Function(`${src.slice(codesStart, src.indexOf('};', codesStart) + 2)}\nreturn PREVIEW_ERROR_CODES;`)()
   assert.deepEqual(codes, { network: 'preview_network', engine: 'preview_engine', text: 'preview_text', unknown: 'preview_unknown' })
-  assert.ok(!/试听失败/.test(src), 'host 产物里不应再出现中文试听文案')
+  // 扫原始 src/index.ts 而非 bundle：esbuild 默认 ascii 输出会把中文串编译成
+  // \uXXXX 转义，正则永不命中运行时字符串（旧实现扫产物 = 零保护，已实证空洞化）。
+  // 注释行除外——注释不随响应发给客户端，不违反「host 不发中文」不变量。
+  const indexSrc = readFileSync(join(here, '..', 'src', 'index.ts'), 'utf8')
+  const codeLines = indexSrc.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+  assert.ok(!/试听失败/.test(codeLines.join('\n')), 'host 代码里不应再出现中文试听文案（注释除外——注释不发客户端）')
 })
 
 rmSync(tmp, { recursive: true, force: true })

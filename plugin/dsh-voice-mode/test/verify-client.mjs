@@ -57,11 +57,15 @@ t('publishConfig.access 为 public', () => {
 t('engines.node 如实声明', () => {
   assert.ok(pkg.engines?.node)
 })
-t('lib/index.js 存在且为 ESM（export 声明）', () => {
+t('lib/index.js 存在且为 ESM（export 声明含 name/apply/Config/VoiceSettingsSchema）', () => {
   const src = read('lib/index.js')
-  assert.ok(/export\s*\{/.test(src), 'host bundle lacks export statement')
+  // 精确到 export 条目：旧实现 src.includes('name') 可被 "namespace"/"filename" 等任意
+  // 含 name 的子串满足（3500 行 bundle 里恒真）——零保护。
+  const m = /export\s*\{([^}]*)\}/.exec(src)
+  assert.ok(m, 'host bundle lacks export statement')
+  const exported = m[1].split(',').map((s) => s.trim()).filter(Boolean)
   for (const s of ['name', 'apply', 'Config', 'VoiceSettingsSchema']) {
-    assert.ok(src.includes(s), `host bundle missing ${s}`)
+    assert.ok(exported.includes(s), `host bundle export missing ${s}`)
   }
 })
 t('lib/client.js 是 __ModuleLoader__ 闭包且注入全部三个槽位', () => {

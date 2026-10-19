@@ -42,6 +42,8 @@
 
 ## 五、本轮实例（全版本兼容，可照抄）
 
+> **快照日期标注（2026-10-19 补）**：本节数字为 **2026-09-23 当时实测快照**（25 版取证 / 24 版真流程 / 380 单测），非当前值；当前口径以 `docs/rules/STATE.md` 与 `docs/compat-contract.md` 最新段为准（示例：npm test 现为 48 文件 / 583 项）。
+
 - 取证：25 版全集（npm）+ 官方源码（dsh-agent-default-model 范式、dsh-settings README）+ 子包 peerDeps 实证 + 探针脚本（volatile 破坏性、HMR 归因对照）。
 - 实施：shim 双路径（Config 扩展 + bridge + mode 双写），中途一次批量正则事故→逐段手工重建。
 - 验证：9 版 typecheck 全过 + 24 版真流程 PASS（装饰性数字见 TEST-SYSTEM.md §六）+ 380 单测 exit 0 + 生产健康三指标。

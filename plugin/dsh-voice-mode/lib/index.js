@@ -183,6 +183,16 @@ async function sha256OfFile(path) {
   });
   return hash.digest("hex");
 }
+var MODEL_FETCH_HEADERS_TIMEOUT_MS = 6e4;
+async function fetchWithHeadersTimeout(url, init) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error("model fetch headers timeout")), MODEL_FETCH_HEADERS_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function ensureModelFile(opts) {
   const { repoDir, spec, primaryHost, broadcast } = opts;
   const localPath = join(repoDir, spec.file);
@@ -216,7 +226,7 @@ async function downloadVerified(opts) {
   const resumeFrom = partSt?.isFile() ? partSt.size : 0;
   const headers = { "user-agent": "dsh-voice-mode" };
   if (resumeFrom > 0) headers.range = `bytes=${resumeFrom}-`;
-  const res = await fetch(url, { headers, redirect: "follow" });
+  const res = await fetchWithHeadersTimeout(url, { headers, redirect: "follow" });
   if (!redirectHostAllowed(res.url, allowCustomHost)) return false;
   if (res.status === 416) {
     if (await sha256OfFile(partPath).catch(() => "") === spec.sha256) {
@@ -281,7 +291,9 @@ async function ensureModelTree(opts) {
   let tree = [];
   for (const host of hosts) {
     try {
-      const res = await fetch(host + "/api/models/" + repo + "?blobs=true", { headers: { "user-agent": "dsh-voice-mode" } });
+      const res = await fetchWithHeadersTimeout(host + "/api/models/" + repo + "?blobs=true", {
+        headers: { "user-agent": "dsh-voice-mode" }
+      });
       if (res.ok) {
         const j = await res.json();
         tree = (j.siblings ?? []).map((s) => s.rfilename ?? "").filter((f) => isSafeModelRel(f, subdir));
@@ -679,10 +691,15 @@ function createAsrRuntime(options) {
     if (sessSegs.size === 0) segments.delete(sessionId);
     const finalizeP = (async () => {
       const all = seg.allSamples;
+      let senseTimer = null;
       const senseP = all.length > 0 ? Promise.race([
         senseTranscribe(all),
-        new Promise((resolve) => setTimeout(() => resolve(null), 2e4))
-      ]) : Promise.resolve(null);
+        new Promise((resolve) => {
+          senseTimer = setTimeout(() => resolve(null), 2e4);
+        })
+      ]).finally(() => {
+        if (senseTimer) clearTimeout(senseTimer);
+      }) : Promise.resolve(null);
       const pad = new Float32Array(rec.config.featConfig.sampleRate / 2);
       seg.stream.acceptWaveform(rec.config.featConfig.sampleRate, pad);
       while (rec.isReady(seg.stream)) rec.decode(seg.stream);
@@ -743,6 +760,15 @@ function createAsrRuntime(options) {
         segments.delete(sid);
         finalized.delete(sid);
       }
+    }
+    for (const sid of finalized.keys()) {
+      if (segments.has(sid)) continue;
+      finalized.delete(sid);
+      resetGen.delete(sid);
+    }
+    for (const sid of resetGen.keys()) {
+      if (segments.has(sid)) continue;
+      resetGen.delete(sid);
     }
     for (const [sid, at] of detectVadLastUse) {
       if (now - at > SEGMENT_IDLE_MS) {
@@ -1065,6 +1091,7 @@ var SentenceSegmenter = class {
 import { MsEdgeTTS, OUTPUT_FORMAT } from "./msedge-tts.cjs";
 var MP3_MAGIC = 255;
 var TTS_METADATA = { wordBoundaryEnabled: false, sentenceBoundaryEnabled: false };
+var EDGE_VOICES_TIMEOUT_MS = 3e4;
 function prosodyFromRate(rate) {
   if (rate !== void 0 && rate > 0 && rate !== 1) return { rate };
   return void 0;
@@ -1113,7 +1140,12 @@ async function listEdgeVoices(force = false) {
   if (edgeVoicesCache && !force) return edgeVoicesCache;
   const tts = new MsEdgeTTS();
   try {
-    const voices = await tts.getVoices();
+    const voices = await Promise.race([
+      tts.getVoices(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("edge voices request timed out")), EDGE_VOICES_TIMEOUT_MS).unref?.();
+      })
+    ]);
     edgeVoicesCache = voices.map((v) => ({
       ShortName: v.ShortName,
       Locale: v.Locale,
@@ -1146,13 +1178,27 @@ var TtsQueue = class {
     return this.engine.mime;
   }
   /**
-   * 运行时切换引擎（设置面板「朗读引擎」即时生效）：
-   * 关闭旧引擎、清空所有会话队列；新句子用新引擎合成。
+   * 运行时切换引擎（设置面板「朗读引擎」即时生效 / Kokoro 精度切换 / 清理模型缓存后重建）：
+   * 关闭旧引擎、作废所有会话的在途与积压；新句子用新引擎合成。
+   *
+   * B1（Issue #15 审查 Blocker）：早年实现只 `this.queues.clear()`——不升各队列的
+   * epoch，也不保留队列本身，两处都错：
+   *  1) 孤儿泵不停播：在途 synthesize 完成后 `item.epoch === q.epoch` 恒真，旧引擎的
+   *     帧继续下行，与新引擎的帧双轨广播（prune() 已修同一反模式，setEngine 漏修）；
+   *  2) seq 归零撞拒绝线：删队列后重入的新 SessionQueue seq 从 0 起算，而 client 的
+   *     sentenceId 拒绝线（rejectSeqUpTo）是「旧会话遗留的最大句号」，新回复前 N 句
+   *     全部 ≤ 线被静默丢弃——正是 /toggle 用 cancel 而非 prune 保 seq 连续的同一条
+   *     不变式（index.ts:1086-1091 / 1118-1120）。
+   * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身
+   * （seq 连续递增，跨引擎切换不归零）。
    */
   setEngine(engine) {
     const old = this.engine;
     this.engine = engine;
-    this.queues.clear();
+    for (const q of this.queues.values()) {
+      q.epoch++;
+      q.pending.length = 0;
+    }
     void old.close().catch(() => {
     });
   }
@@ -1776,9 +1822,15 @@ function createSherpaLocalEngine(options) {
         } finally {
           engineLoading = false;
         }
-      })().finally(() => {
-        ready = null;
-      });
+      })().then(
+        (v) => {
+          return v;
+        },
+        (e) => {
+          ready = null;
+          throw e;
+        }
+      );
     }
     return ready;
   };
@@ -1956,8 +2008,15 @@ var en = {
   disabled: "Voice mode disabled (plugin enabled=false)",
   sendFailKept: "Send failed; text kept in draft",
   micDenied: "Microphone denied: allow mic access for this site",
+  micBusy: "Microphone is in use by another program \u2014 close it and retry",
   micUnavailable: "Microphone unavailable",
   recognizing: "Recognizing\u2026",
+  // UX-I1 联动态：纠错在途 / 纠错放弃回退 / 附和词忽略 / 语音按钮态文案。
+  correctFixing: "Correcting\u2026",
+  correctAbandoned: "Original text kept in draft",
+  backchannelDropped: "Backchannel ignored, not sent",
+  buttonLoading: "Loading\u2026",
+  buttonListening: "Listening",
   holdToTalk: "Hold to talk",
   releaseToSend: "Release to send",
   voiceDetected: "Voice active",
@@ -1966,7 +2025,7 @@ var en = {
   ariaActive: "Voice mode active",
   ariaEnter: "Enter voice mode",
   titleHold: "Voice mode \xB7 hold to talk, release to send; tap to exit; Esc/blur cancels; Ctrl+Shift+V exits",
-  titleToggle: "Voice mode \xB7 click to exit (Ctrl+Shift+V) \xB7 hold Ctrl to send now",
+  titleToggle: "Voice mode \xB7 click to exit (Ctrl+Shift+V) \xB7 hold Ctrl while speaking to send now",
   titleEnter: "Enter voice mode (Ctrl+Shift+V)",
   loadingModel: "Loading model\u2026",
   listening: "Listening\u2026",
@@ -2016,7 +2075,7 @@ var en = {
   descVoiceKokoro: "Kokoro zh-en voices (103; \u25C0\u25B6 to cycle; 48-51 named Chinese, others numbered with measured gender; mixed zh-en supported)",
   descRate: "Speech rate (0.5 slow \u2013 2.0 fast, 1.1 default; more compact replies)",
   descInterrupt: "Interrupt sensitivity (0 high \u22480.3 s confirm / 1 medium \u22480.2 s / 2 low \u22480.1 s, most responsive); lower = higher barrier = harder to interrupt",
-  descBargeIn: "Barge-in mode (detect: auto-probe native echo cancellation, fall back to hold-to-talk when inactive \u2014 default; auto: force interrupt by speaking \u2014 headphones/quiet; manual: for loudspeaker, no echo-triggered self-interrupt \u2014 hold mic/Ctrl to interrupt)",
+  descBargeIn: "Barge-in mode (detect: auto-probe native echo cancellation, fall back to hold-to-talk when inactive \u2014 default; auto: force interrupt by speaking \u2014 headphones/quiet; manual: for loudspeaker, no echo-triggered self-interrupt \u2014 hold mic/Ctrl to interrupt). Note: in manual mode (including detect falling back to manual on machines without native echo cancellation) audio outside a press is not recognized \u2014 in toggle mode you can long-press to speak only while the agent is playing; when idle there is no voice input, so use hold mode or switch to auto/detect",
   bargeInDetect: "Auto-detect",
   bargeInAuto: "Auto",
   bargeInManual: "Manual",
@@ -2027,23 +2086,29 @@ var en = {
   aecOffHint: "Native echo cancellation is not active (speaker echo may self-interrupt); use headphones or Manual barge-in",
   // 批 7O（ADR-0006）：detect 模式第一级探测降级提示（英文）。
   bargeInDetectFallback: "Native echo cancellation is off \u2014 switched to hold-to-talk barge-in",
+  // R1 收尾（fix-client 直连 tk() 调用）：连续 3 次回声拒断的解释出口 + 快捷键非法停用提示。
+  echoRejectHint: "Strong echo detected \u2014 barge-in is limited by echo protection. Use headphones or switch to manual barge-in",
+  shortcutInvalid: "Invalid shortcut, disabled. Fix it in settings (e.g. Ctrl+Shift+V); leave empty to use the mic button only",
   elapsedHint: "Current voice session duration",
   botLevelsHint: "AI playback level (blue bar = TTS playback, green bar = microphone)",
   interruptConfirm: "interrupt confirm",
   sev0: "0 high",
   sev1: "1 medium",
   sev2: "2 low",
+  // 数值单位（设置卡片「当前生效值」用：中文汉字单位、英文国际缩写，避免「1500 ms」直出）
+  unitMs: "ms",
+  unitMin: "min",
+  unitDb: "dB",
   descSilence: "Silence pause before a sentence is committed (default 1500 ms; at least 250 ms of speech required, guards against noise triggers)",
-  descIdle: "Auto-exit voice mode after idle minutes (default 5; batch G added 30 s warning before exit)",
+  descIdle: "Auto-exit voice mode after idle minutes (default 5; a 30-second countdown warning appears before exit)",
   descModelHost: "ASR model download source (official source / mirror, or any custom URL)",
-  descAutoSend: "Auto-send once quiet (consecutive segments join into one message; off = draft only; Ctrl / hold still sends)",
+  descAutoSend: "Auto-send once quiet (consecutive segments join into one message; off = draft only; holding Ctrl while speaking sends immediately; in hold mode, releasing sends)",
   // 批 7N 重做 5/5：clarify that toggling takes effect on next session entry (not the current one).
   descAutoResume: "Auto-resume voice mode when switching back to the last voice session (default off; takes effect on next session entry \u2014 auto-enters voice mode and restores the last session; when disabled, you must press Ctrl+Shift+V to re-enter)",
   descSpokenFormat: "Inject spoken-format prompt into voice replies (colloquial, short sentences, no Markdown; default on, live)",
   descSenseVoice: "Recognition mode: on = accurate mode (SenseVoice finalization with punctuation + ITN; long utterances may take seconds on CPU); off = fast mode (streaming result finalized directly, skips the 228 MB re-transcription model, slightly less accurate)",
   recognizingSec: "Recognizing\u2026 {sec}s",
   descToolBeep: "Tool-call beep (default off): beep when the agent is thinking/calling tools; keep off if it annoys you",
-  senseITN: "Inverse text normalization",
   descSenseITN: "SenseVoice number/date/format normalization (default on; turn off to keep raw spoken form)",
   descCaptionFontSize: "Caption font size (Small 12 / Standard 14 / Large 18 / X-Large 24 px; default Small matches current behavior)",
   descCaptionMaxWidth: "Caption width (50vw / 70vw / 90vw; default 70vw; capped at 30vh height so multi-line 24px never overlaps the input box)",
@@ -2054,23 +2119,19 @@ var en = {
   captionWidth50: "Narrow",
   captionWidth70: "Medium",
   captionWidth90: "Wide",
-  skipReading: "Skip current reading",
-  backchannelYield: "Short-reply yielding",
-  descBackchannelYield: 'When the user says a short answer like "mm-hmm/right" while the agent is reading aloud, yield automatically (skip the current TTS sentence + drop frames for 1.5s; if the user really wants to speak, the existing hardBreak takes over; off = no yielding, behavior matches pre-batch-5)',
+  skipReading: "Skip this sentence",
+  descBackchannelYield: 'When the user says a short answer like "mm-hmm/right" while the agent is reading aloud, yield automatically (skip the current TTS sentence + drop frames for 1.5s; if the user really wants to speak, the existing hardBreak takes over; off = no yielding, behavior matches before this change). Only triggers in hold-to-talk mode: in continuous-listening mode speech is not recognized during playback (speaking is treated as an interrupt)',
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage.
-  bargeInSalvage: "Barge-in speech salvage",
   descBargeInSalvage: "When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)",
-  descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; reuses the host configured model). On = about one extra second per message; falls back to the original text if correction fails",
-  // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
-  yieldMs: "Yield window",
-  descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires)",
+  descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; requires a default model configured in the host \u2014 otherwise the original text is sent as-is). On = one extra correction round trip per message: usually under 1 second, at most ~10 seconds; at most 10 times per minute \u2014 when voice mode is off or the limit is hit, the original text is sent. Failed or abnormal output also falls back to the original text",
+  descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires). Hold-to-talk mode only, during playback",
   descMode: "Interaction mode (toggle: continuous listen + auto-send / hold: press to talk)",
   modeToggle: "Continuous listening",
   modeHold: "Hold to talk",
-  descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
+  descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
-  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window",
-  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / spoken format (applies to later replies) / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Saved-but-not-yet-effective items are listed at the top of this card with their current effective values.",
+  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
+  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
   effectivePending: "{count} change(s) will apply next time you enter voice mode: {items}",
   valueOn: "On",
   valueOff: "Off",
@@ -2110,7 +2171,6 @@ var en = {
   ttsDownloadHint: "Download this engine's local model; becomes ready immediately after",
   dataFlowHint: "Data flow: ASR recognition (zipformer2+SenseVoice) is always local; TTS playback depends on engine (edge=Microsoft cloud, vits/kokoro=local)",
   ttsDeleteHint: "Delete local models (frees space; auto re-downloads on next use)",
-  kokoroModel: "Kokoro model precision",
   kokoroModelInt8: "int8 (default)",
   kokoroModelFp32: "fp32 (better quality)",
   descKokoroModel: "Kokoro model precision: int8 is smaller/faster (CPU server or low bandwidth; default); fp32 sounds better but ~311MB and slower (GPU or large memory). Both share the same 103 voices; switches live.",
@@ -2125,10 +2185,10 @@ var en = {
   captionFontSizeLabel: "Caption size",
   captionMaxWidthLabel: "Caption width",
   backchannelYieldLabel: "Short-reply yielding",
-  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (*Label mirror key).
+  // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (row title key).
   bargeInSalvageLabel: "Barge-in speech salvage",
   llmCorrectLabel: "LLM correction",
-  // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
+  // Yield window (row title key).
   yieldMsLabel: "Yield window",
   // 批 G 任务 2：空闲预警 + 退出提示文案。
   idleWarn30s: "Auto-exit in 30 seconds (adjustable in settings)",
@@ -2200,6 +2260,7 @@ var en = {
 function correctionSystem(lang) {
   return lang === "en" ? "You are a speech-recognition corrector. The user text comes from ASR and may contain homophone errors, typos, or missing/wrong punctuation. Make only minimal fixes: correct typos/homophones and fix punctuation, preserving the original meaning and colloquial style. Do not rewrite sentences, do not add content, do not answer questions, and do not alter numbers or proper nouns. Output only the corrected text, with no explanation. If the input has no obvious errors, return it unchanged." : "\u4F60\u662F\u4E2D\u6587\u8BED\u97F3\u8BC6\u522B\u7EA0\u9519\u5668\u3002\u7528\u6237\u7684\u8BDD\u6765\u81EA\u8BED\u97F3\u8BC6\u522B\uFF08ASR\uFF09\uFF0C\u53EF\u80FD\u6709\u540C\u97F3\u5B57\u3001\u9519\u522B\u5B57\u3001\u6807\u70B9\u7F3A\u5931\u6216\u9519\u8BEF\u3002\u8BF7\u53EA\u505A\u6700\u5C0F\u4FEE\u6B63\uFF1A\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57\u3001\u8865\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\u4E0E\u53E3\u8BED\u98CE\u683C\uFF1B\u4E0D\u8981\u6539\u5199\u53E5\u5B50\u3001\u4E0D\u8981\u8865\u5145\u5185\u5BB9\u3001\u4E0D\u8981\u56DE\u7B54\u95EE\u9898\u3001\u4E0D\u8981\u6539\u53D8\u6570\u5B57\u548C\u4E13\u4E1A\u672F\u8BED\u3002\u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u6587\u672C\uFF0C\u4E0D\u8981\u4EFB\u4F55\u89E3\u91CA\u3002\u5982\u679C\u539F\u6587\u6CA1\u6709\u660E\u663E\u9519\u8BEF\uFF0C\u539F\u6837\u8FD4\u56DE\u3002";
 }
+var CORRECTION_PREAMBLE_RE = /^(?:以下是|这是)?(?:修正|纠正|更正|纠错|修改)[^。！？\n]{0,12}[：:]|^(?:here is (?:the )?)?(?:corrected|correction)\b/i;
 async function correctText(ctx, text, lang) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return text;
@@ -2222,6 +2283,7 @@ async function correctText(ctx, text, lang) {
       if (chunk && chunk.type === "text-delta" && typeof chunk.text === "string") out += chunk.text;
     }
     const corrected = out.trim();
+    if (corrected.length > Math.max(64, trimmed.length * 3) || CORRECTION_PREAMBLE_RE.test(corrected)) return text;
     return corrected || text;
   } catch {
     return text;
@@ -2505,10 +2567,14 @@ var Config = z.object({
   allowLan: z.boolean().default(false),
   allowCustomModelHost: z.boolean().default(false),
   voice: z.string().default("zh-CN-XiaoxiaoNeural"),
-  rate: z.number().default(1.1),
+  // I3（Issue #15 审查 Important）：数值旋钮补 min/max，与 VoiceSettingsValue schema
+  // （createVoiceSettingsSchema）逐字段一致。早年 Config 层是裸 z.number()——cordis.patch.yml
+  // 手滑写 rate:5 会得到五倍速朗读、silenceMs:10 会把每句话按音节碎切，且没有任何一层会拦。
+  // 两层同界：Config 是 baseline、settings schema 是覆盖层，任一层失守都让非法值直达运行时。
+  rate: z.number().min(0.5).max(2).default(1.1),
   interruptLevel: z.union([z.const(0), z.const(1), z.const(2)]).default(0),
-  silenceMs: z.number().default(1500),
-  idleTimeoutMinutes: z.number().default(5),
+  silenceMs: z.number().min(500).max(3e4).default(1500),
+  idleTimeoutMinutes: z.number().min(1).max(120).default(5),
   // 设置面板字段（与 VoiceSettingsValue 一一对应；0.1.7+ 由插件自身 Config 派生读取）。
   // 注意：刻意不标 .volatile() —— schemastery 3.18.4 的 volatile 会破坏 schema 函数
   // 调用形态（sv({}) → {field:{}}），而 0.1.5-rc.3 起的设置分层会调用插件 Config 做
@@ -2519,7 +2585,10 @@ var Config = z.object({
   autoResume: z.boolean().default(false),
   mode: z.union([z.const("toggle"), z.const("hold")]).default("toggle"),
   bargeInMode: z.union([z.const("auto"), z.const("manual"), z.const("detect")]).default("detect"),
-  echoGateDb: z.number().default(6),
+  // I3 + M7（zod 界）：echoGateDb / yieldMs 与 settings schema 同界（3-12 dB / 500-3000ms）。
+  // client 与 NumberField 虽会 clamp，但那只是 UI 兜底——Config 层无界时 YAML 手滑
+  // 仍可把回声门阈设成 0（句句误打断）或让位窗口设成 60000（让位后一分钟不说话）。
+  echoGateDb: z.number().min(3).max(12).default(6),
   shortcut: z.string().default("Ctrl+Shift+V"),
   spokenFormat: z.boolean().default(true),
   senseVoice: z.boolean().default(true),
@@ -2533,7 +2602,8 @@ var Config = z.object({
   llmCorrect: z.boolean().default(false),
   // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
   bargeInSalvage: z.boolean().default(true),
-  yieldMs: z.number().default(1500)
+  // I3 + M7（zod 界）：500-3000ms，与 settings schema 一致。
+  yieldMs: z.number().min(500).max(3e3).default(1500)
 });
 function voiceSettingsFromConfig(config) {
   const {
@@ -2603,6 +2673,11 @@ function apply(ctx, config) {
     broadcast("turn", { sessionId, state });
   };
   const turnGen = /* @__PURE__ */ new Map();
+  const clearTurnState = (sessionId) => {
+    setTurn(sessionId, "idle");
+    turnStates.delete(sessionId);
+    turnGen.delete(sessionId);
+  };
   const sessions = ctx.get("sessions");
   const limiter = new RateLimiter();
   const limiterPrune = setInterval(() => limiter.prune(Date.now(), 6e4), 6e4);
@@ -2610,21 +2685,25 @@ function apply(ctx, config) {
   const normalizedModelHost = () => validateModelHost(vset.modelHost, config.allowCustomModelHost) ?? HOST_PRIMARY;
   const denyNonLoopback = (req, res) => {
     if (!config.allowLan && !isLoopbackRequest(req)) {
-      res.statusCode = 403;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ code: "forbidden", error: "loopback only (allowLan=false)" }));
+      respondJson2(res, 403, { code: "forbidden", error: "loopback only (allowLan=false)" });
       return true;
     }
     return false;
   };
   const denyCrossOrigin = (req, res) => {
     if (!sameOriginRequest(req)) {
-      res.statusCode = 403;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ code: "forbidden", error: "cross-origin request denied" }));
+      respondJson2(res, 403, { code: "forbidden", error: "cross-origin request denied" });
       return true;
     }
     return false;
+  };
+  const clientKey = (req) => {
+    if (isLoopbackRequest(req)) {
+      const xff = req.headers["x-forwarded-for"];
+      const first = (typeof xff === "string" ? xff : Array.isArray(xff) ? xff[0] : "").split(",")[0].trim();
+      if (first) return first;
+    }
+    return req.socket.remoteAddress ?? "unknown";
   };
   const sseClients = /* @__PURE__ */ new Set();
   const latestConnByTab = /* @__PURE__ */ new Map();
@@ -2718,10 +2797,27 @@ function apply(ctx, config) {
     allowCustomHost: config.allowCustomModelHost,
     broadcast,
     // 批 7N（ADR-0006）：打断方式 getter（实时读设置）；manual 模式下 feed 需 manualPressed=true。
+    //
+    // I5（Issue #15 审查 Important）——toggle + manual 的已知缺口，注释如实登记：
+    // manual 下 host 与客户端双重丢帧（asr-host.ts feed 入口 manualPressed=false 直接
+    // 返回、asr.ts handleAudio 非 holdActive 丢弃），而客户端的 hold 入口（mic 长按 /
+    // Ctrl）**仅在 bus.ui.playing 为真时开放**（client.tsx 的 toggle 分支与 Ctrl 分支均以
+    // playing 为条件）。于是 toggle + manual 组合下：AI 朗读中可以长按打断并说话，
+    // 待机态（不播放）则完全无法输入——用户看到的是「麦克风亮着但说话没反应」的静默致聋，
+    // 而 bargeInMode=detect 在原生 AEC 未生效的机器上会自动落到 manual，即默认路径就可能命中。
+    // 待机态 push-to-talk 属产品决策（要改的是客户端手势开放条件），PM 已登记待用户拍板，
+    // 此处不加功能；host 侧只保证「manual 时非按压帧不入流」这一既有语义不被悄悄扩大。
     bargeInMode: () => vset.bargeInMode
   });
   ctx.effect(() => () => asr.dispose());
-  void asr.warmup();
+  const warmupAsrIfCached = () => {
+    if (!config.enabled) return;
+    const st = asr.modelStatus();
+    if (!st.asr.ready || !st.vad.ready) return;
+    if (st.sense.enabled && !st.sense.ready) return;
+    void asr.warmup();
+  };
+  warmupAsrIfCached();
   const makeEngine = (kind) => {
     if (kind === "edge") return new EdgeTtsEngine(config.voice, config.rate);
     if (kind === "kokoro") {
@@ -2799,8 +2895,7 @@ function apply(ctx, config) {
     activeTabId = null;
     queue.cancel(sid);
     asr.reset(sid);
-    setTurn(sid, "idle");
-    turnStates.delete(sid);
+    clearTurnState(sid);
     broadcast("mode", { active: null, ownerTabId: activeTabId });
   };
   ctx.on("system-prompt/assemble", (assembly, context, next) => {
@@ -2889,10 +2984,8 @@ function apply(ctx, config) {
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
         if (denyCrossOrigin(req, res)) return;
-        if (!limiter.hit(`preview:${req.socket.remoteAddress ?? "unknown"}`, 20, 6e4)) {
-          res.statusCode = 429;
-          res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({ code: "rate_limited", error: "rate limited" }));
+        if (!limiter.hit(`preview:${clientKey(req)}`, 20, 6e4)) {
+          respondJson2(res, 429, { code: "rate_limited", error: "rate limited" });
           return;
         }
         if (!config.enabled) {
@@ -2953,7 +3046,7 @@ function apply(ctx, config) {
           try {
             const parsed = JSON.parse(body || "{}");
             text = typeof parsed.text === "string" ? parsed.text : "";
-            lang = parsed.lang === "en" ? "en" : "zh";
+            lang = normalizePromptLang(parsed.lang);
           } catch {
           }
           const trimmed = text.trim();
@@ -2961,8 +3054,12 @@ function apply(ctx, config) {
             respondJson2(res, 200, { text });
             return;
           }
-          if (!config.enabled || !limiter.hit("correct", 10, 6e4)) {
-            respondJson2(res, 429, { text: trimmed });
+          if (!config.enabled) {
+            respondJson2(res, 403, { code: "voice_disabled", error: "voice mode disabled", text: trimmed });
+            return;
+          }
+          if (!limiter.hit(`correct:${clientKey(req)}`, 10, 6e4)) {
+            respondJson2(res, 429, { code: "rate_limited", error: "rate limited", text: trimmed });
             return;
           }
           void correctText(ctx, trimmed, lang).then((corrected) => {
@@ -2996,14 +3093,16 @@ function apply(ctx, config) {
             respondJson2(res, 400, { code: "bad_request", error: "sessionId required" });
             return;
           }
-          if (on !== void 0 && typeof on !== "boolean") {
+          if (on === void 0) {
+            respondJson2(res, 400, { code: "bad_request", error: "on required" });
+            return;
+          }
+          if (typeof on !== "boolean") {
             respondJson2(res, 400, { code: "bad_request", error: "invalid on" });
             return;
           }
           if (!limiter.hit(`toggle:${sessionId}`, 2, 2e3)) {
-            res.statusCode = 429;
-            res.setHeader("content-type", "application/json");
-            res.end(JSON.stringify({ code: "rate_limited", error: "rate limited" }));
+            respondJson2(res, 429, { code: "rate_limited", error: "rate limited" });
             return;
           }
           if (on === true) {
@@ -3029,8 +3128,7 @@ function apply(ctx, config) {
             if (previous && previous !== sessionId) {
               queue.cancel(previous);
               asr.reset(previous);
-              setTurn(previous, "idle");
-              turnStates.delete(previous);
+              clearTurnState(previous);
             }
             broadcast("mode", { active: activeVoiceSession, ownerTabId: activeTabId });
           } else {
@@ -3043,8 +3141,7 @@ function apply(ctx, config) {
               }
               queue.cancel(sessionId);
               asr.reset(sessionId);
-              setTurn(sessionId, "idle");
-              turnStates.delete(sessionId);
+              clearTurnState(sessionId);
               broadcast("mode", { active: null, ownerTabId: null });
             }
           }
@@ -3097,6 +3194,9 @@ function apply(ctx, config) {
           }
           void asr.retryModel(kind).then((done) => {
             respondJson2(res, 200, { ok: done, kind });
+          }).catch((e) => {
+            console.warn(`[dsh-voice-mode] model retry failed: ${String(e)}`);
+            respondJson2(res, 500, { code: "internal", error: "model retry failed" });
           });
         });
       }
@@ -3126,8 +3226,8 @@ function apply(ctx, config) {
             respondJson2(res, 400, { code: "bad_request", error: "invalid json" });
             return;
           }
-          const dir = join5(config.cacheDir, engine === "kokoro" ? kokoroModelDir(vset.kokoroModel) : TTS_MODEL_REPO);
-          void rm(dir, { recursive: true, force: true }).then(() => {
+          const dirs = engine === "kokoro" ? [kokoroModelDir("int8"), kokoroModelDir("fp32")].map((d) => join5(config.cacheDir, d)) : [join5(config.cacheDir, TTS_MODEL_REPO)];
+          void Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))).then(() => {
             if (engineKind === engine) {
               queue.setEngine(makeEngine(engine));
               queue.updateVoice(vset.voice, vset.rate);
@@ -3200,6 +3300,7 @@ function apply(ctx, config) {
       path: `${base}/asr`,
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
+        if (denyCrossOrigin(req, res)) return;
         let sid = "";
         try {
           const url = new URL(req.url ?? "/", "http://localhost");
@@ -3318,21 +3419,15 @@ function apply(ctx, config) {
           } catch {
           }
           if (!mode) {
-            res.statusCode = 400;
-            res.setHeader("content-type", "application/json");
-            res.end(JSON.stringify({ code: "bad_request", error: "mode must be toggle or hold" }));
+            respondJson2(res, 400, { code: "bad_request", error: "mode must be toggle or hold" });
             return;
           }
           const persistMode = settingsScopeRef ? settingsScopeRef.update({ mode }) : persistSettings({ mode });
           void persistMode.then(() => {
-            res.statusCode = 200;
-            res.setHeader("content-type", "application/json");
-            res.end(JSON.stringify({ ok: true, mode }));
+            respondJson2(res, 200, { ok: true, mode });
           }).catch((e) => {
             console.warn(`[dsh-voice-mode] mode update failed: ${String(e)}`);
-            res.statusCode = 500;
-            res.setHeader("content-type", "application/json");
-            res.end(JSON.stringify({ code: "internal", error: "mode update failed" }));
+            respondJson2(res, 500, { code: "internal", error: "mode update failed" });
           });
         });
       }
@@ -3344,6 +3439,7 @@ function apply(ctx, config) {
       path: `${base}/stream`,
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
+        if (denyCrossOrigin(req, res)) return;
         if (sseClients.size >= 4) {
           respondJson2(res, 429, { code: "too_many_streams", error: "too many streams" });
           return;
@@ -3412,6 +3508,8 @@ function collectBody(req, res, maxBytes, onBody) {
     if (received > maxBytes) {
       tooLarge = true;
       respondJson2(res, 413, { code: "payload_too_large", error: "request body too large" });
+      req.pause();
+      res.once("finish", () => req.destroy());
       return;
     }
     chunks.push(c);

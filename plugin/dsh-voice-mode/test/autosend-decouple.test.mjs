@@ -43,13 +43,12 @@ t('解耦：scheduleAutoSend 的 setTimeout 用 AUTO_SEND_EXTRA_MS', () => {
   assert.ok(idx >= 0, '缺 scheduleAutoSend')
   const win = clientSrc.slice(idx, idx + 900)
   assert.ok(win.includes('}, AUTO_SEND_EXTRA_MS)'), 'setTimeout 未用固定附加窗')
-  assert.ok(!win.includes('bootNow().silenceMs'), 'scheduleAutoSend 仍读 silenceMs 计时——未解耦')
-  assert.ok(!win.includes('const delay ='), '残留 delay 变量（耦合形态）')
 })
 
-t('端点语义不变：引擎侧 silenceMs 引用仍在（asr.ts）', () => {
-  const n = (asrSrc.match(/silenceMs/g) ?? []).length
-  assert.ok(n >= 3, `asr.ts silenceMs 引用应保持（实际 ${n} 处）——端点判定不动`)
+t('端点语义不变：asr.ts 端点判定仍比 config.silenceMs（精确形态锁，替代旧 n>=3 计数）', () => {
+  // 旧实现 (asrSrc.match(/silenceMs/g) ?? []).length >= 3——实际 21 处，阈值无区分度
+  // （删掉端点判定仍远大于 3）。改锁端点判定的精确形态：silenceMs > config.silenceMs。
+  assert.ok(/silenceMs > config\.silenceMs/.test(asrSrc), 'asr.ts 端点判定（silenceMs > config.silenceMs）被删/改——端点语义被破坏')
 })
 
 t('端点权威在 host VAD：asr-host.ts 的 seg.vad 仍用 silenceMs()/1000（审查 Minor-3 补锁）', () => {
@@ -59,11 +58,12 @@ t('端点权威在 host VAD：asr-host.ts 的 seg.vad 仍用 silenceMs()/1000（
   assert.ok(/newVad\(vadPath, 0\.5, silenceMs\(\) \/ 1000\)/.test(hostSrc), 'seg.vad 构造形态被改')
 })
 
-t('其余 bootNow().silenceMs 消费点未动（设置面板/其它路径不受影响）', () => {
-  // scheduleAutoSend 之外若仍有 silenceMs 读取属既有语义；本批只解耦自动发送计时。
+t('解耦负向锁：scheduleAutoSend 窗口内无任何 silenceMs / delay 计时耦合', () => {
+  // 合并旧三处负向检查（!bootNow().silenceMs / !const delay = / !silenceMs）——
+  // !includes('silenceMs') 最强，任意含 silenceMs 的计时形态（旧变量名 or 新写法）都红。
   const idx = clientSrc.indexOf('const scheduleAutoSend =')
   const win = clientSrc.slice(idx, idx + 900)
-  assert.ok(!win.includes('silenceMs'), 'scheduleAutoSend 窗口内出现 silenceMs——解耦不彻底')
+  assert.ok(!win.includes('silenceMs'), 'scheduleAutoSend 窗口内出现 silenceMs——计时仍与断句阈值耦合')
 })
 
 t('门控保持：到点发射仍检查 speech/holding/playing/autoSend', () => {

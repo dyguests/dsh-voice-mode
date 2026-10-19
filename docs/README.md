@@ -10,13 +10,13 @@
 3. 使用 → [plugin/dsh-voice-mode/README.md 完整使用说明](../plugin/dsh-voice-mode/README.md)
 4. 故障 → [README.md](../README.md)（「故障排查」一节） + [docs/qa/real-machine-acceptance-checklist.md](qa/real-machine-acceptance-checklist.md)
 5. 开发 → [plugin/dsh-voice-mode/README.md](../plugin/dsh-voice-mode/README.md)（「开发」一节） + [docs/plan/implementation-plan-2026-09-14.md](plan/implementation-plan-2026-09-14.md)
-6. 架构 → [docs/adr/](adr/README.md) 11 个 ADR + [plugin/dsh-voice-mode/README.md](../plugin/dsh-voice-mode/README.md)（「工作原理」一节）
+6. 架构 → [docs/adr/](adr/README.md) 12 个 ADR + [plugin/dsh-voice-mode/README.md](../plugin/dsh-voice-mode/README.md)（「工作原理」一节）
 
 ## 文档目录
 
 | 目录 | 说明 |
 | --- | --- |
-| [adr/](adr/README.md) | 架构决策记录（0001-0011）—— 11 个 ADR 的背景 / 决策 / 后果 |
+| [adr/](adr/README.md) | 架构决策记录（0001-0012）—— 12 个 ADR 的背景 / 决策 / 后果 |
 | [competitive/](competitive/README.md) | 竞品调研（6 轮 + 8 轮 + 主扫描 + backlog 43 项） |
 | [findings/](findings/README.md) | 真机测量与发现（fixture verdict / 竞品 baseline / 多语 a11y） |
 | [plan/](plan/README.md) | 实施计划（11 批次周全修复 + 计划模板 + 执行/审查提示词） |

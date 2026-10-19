@@ -282,9 +282,10 @@ t('bundle 含 yieldMs 类型 + 边界 500-3000 校验', () => {
   assert.ok(hasLower, 'bundle 缺 yieldMs >= 500 边界')
   assert.ok(hasUpper, 'bundle 缺 yieldMs <= 3000 边界（3e3）')
 })
-t('bundle 含 yieldMs 默认值 1500 兜底（fetchConfig 解析失败时）', () => {
-  // 必须有形如 "... ? c.yieldMs : 1500" 的兜底（whitelist 失败回退）
-  assert.ok(clientSrc.includes(': 1500'), 'bundle 缺 yieldMs 默认值 1500 兜底')
+t('bundle 含 yieldMs 白名单失败兜底 1500（fetchConfig 三元 ? c.yieldMs : 1500）', () => {
+  // 精确锁兜底分支：旧实现 includes(': 1500') 可被 DEFAULT_BOOT 的 yieldMs: 1500 满足
+  // （零保护）；:277-284 已锁同一三元的边界条件，此处补兜底分支，合成完整三元。
+  assert.ok(clientSrc.includes('? c.yieldMs : 1500'), 'bundle 缺 yieldMs 白名单失败兜底（? c.yieldMs : 1500）')
 })
 t('bundle 含 fetchConfig 写入 bus.setUi({ boot: next, ... })（设置面板实时刷新链路）', () => {
   assert.ok(
@@ -297,10 +298,6 @@ console.log('onBackchannel 闭包使用 cfg.yieldMs（不是硬编码 1500）')
 
 t('bundle 含 setBackchannelHold 调用', () => {
   assert.ok(clientSrc.includes('setBackchannelHold'), 'bundle 缺 setBackchannelHold')
-})
-t('bundle 含 onBackchannel 闭包（cfg.backchannelYield 真值时才挂回调）', () => {
-  // onBackchannel: cfg.backchannelYield ? () => {...} : undefined
-  assert.ok(clientSrc.includes('onBackchannel'), 'bundle 缺 onBackchannel')
 })
 t('bundle 内 setBackchannelHold(Date.now() + cfg.yieldMs ?? 1500) 使用 cfg.yieldMs', () => {
   // 关键 wiring：setBackchannelHold 入参必须含 cfg.yieldMs ?? 1500（非硬编码 1500）
@@ -381,14 +378,12 @@ globalThis.fetch = async (url, _opts) => {
   return { ok: false, status: 404, json: async () => ({}), text: async () => '' }
 }
 
-// 真正 import bundle（仅为验证它能被 import + 不抛错——apply 路径需要的浏览器全局太多，
-// 我们走 eval-based 闭包路径验证 wiring 表达式行为）
+// 真正 import bundle——import 本身即校验（语法 + 模块解析无错即抛）；apply 路径需要的
+// 浏览器全局太多，wiring 表达式行为走下方 eval-based 闭包路径验证。
 await import(pathToFileURL(clientBundle).href)
-t('client.bundle.mjs 可被 import（语法 + 模块解析无错）', () => {
-  assert.ok(true)
-})
 
-// 从 bundle 提取 onBackchannel 闭包字面文本——这就是 client.tsx:1707-1711 编出的产物。
+// 从 bundle 提取 onBackchannel 闭包字面文本——这就是 client.tsx:2081-2086 编出的产物
+// （R1 修复时实测行号；fix-client 并行改 client.tsx 中行号会漂，真锚点是下方 obRe 表达式文本）。
 // esbuild 输出 `onBackchannel: cfg.backchannelYield ? () => { ... } : void 0`，
 // 挂给 createAsrEngine({ onBackchannel: ... })；命中后由引擎调 cfg.onBackchannel()。
 // 注：bundle 里 asr-stub 也含 "onBackchannel" 字串（capturedOnBackchannel），用「:」锚定挂配置对象语境。
@@ -424,7 +419,7 @@ const cfg = await (async () => {
   }
 })()
 
-// 真实 wiring 代码路径：client.tsx:1707-1711 字面表达式——
+// 真实 wiring 代码路径：client.tsx:2081-2086 字面表达式（R1 修复时实测行号）——
 //   onBackchannel: cfg.backchannelYield ? () => { ... } : undefined
 // 当 cfg.backchannelYield=true 时，挂给 createAsrEngine 的 onBackchannel 是「调用时执行闭包
 // 内部」的函数；命中后由引擎调 cfg.onBackchannel()，闭包内执行 bus.skipAudio + setBackchannelHold。

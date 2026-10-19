@@ -41,21 +41,15 @@ t('默认值 captionMaxWidth=1（70vw；取舍见 schema description）', () => 
   const m = indexSrc.match(/captionMaxWidth:\s*1,?\s*\}/m) || indexSrc.match(/captionMaxWidth:\s*1,/m)
   assert.ok(m, 'VOICE_SETTINGS_DEFAULTS 缺 captionMaxWidth=1（必须在 defaults 对象字面量中赋值为 1）')
 })
-t('默认值取舍透明：defaults 注释记录「与现状字节等价」+「三档视口方向」；词典说明默认值', () => {
-  // 取舍记录位置：VOICE_SETTINGS_DEFAULTS 的注释（schema 描述已改为引用英文词典，不再内联中文长文）。
-  assert.ok(/captionFontSize\s*默认\s*0（12px），与现状/.test(indexSrc), 'defaults 注释未解释 captionFontSize 默认 = 现状字节等价')
+t('默认值取舍透明：schema 描述引用词典 + 双语词典明示默认值=现状', () => {
+  // 旧实现锁 index.ts 中文注释措辞（「<686px 时窄于」等）——注释改写即红、零行为保护。
+  // 改锁面向用户的词典文案 + schema 引用；数学方向的真实载体是档位数组 + 默认索引 1
+  // （70vw）+ 30vh 高度约束，由下方行为断言（:71-80）看守。
   const stringsSrc = readFileSync(join(here, '..', 'src', 'strings.ts'), 'utf8')
-  assert.ok(/descCaptionFontSize: 'Caption font size[^']*default Small matches current behavior/.test(stringsSrc), '词典 en descCaptionFontSize 未说明默认值 = 现状')
   assert.ok(/DESC\.captionFontSize/.test(indexSrc) && /DESC\.captionMaxWidth/.test(indexSrc), 'schema 描述应引用词典（DESC）')
-  // 批 3 review I1 修复：数学方向必须显式三档——
-  //   视口 <686px 时 70vw (≈视口×70%) < 480px → 窄于现状；
-  //   视口 ≈686px 时 ≈480px → 接近；
-  //   视口 >686px 时 70vw > 480px → 宽于现状。
-  assert.ok(/<686px\s*时\s*窄于/.test(indexSrc), 'captionMaxWidth description 缺「<686px 时窄于」档位说明')
-  assert.ok(/≈686px\s*时\s*接近|≈\s*686px/.test(indexSrc), 'captionMaxWidth description 缺「≈686px 时接近」档位说明')
-  assert.ok(/>686px\s*时\s*宽于/.test(indexSrc), 'captionMaxWidth description 缺「>686px 时宽于」档位说明（数学方向）')
-  // 防回归：旧的「>686px 时略窄于」反向措辞必须不存在
-  assert.ok(!/>686px\s*时\s*略窄于|>686px\s*时\s*窄于/.test(indexSrc), '回归：>686px 时仍写「窄于」（数学方向反；70vw > 480px 应为「宽于」）')
+  assert.ok(/descCaptionFontSize: 'Caption font size[^']*default Small matches current behavior/.test(stringsSrc), 'en 词典 descCaptionFontSize 未说明默认值 = 现状')
+  assert.ok(/descCaptionFontSize: '[^']*默认小与现状字节等价/.test(stringsSrc), 'zh 词典 descCaptionFontSize 未说明默认值 = 现状')
+  assert.ok(/descCaptionMaxWidth: '[^']*默认 70vw/.test(stringsSrc), 'zh 词典 descCaptionMaxWidth 未说明默认 70vw')
 })
 t('host /config 返回值含 captionFontSize/captionMaxWidth（§5.2 #2）', () => {
   assert.ok(/captionFontSize:\s*vset\.captionFontSize/.test(indexSrc), '/config 路由未返回 captionFontSize')
@@ -97,12 +91,10 @@ t('fetchConfig 白名单拼接含 captionFontSize/captionMaxWidth（§5.2 漏列
   assert.ok(/captionFontSize:\s*c\.captionFontSize/.test(clientSrc), 'fetchConfig 未透传 captionFontSize')
   assert.ok(/captionMaxWidth:\s*c\.captionMaxWidth/.test(clientSrc), 'fetchConfig 未透传 captionMaxWidth')
 })
-t('bootNow fallback 默认值含 captionFontSize=0 / captionMaxWidth=1', () => {
-  assert.ok(/captionFontSize:\s*0,\s*captionMaxWidth:\s*1/.test(clientSrc), 'bootNow 默认值未含两字段')
-})
-t('DEFAULT_BOOT 默认值含 captionFontSize=0 / captionMaxWidth=1', () => {
-  // DEFAULT_BOOT 在 createVoiceBus 内，且 value.tsx 文件中 grep 即可（createVoiceBus 捕获这两字面量）
-  assert.ok(/captionFontSize:\s*0,\s*captionMaxWidth:\s*1/.test(clientSrc), 'DEFAULT_BOOT 默认值未含两字段')
+t('bootNow / DEFAULT_BOOT 兜底默认值含 captionFontSize=0 / captionMaxWidth=1（同字形两处，grep 不区分具体位置）', () => {
+  // 旧实现拆成 bootNow / DEFAULT_BOOT 两条逐字相同的断言——同正则同源，第二条零增量；
+  // DEFAULT_BOOT 在 createVoiceBus 内，grep 本就无法单独定位。合并为一条并如实命名。
+  assert.ok(/captionFontSize:\s*0,\s*captionMaxWidth:\s*1/.test(clientSrc), '兜底默认值未含 captionFontSize=0 / captionMaxWidth=1')
 })
 
 // 3. client 编译产物静态断言（CSS / aria 字符串）
@@ -122,12 +114,12 @@ t('lib/client.js 含 30vh / overflow:hidden（浮层高度守卫）', () => {
 })
 // 防回归：原硬编码 480 应被替换为档位数组
 t('原硬编码 maxWidth: 480 已被替换为档位数组', () => {
-  // 仅检测 VoiceOverlay 中那处 480（其他文件 480 是布局像素，不应受影响）
-  // 通过正则确认 480 不再以 maxWidth 形式出现于 overlay 风格
-  const overlayRegion = clientSrc.split('VoiceOverlay')[1] ?? ''
-  if (overlayRegion.length > 0) {
-    assert.ok(!/maxWidth:\s*480\b/.test(overlayRegion), 'VoiceOverlay 仍硬编码 maxWidth:480')
-  }
+  // 仅检测 VoiceOverlay 区域（其他文件 480 是布局像素，不应受影响）。
+  // 旧实现 if (overlayRegion.length > 0) 包裹——split 不到 VoiceOverlay 时静默通过
+  // （自失效条件）。改无条件：VoiceOverlay 必须存在，且其区域内不得有 maxWidth:480。
+  const overlayRegion = clientSrc.split('VoiceOverlay')[1]
+  assert.ok(overlayRegion !== undefined && overlayRegion.length > 0, 'client.tsx 缺 VoiceOverlay——无法校验 480 替换')
+  assert.ok(!/maxWidth:\s*480\b/.test(overlayRegion), 'VoiceOverlay 仍硬编码 maxWidth:480')
 })
 t('mtime 守卫：lib/client.js mtime ≥ src/client.tsx mtime（防 build 漏跑）', () => {
   const libM = statSync(clientJs).mtimeMs

@@ -1,4 +1,9 @@
 // 用 fork 生产代码路径(含 Worker) 合成 bazong，测 F0 验证性别
+// 注意（Issue #15 R1 M6）：手动诊断脚本，不在 npm test 链——需本地 VITS 模型缓存
+// （cacheDir 取 DSH_VM_MODELS 或默认 ~/.cache/dsh-voice-mode/models；原硬编码 Windows
+// 路径 K:/DSH-plugin-builds 已于批 I ddd1f7b 移除）。会在 cwd 建 .tmp-tts- 临时目录
+// （结束清理；异常中断可能残留，需手动删）。
+// 用法：node test/verify-bazong-path.mjs
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 const require = createRequire(import.meta.url)

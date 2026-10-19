@@ -44,7 +44,7 @@ export function createOnlineRecognizer() {
     isReady: () => false,
     decode: () => {},
     getResult: () => ({ text: '' }),
-    free: () => {},
+    free: () => { globalThis.__sherpaRecognizerFreeCalls = (globalThis.__sherpaRecognizerFreeCalls || 0) + 1 },
     config: { featConfig: { sampleRate: 16000 } },
   }
 }
@@ -104,8 +104,8 @@ await build({
 const { createAsrRuntime } = await import(pathToFileURL(out).href)
 
 let passed = 0
-const t = (name, fn) => {
-  fn()
+const t = async (name, fn) => {
+  await fn()
   passed++
   console.log(`  ✓ ${name}`)
 }
@@ -125,53 +125,77 @@ const runtime = createAsrRuntime({
 
 console.log('createAsrRuntime 接口契约')
 
-t('返回对象暴露 markStale 函数（B2 防回归接口签名）', () => {
+await t('返回对象暴露 markStale 函数（B2 防回归接口签名）', () => {
   assert.equal(typeof runtime.markStale, 'function')
 })
-t('markStale 与 warmup / modelStatus 平级（不是私有方法）', () => {
+await t('markStale 与 warmup / modelStatus 平级（不是私有方法）', () => {
   // Object.keys 检查可枚举性（runtime 是对象字面量返回——markStale 与 warmup 等并列）
   const keys = Object.keys(runtime).sort()
   assert.ok(keys.includes('markStale'), `runtime 缺 markStale，keys=${keys.join(',')}`)
   assert.ok(keys.includes('warmup'))
   assert.ok(keys.includes('modelStatus'))
 })
-t('markStale 不返回值（void 返回，调用方不应依赖其返回）', () => {
+await t('markStale 不返回值（void 返回，调用方不应依赖其返回）', () => {
   const r = runtime.markStale()
   assert.equal(r, undefined)
 })
 
 console.log('markStale 副作用：清缓存键 + 不 dispose')
 
-t('markStale 不抛错（无 recognizer / senseWorker 状态下也安全）', () => {
+await t('markStale 不抛错（无 recognizer / senseWorker 状态下也安全）', () => {
   assert.doesNotThrow(() => runtime.markStale())
 })
-t('重复调用 markStale 仍不抛错（设置面板高频拨滑块模拟）', () => {
+await t('重复调用 markStale 仍不抛错（设置面板高频拨滑块模拟）', () => {
   assert.doesNotThrow(() => {
     runtime.markStale()
     runtime.markStale()
     runtime.markStale()
   })
 })
-t('高频 200 次连续调用 markStale 不抛错（防回归：闭包变量被异常赋值会爆栈）', () => {
+await t('高频 200 次连续调用 markStale 不抛错（防回归：闭包变量被异常赋值会爆栈）', async () => {
   assert.doesNotThrow(() => {
     for (let i = 0; i < 200; i++) runtime.markStale()
   })
 })
 
+console.log('markStale 不 free recognizer（I1 free 契约 spy——头注 4 的实证）')
+
+await t('markStale 不 free recognizer：建流→markStale×50→free 计数不变；dispose 才 free（对照）', async () => {
+  // 头注 4 宣称「markStale 不主动 free recognizer」但旧实现无 spy 实证（零保护）——
+  // 若 markStale 改调 recognizer.free()，in-flight finalize 的旧引用被强制释放会丢句（I1）。
+  globalThis.__sherpaRecognizerFreeCalls = 0
+  const rt = createAsrRuntime({
+    cacheDir: tmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => false,
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto', // 批 7N 起 feed 守卫必读（auto 放行，与本测试意图无关但须提供）
+  })
+  await rt.feed('s-free', new Float32Array(1600), false, 0, 0, true) // 触发 recognizer + stream 创建
+  assert.equal(globalThis.__sherpaRecognizerFreeCalls, 0, '基线：feed 建流本身不应 free')
+  for (let i = 0; i < 50; i++) rt.markStale()
+  assert.equal(globalThis.__sherpaRecognizerFreeCalls, 0, 'markStale 不得 free recognizer（I1：in-flight finalize 旧引用安全）')
+  rt.dispose()
+  assert.ok(globalThis.__sherpaRecognizerFreeCalls > 0, 'dispose 必须 free recognizer（spy 对照——证明计数器真能观测到 free，上一断言非恒真）')
+})
+
 console.log('markStale 不破坏 runtime 其它方法')
 
-t('markStale 后 modelStatus 仍返回完整结构（asr/vad/sense 三块齐全）', () => {
+await t('markStale 后 modelStatus 仍返回完整结构（asr/vad/sense 三块齐全）', () => {
   const s = runtime.modelStatus()
   assert.ok(s.asr && s.vad && s.sense, `modelStatus 缺块：${JSON.stringify(s)}`)
   assert.equal(typeof s.asr.ready, 'boolean')
   assert.equal(typeof s.vad.ready, 'boolean')
   assert.equal(typeof s.sense.enabled, 'boolean')
 })
-t('markStale 后 warmup 仍可调用（不破坏 recognizer 懒创建路径）', () => {
+await t('markStale 后 warmup 仍可调用（不破坏 recognizer 懒创建路径）', () => {
   assert.doesNotThrow(() => runtime.warmup())
   // warmup 是 fire-and-forget；此处只验证不抛同步错（异步部分不影响接口契约）。
 })
-t('markStale 后 dispose 仍可调用（runtime 句柄未被破坏）', () => {
+await t('markStale 后 dispose 仍可调用（runtime 句柄未被破坏）', () => {
   assert.doesNotThrow(() => runtime.dispose())
   // 注：此处调 dispose 会清掉 runtime 内部状态——若本测试后还有用例需用 runtime，
   // 应复制 runtime 实例或重排顺序。本测试不再使用 runtime，可安全 dispose。

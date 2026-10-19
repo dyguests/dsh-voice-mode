@@ -71,12 +71,12 @@ await t('五态⑤：prompt resolve undefined（老宿主非 RemoteResult 形状
   assert.equal(await trySteerSubmit(session, 'x'), true)
 })
 
-t('守卫：非 running 不走 steer（空闲提交维持队列原行为）', () => {
+await t('守卫：非 running 不走 steer（空闲提交维持队列原行为）', () => {
   assert.equal(shouldSteerSubmit(false, '帮我查天气'), false)
   assert.equal(shouldSteerSubmit(true, '帮我查天气'), true)
 })
 
-t('守卫：`/` 开头命令草稿不走 steer（须走宿主 adjudication）', () => {
+await t('守卫：`/` 开头命令草稿不走 steer（须走宿主 adjudication）', () => {
   assert.equal(shouldSteerSubmit(true, '/help'), false)
   assert.equal(shouldSteerSubmit(true, ' /help'), false, '前导空格的命令也不绕（函数内部 trim）')
 })
@@ -84,19 +84,19 @@ t('守卫：`/` 开头命令草稿不走 steer（须走宿主 adjudication）', 
 // ---- wiring 顺序锁（审查 Important#1：存在性锁抓不住三类安全突变，改锁语句次序）----
 const clientSrc = readFileSync(join(root, 'src', 'client.tsx'), 'utf8')
 
-t('wiring：submitDraftNow 有 steer 分流分支（running && 非命令 → bus.steerSubmit）', () => {
+await t('wiring：submitDraftNow 有 steer 分流分支（running && 非命令 → bus.steerSubmit）', () => {
   const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   assert.ok(idx >= 0, 'submitDraftNow 缺 steer 分流条件')
   assert.ok(clientSrc.slice(idx, idx + 700).includes('bus.steerSubmit('), '分流块未调 bus.steerSubmit')
 })
 
-t('wiring 条件：delivered 条件字面量必须为 if (delivered)（反转/中和变异 → 红，审查复审 Important-1）', () => {
+await t('wiring 条件：delivered 条件字面量必须为 if (delivered)（反转/中和变异 → 红，审查复审 Important-1）', () => {
   const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   assert.ok(win.includes('if (delivered)'), 'delivered 条件被反转/中和——双发或丢消息的两条防线同时失效')
 })
 
-t('wiring 顺序①：清草稿后到下一个 return 之间不得有 submitViaQueue（删 return/条件变异 → 红）', () => {
+await t('wiring 顺序①：清草稿后到下一个 return 之间不得有 submitViaQueue（删 return/条件变异 → 红）', () => {
   const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   const setDraftIdx = win.indexOf("setDraft?.('')")
@@ -107,7 +107,7 @@ t('wiring 顺序①：清草稿后到下一个 return 之间不得有 submitViaQ
   assert.ok(!between.includes('submitViaQueue'), '清草稿与 return 之间出现 submitViaQueue——直达成功仍走队列（双发）')
 })
 
-t('wiring 顺序②：失败回退在 .then 内（delivered return 之后、.catch 与外层 return 之前）', () => {
+await t('wiring 顺序②：失败回退在 .then 内（delivered return 之后、.catch 与外层 return 之前）', () => {
   const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   const setDraftIdx = win.indexOf("setDraft?.('')")
@@ -123,7 +123,7 @@ t('wiring 顺序②：失败回退在 .then 内（delivered return 之后、.cat
   assert.ok(outerReturn > fallback, '失败回退不在 .then 内（落到了外层 return 之后=不可达）')
 })
 
-t('wiring：bus.steerSubmit 经 ctx.sessions.binding 同源访问（cancelTurn 模式）', () => {
+await t('wiring：bus.steerSubmit 经 ctx.sessions.binding 同源访问（cancelTurn 模式）', () => {
   const idx = clientSrc.indexOf('steerSubmit(sessionId, text)')
   assert.ok(idx >= 0, 'bus 缺 steerSubmit 实现')
   const window = clientSrc.slice(idx, idx + 400)
@@ -131,11 +131,11 @@ t('wiring：bus.steerSubmit 经 ctx.sessions.binding 同源访问（cancelTurn �
   assert.ok(window.includes('trySteerSubmit('), '未调用纯模块 trySteerSubmit')
 })
 
-t('wiring：VoiceBus 接口声明 steerSubmit（类型闭合）', () => {
+await t('wiring：VoiceBus 接口声明 steerSubmit（类型闭合）', () => {
   assert.ok(clientSrc.includes('steerSubmit(sessionId: string, text: string): Promise<boolean>'), 'VoiceBus 接口缺声明')
 })
 
-t('wiring：用户改写守卫（RPC 在途改写不清草稿，审查 M-1）', () => {
+await t('wiring：用户改写守卫（RPC 在途改写不清草稿，审查 M-1）', () => {
   const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   assert.ok(win.includes('draftRef.current.trim() === (wroteBack ? snapshot : draftSnapshot)'), 'delivered 分支缺用户改写守卫')

@@ -2,7 +2,7 @@
 
 > **本文件角色**：跨文档索引 + 项目心智模型；状态变化改对应链接/锚点，不追加流水账。
 > **真源层级**：根 `CONTEXT.md`（开发者上下文，重写式 ~60 行）/ `docs/rules/STATE.md`（唯一恢复点）/ `docs/adr/`（决策）。
-> **基准 HEAD**：`5e2d34f`（批 7O 代码块收口，src+lib 一致；其后块 3 纯文档/资产 commit 不改代码态）。
+> **基准 HEAD**：`d92f43b`（Issue #15 八批收口，src+lib 一致；本基线随收口批滚动更新）。
 > **批 7M 🔴 砍落地（2026-09-16）**：4 项砍除——`recognitionLanguage`（4532b48）/ `asrHotwords`+`asrHotwordsScore`+模块（e3423ef）/ `docs/qa/user-experience-flow.md`（6bed6d4）；本文件设置键表砍 3 行（识别热词 / 热词偏置分 / 识别语种）后剩 7 个数据行。
 > **批 7N 🟡 重做落地（2026-09-16）**：5 项重做——`bargeInMode='manual'` 接通（8278097）/ echoGateDb + autoResume 描述对齐（d667ffb+5b6019b）/ 端到端补测 3 项（58f6d77+b0e45fe+ee4312b）/ ADR-0003+0004 重命名（0564a51+0cacd88）/ autoResume 文案统一（f883b35）；详见下方设置键表。
 
@@ -45,7 +45,7 @@ bridge /voice-mode SSE：owner=sessionId，/config + /preview + assembleStream
   - `emotion.ts`（批 4）/ `asr-sense-key.ts`（纯函数 sanitize/key；批 7M 砍除 `asr-hotwords.ts`）
   - `sense-worker.ts` / `wakeword.ts` / `segmenter.ts` / `fixture-recorder.ts` 等
 - **`plugin/dsh-voice-mode/lib/`** —— esbuild 产物（`build.mjs` 重建，**不手改**；批 7P P2 起 lib 随每批 rebuild 对齐 BUILD_TAG=HEAD，旧「免重建」口径已证伪作废）
-- **`plugin/dsh-voice-mode/test/`** —— 30 个 `.mjs`（npm test 25 文件 / **325 项全绿**；批 7M 砍 `hotwords.test.mjs` + 批 7N 新增 3 文件 `barge-in-manual` / `yield-ms-wiring` / `matchBackchannel` + 批 7O 新增 5 文件 `settings-load` / `preview-error` / `hold-clear` / `barge-in-detect` / `wakeword`）
+- **`plugin/dsh-voice-mode/test/`** —— `.mjs` 测试（npm test 48 文件 / **583 项全绿**（2026-10-19 集成轮实测口径：各文件「N 项通过」之和 = `grep -c '✓'` = 583；R1 时为 41 文件 / 518 项，fix-test 本轮新增 7 个登记文件 + 31 项行为测试后为 583/48））
 - **`docs/competitive/sources/scan-*.md`** —— 18 份子代理扫描报告
 
 ## 诊断开关
@@ -58,7 +58,7 @@ localStorage.setItem('dsh-voice-mode.telemetry','1') && 刷新页面
 # 宿主
 systemctl is-active dsh                              # active
 journalctl -u dsh --since "1 min ago" -p err         # 空 = 健康
-curl -s http://127.0.0.1:3018/voice-mode/config | jq # 4 字段非 null
+curl -s http://127.0.0.1:3018/voice-mode/config | jq # ASR 侧 8 字段非 null
 
 # 验证四连
 cd plugin/dsh-voice-mode && \
@@ -70,15 +70,15 @@ cd plugin/dsh-voice-mode && \
 ## 发版流程（批 K 收口 + L 文档同步验证通过的工作流）
 
 1. `git status --short` 仓干净
-2. `npm run typecheck && npm run build && npm test` 全绿（npm test 325 项 / 25 文件）
-3. `systemctl restart dsh.service && curl /voice-mode/config` 验 4 字段非 null（senseITN/captionFontSize/captionMaxWidth/backchannelYield）
+2. `npm run typecheck && npm run build && npm test` 全绿（npm test 583 项 / 48 文件）
+3. `systemctl restart dsh.service && curl /voice-mode/config` 验 ASR 侧 8 字段非 null（senseVoice/senseITN/captionFontSize/captionMaxWidth/backchannelYield/yieldMs/bargeInSalvage/llmCorrect）
 4. 真机冒烟 **4 项必过** / **~10 分钟**（`docs/qa/must-verify-manually.md`：字幕 / 让位 / 60s 长段 / manual 外放）
 5. 文档回写：`STATE.md` + 根 `CONTEXT.md` + `backlog.md` + ADR 落地注记（批 7M 砍 4 项 + 批 7N 重做 5 项已完成）
 6. **push 节奏由用户拍板**：批 7N 后已 push，ahead=0；后续批次收口后单次 push
 
 ## 索引
 
-- 决策：`docs/adr/0001-0011`（ADR-0003 `server-side-vad` / ADR-0004 `realtime-transport-deferred` 命名纠正 2026-09-16）
+- 决策：`docs/adr/0001-0012`（ADR-0003 `server-side-vad` / ADR-0004 `realtime-transport-deferred` 命名纠正 2026-09-16）
 - 状态：`docs/rules/STATE.md`（批 7A-L + 批 7M 🔴 砍 + 批 7N 🟡 重做 全 PASS-WITH-MINOR）
 - 真机：`docs/qa/real-machine-acceptance-checklist.md`（精简到批 2/3/5 三阶段 + 真机验收门禁 2 项（阶段 1+阶段 6））+ `docs/qa/must-verify-manually.md`（4 项必过）
 - 心智：根 `CONTEXT.md`（不重复内容）

@@ -588,11 +588,22 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
       // I1：SenseVoice 重译带超时（20s），超时即降级 zipformer 定稿（不阻塞 finalize）。
       // 批 E：10s → 20s——228MB SenseVoice 模型冷启动 + 离线解码长段 30s PCM，慢 CPU
       // 撞 10s 容易降级 zipformer 流式 token flush 不完整（B5 辅因候选 3）。
+      // M2（Issue #15 审查 Minor）：超时 timer 必须 clear——Promise.race 只决定谁先
+      // settle，输掉的那条链上的 setTimeout 仍会走完（resolve(null) 后无人关心），
+      // 于是每次定稿都留下一个 20s 的悬挂 timer：短会话几次定稿尚可忽略，长会话
+      // （连续对话数百次定稿）会累积数百个 timer 常驻事件循环，拖慢 host 且让
+      // 进程无法自然退出。故持有句柄 + race 落定即 clear；超时后晚到的 decode 结果
+      // 不再被任何 await 消费（best-effort 丢弃，zipformer 定稿已采用）。
+      let senseTimer: ReturnType<typeof setTimeout> | null = null
       const senseP = all.length > 0
         ? Promise.race([
             senseTranscribe(all),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 20000)),
-          ])
+            new Promise<null>((resolve) => {
+              senseTimer = setTimeout(() => resolve(null), 20000)
+            }),
+          ]).finally(() => {
+            if (senseTimer) clearTimeout(senseTimer)
+          })
         : Promise.resolve(null)
       // 定稿：尾垫 0.5s 静音让尾部字 flush 出来。
       const pad = new Float32Array(rec.config.featConfig.sampleRate / 2)
@@ -667,6 +678,23 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
         segments.delete(sid)
         finalized.delete(sid) // 段全回收时一并清定稿缓存，防 finalized 随会话数增长
       }
+    }
+    // M1（Issue #15 审查 Minor）：孤立 sid 扫描。finalized/resetGen 此前只在
+    // 「reset()/dispose()」时清理，而 reset 由 /toggle、/cancel 等主动路径触发——
+    // 页面直接关闭/断电/kill 的会话永远不会 reset，其 finalized 缓存与 resetGen 代际
+    // 条目永久驻留（每会话至多 32 条定稿文本 + 1 个数字）。宿主长命运行 +
+    // 会话轮转下只增不消。此处按「segments 已无该 sid」判定孤立并回收；resetGen
+    // 一并删除是安全的——其唯一用途是在途定稿写回前的代际比对（resetGen:493/615），
+    // 无 sid 即无在途定稿，下一段自然从 0 起算。
+    for (const sid of finalized.keys()) {
+      if (segments.has(sid)) continue
+      finalized.delete(sid)
+      resetGen.delete(sid)
+    }
+    // resetGen 自身也可能在 finalized 为空时残留（reset 递增代际后无新段）。
+    for (const sid of resetGen.keys()) {
+      if (segments.has(sid)) continue
+      resetGen.delete(sid)
     }
     // 检测 VAD 清扫：会话 90s 无检测活动即释放（reset/dispose 之外的兜底，
     // 防切换会话/异常退出后旧会话检测 VAD 常驻——对抗审查 Important#4）。

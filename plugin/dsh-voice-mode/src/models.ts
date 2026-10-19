@@ -95,6 +95,33 @@ export async function sha256OfFile(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
+/**
+ * 上游请求超时（毫秒）：**只约束「响应头到达前」**。
+ *
+ * 模型下载可合法地慢——310MB 主模型在 ~250KB/s 慢网上需 ~20 分钟（ensureModelFile
+ * 尾部对 .part 续传的说明正为此存在），因此绝不能给整个请求设总时长，否则慢网用户的
+ * 合法下载会被误杀（实测 AbortSignal.timeout 同样会中止 body 流式读取，见下）。
+ *
+ * 用法：AbortController + 拿到响应头立即 clearTimeout——头之后的 body 流不再受超时
+ * 约束。上游「接受连接后永不吐头」时 60s 内 abort，由上层换下一个 host 重试。
+ */
+const MODEL_FETCH_HEADERS_TIMEOUT_MS = 60000
+
+/**
+ * 带「仅响应头阶段」超时的 fetch：超时只在上游不吐响应头时触发；
+ * 头一旦到达即解除超时，body 可慢速流式传输（慢网合法续传不被误杀）。
+ */
+async function fetchWithHeadersTimeout(url: string, init: RequestInit): Promise<Response> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new Error('model fetch headers timeout')), MODEL_FETCH_HEADERS_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: ac.signal })
+  } finally {
+    // 无论成功/失败都解除计时器：body 阶段与失败路径都不该被这条超时约束。
+    clearTimeout(timer)
+  }
+}
+
 /** 下载单个模型文件（带校验与上游回退）。 */
 export async function ensureModelFile(opts: EnsureModelOptions): Promise<boolean> {
   const { repoDir, spec, primaryHost, broadcast } = opts
@@ -148,7 +175,11 @@ async function downloadVerified(opts: {
   const headers: Record<string, string> = { 'user-agent': 'dsh-voice-mode' }
   if (resumeFrom > 0) headers.range = `bytes=${resumeFrom}-`
 
-  const res = await fetch(url, { headers, redirect: 'follow' })
+  // M4（Issue #15 审查 Minor）：补超时。早年裸 fetch 在上游「接受连接后永不响应」
+  //  时无限挂起——ensureModelFile 的 Promise 不 settle，modelsLoading 永不为 null，
+  //  后续每次 ASR 请求都永久等待（真机「进语音模式后麦克风无响应、控制台无错」根因）。
+  //  注意只限 headers 阶段：body 流式读取不计入（慢网合法续传需数分钟，models.ts:125-127）。
+  const res = await fetchWithHeadersTimeout(url, { headers, redirect: 'follow' })
   // 重定向后的最终域名必须仍在白名单内（防恶意模型源把请求导去任意地址）。
   if (!redirectHostAllowed(res.url, allowCustomHost)) return false
   if (res.status === 416) {
@@ -239,7 +270,11 @@ export async function ensureModelTree(opts: {
   let tree: string[] = []
   for (const host of hosts) {
     try {
-      const res = await fetch(host + '/api/models/' + repo + '?blobs=true', { headers: { 'user-agent': 'dsh-voice-mode' } })
+      // M4：补超时（同上，仅 headers 阶段）——上游挂住时 ensureModelTree 的 Promise
+      // 不 settle，Kokoro 的 ~355 个语音表文件补全永远不返回，/preview 与合成双双卡死。
+      const res = await fetchWithHeadersTimeout(host + '/api/models/' + repo + '?blobs=true', {
+        headers: { 'user-agent': 'dsh-voice-mode' },
+      })
       if (res.ok) {
         const j = (await res.json()) as { siblings?: Array<{ rfilename?: string }> }
         tree = (j.siblings ?? []).map((s) => s.rfilename ?? '').filter((f) => isSafeModelRel(f, subdir))

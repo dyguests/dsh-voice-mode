@@ -154,6 +154,14 @@ t('显式 manual 不探测：echoCancellation=true 仍 manual', () => {
 t('缺省（undefined）向后兼容视为 auto（旧调用方不受影响）', () => {
   assert.equal(resolveBargeInMode(undefined, false), 'auto')
 })
+t('默认锁：asr.ts runtimeBargeInMode 缺省 auto（config.bargeInMode ?? auto，上方镜像的源头）', () => {
+  // M3：resolveBargeInMode(undefined) → 'auto' 的镜像必须与 asr.ts 的 ?? 'auto' 缺省同源；
+  // src 改缺省值本测试即红（asr.ts 禁触，bundle grep 断言）。
+  assert.ok(
+    /config\.bargeInMode\s*\?\?\s*['"]auto['"]/.test(asrSrc),
+    'asr.ts 缺 bargeInMode 缺省 auto——resolveBargeInMode(undefined) 镜像失去源头',
+  )
+})
 
 rmSync(tmp, { recursive: true, force: true })
 console.log('\nbarge-in-detect：' + passed + ' 项通过')

@@ -186,6 +186,18 @@ function createWakeStandbySim(silenceMs) {
   }
 }
 
+// M3 常量锁：sim 硬编码的 rms>0.015（:161）与 prePad≤4 帧（:177，≈PRE_PAD_MS=250ms）必须与
+// asr.ts 常量同源。asr.ts 禁触——用源码 grep 断言常量值；src 改常量本测试即红（提示同步镜像）。
+t('镜像常量锁：asr.ts SPEECH_RMS=0.015 / PRE_PAD_MS=250（sim 硬编码值的源头）', () => {
+  const asrRaw = readFileSync(join(here, '..', 'src', 'asr.ts'), 'utf8')
+  const rms = /const\s+SPEECH_RMS\s*=\s*([\d.]+)/.exec(asrRaw)
+  assert.ok(rms, 'asr.ts 缺 SPEECH_RMS 常量定义')
+  assert.equal(Number(rms[1]), 0.015, `SPEECH_RMS=${rms[1]} 与 sim 的 0.015 镜像不一致——需同步 createWakeStandbySim`)
+  const pad = /const\s+PRE_PAD_MS\s*=\s*(\d+)/.exec(asrRaw)
+  assert.ok(pad, 'asr.ts 缺 PRE_PAD_MS 常量定义')
+  assert.equal(Number(pad[1]), 250, `PRE_PAD_MS=${pad[1]} 与 sim 的 prePad≤4 帧（≈250ms）语义不一致——需复核镜像`)
+})
+
 t('说话期间不弃段（毒化保留是旧行为，弃段只发生在停顿后）', () => {
   const sim = createWakeStandbySim(1500)
   for (let i = 0; i < 50; i++) sim.frame(0.05, 64) // 3.2s 连续说话（含非唤醒词）

@@ -146,7 +146,7 @@ export interface VoiceSettingsValue {
   interruptLevel: 0 | 1 | 2
   /** 静音停顿多少毫秒判定说完一句（Q5，默认 1500ms；端点优先由 host Silero VAD 判定）。 */
   silenceMs: number
-  /** 空闲多少分钟自动退出语音模式（Q11，默认 10）。 */
+  /** 空闲多少分钟自动退出语音模式（Q11，默认 5）。 */
   idleTimeoutMinutes: number
   /** 模型上游 host（空 = 默认源；国内网络可配 hf-mirror.com）。 */
   modelHost: string
@@ -163,7 +163,7 @@ export interface VoiceSettingsValue {
   /** 进入/退出语音模式的快捷键（形如 Ctrl+Shift+V；留空则禁用快捷键）。 */
   shortcut: string
   /**
-   * 语音会话注入口语化提示词（默认关）：开启后，仅当前活跃语音会话的回复被注入
+   * 语音会话注入口语化提示词（默认开）：开启后，仅当前活跃语音会话的回复被注入
    * 「口语化短句、不用 Markdown 排版符号」提示词（assemble 时读取，实时生效；
    * 关掉即对后续回复失效；非语音会话不受影响）。
    */
@@ -407,7 +407,7 @@ export interface Config {
   interruptLevel: 0 | 1 | 2
   /** 静音停顿多少毫秒判定为说完一句（Q5，默认 1500ms）。 */
   silenceMs: number
-  /** 空闲多少分钟自动退出语音模式（Q11，默认 10）。 */
+  /** 空闲多少分钟自动退出语音模式（Q11，默认 5）。 */
   idleTimeoutMinutes: number
   // —— 以下 15 项为设置面板字段：0.1.7 起宿主把设置表单改由插件自身 Config
   //    派生（ctx.settings.register 已移除），故须与 VoiceSettingsValue 一一对应。 ——
@@ -423,7 +423,7 @@ export interface Config {
   echoGateDb: number
   /** 进入/退出语音模式的快捷键（形如 Ctrl+Shift+V；留空禁用）。 */
   shortcut: string
-  /** 语音会话注入口语化提示词（默认关；仅活跃语音会话生效）。 */
+  /** 语音会话注入口语化提示词（默认开；仅活跃语音会话生效）。 */
   spokenFormat: boolean
   /** P4：SenseVoice 定稿重译（带标点 + ITN；默认开）。 */
   senseVoice: boolean
@@ -456,10 +456,14 @@ export const Config: z<Config> = z.object({
   allowLan: z.boolean().default(false),
   allowCustomModelHost: z.boolean().default(false),
   voice: z.string().default('zh-CN-XiaoxiaoNeural'),
-  rate: z.number().default(1.1),
+  // I3（Issue #15 审查 Important）：数值旋钮补 min/max，与 VoiceSettingsValue schema
+  // （createVoiceSettingsSchema）逐字段一致。早年 Config 层是裸 z.number()——cordis.patch.yml
+  // 手滑写 rate:5 会得到五倍速朗读、silenceMs:10 会把每句话按音节碎切，且没有任何一层会拦。
+  // 两层同界：Config 是 baseline、settings schema 是覆盖层，任一层失守都让非法值直达运行时。
+  rate: z.number().min(0.5).max(2).default(1.1),
   interruptLevel: z.union([z.const(0), z.const(1), z.const(2)]).default(0),
-  silenceMs: z.number().default(1500),
-  idleTimeoutMinutes: z.number().default(5),
+  silenceMs: z.number().min(500).max(30000).default(1500),
+  idleTimeoutMinutes: z.number().min(1).max(120).default(5),
   // 设置面板字段（与 VoiceSettingsValue 一一对应；0.1.7+ 由插件自身 Config 派生读取）。
   // 注意：刻意不标 .volatile() —— schemastery 3.18.4 的 volatile 会破坏 schema 函数
   // 调用形态（sv({}) → {field:{}}），而 0.1.5-rc.3 起的设置分层会调用插件 Config 做
@@ -470,7 +474,10 @@ export const Config: z<Config> = z.object({
   autoResume: z.boolean().default(false),
   mode: z.union([z.const('toggle'), z.const('hold')]).default('toggle'),
   bargeInMode: z.union([z.const('auto'), z.const('manual'), z.const('detect')]).default('detect'),
-  echoGateDb: z.number().default(6),
+  // I3 + M7（zod 界）：echoGateDb / yieldMs 与 settings schema 同界（3-12 dB / 500-3000ms）。
+  // client 与 NumberField 虽会 clamp，但那只是 UI 兜底——Config 层无界时 YAML 手滑
+  // 仍可把回声门阈设成 0（句句误打断）或让位窗口设成 60000（让位后一分钟不说话）。
+  echoGateDb: z.number().min(3).max(12).default(6),
   shortcut: z.string().default('Ctrl+Shift+V'),
   spokenFormat: z.boolean().default(true),
   senseVoice: z.boolean().default(true),
@@ -484,7 +491,8 @@ export const Config: z<Config> = z.object({
   llmCorrect: z.boolean().default(false),
   // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
   bargeInSalvage: z.boolean().default(true),
-  yieldMs: z.number().default(1500),
+  // I3 + M7（zod 界）：500-3000ms，与 settings schema 一致。
+  yieldMs: z.number().min(500).max(3000).default(1500),
 })
 
 /**
@@ -538,8 +546,16 @@ export function apply(ctx: Context, config: Config): void {
     broadcast('turn', { sessionId, state })
   }
   /** 回合世代：每次新 llm/stream（新回合）递增；旧回合迟到的 finally onTurn('listening')
-   *  不得把新回合已推进的 'agent-speaking' 打回 listening（对抗审查 Important）。 */
+   *  不得把新回合已推进的 'agent-speaking' 打回 listening（对抗审查 Important）。
+   *  M15（Issue #15 审查 Minor）：只增不删——会话退出/让出时与 turnStates 一并清掉，
+   *  否则长命宿主里这个 Map 随历史会话数无限增长（每项仅一个数字，但永不回收）。 */
   const turnGen = new Map<string, number>()
+  /** 会话回合状态收尾（退出/让出/被抢占共用）：广播 idle 后清两张表。 */
+  const clearTurnState = (sessionId: string): void => {
+    setTurn(sessionId, 'idle')
+    turnStates.delete(sessionId)
+    turnGen.delete(sessionId)
+  }
 
   // --- fork 加固：会话存在性校验（第 0 层）。 ---
   // dsh-web 提供 host sessions 服务（in-memory 会话存储）；toggle 只接受
@@ -557,23 +573,49 @@ export function apply(ctx: Context, config: Config): void {
     validateModelHost(vset.modelHost, config.allowCustomModelHost) ?? HOST_PRIMARY
 
   // --- fork 加固：回环校验（第 2 层，allowLan=false 默认）与 Origin 校验（第 1 层）。 ---
+  // I2（Issue #15 审查 Important）：错误响应一律走 respondJson（本文件 :88-98 自证的
+  // writeHead 铁律）。早年的「statusCode + setHeader + end」隐式头路径在第三方 gzip
+  // 包装器（如 @wingsky-1/dsh-gzip）下会产出「content-encoding: gzip 头 + 明文 body」，
+  // 浏览器报 ERR_CONTENT_DECODING_FAILED——403 拒绝响应本身把页面打死，进入语音模式
+  // 立即退出（2026-08-28 实测根因）。
   const denyNonLoopback = (req: IncomingMessage, res: ServerResponse): boolean => {
     if (!config.allowLan && !isLoopbackRequest(req)) {
-      res.statusCode = 403
-      res.setHeader('content-type', 'application/json')
-      res.end(JSON.stringify({ code: 'forbidden', error: 'loopback only (allowLan=false)' }))
+      respondJson(res, 403, { code: 'forbidden', error: 'loopback only (allowLan=false)' })
       return true
     }
     return false
   }
   const denyCrossOrigin = (req: IncomingMessage, res: ServerResponse): boolean => {
     if (!sameOriginRequest(req)) {
-      res.statusCode = 403
-      res.setHeader('content-type', 'application/json')
-      res.end(JSON.stringify({ code: 'forbidden', error: 'cross-origin request denied' }))
+      respondJson(res, 403, { code: 'forbidden', error: 'cross-origin request denied' })
       return true
     }
     return false
+  }
+  /**
+   * 限流键的客户端标识（I4，Issue #15 审查 Important）。
+   *
+   * 反代部署下 dsh 只见回环 HTTP（TLS 在反代终止，security.ts 文件头与
+   * sameOriginRequest 均已自证反代受支持），此时 `req.socket.remoteAddress` 恒为
+   * 127.0.0.1——所有经反代的用户共享同一个限流桶：一人点满 20 次/分钟，其余人
+   * 全部 429（限流形同虚设，且误伤全体）。
+   *
+   * 取键：仅当请求确实来自回环（直连反代在同一主机）且带 X-Forwarded-For 时，取该头
+   * 首段（最左 = 原始客户端，后续每跳反代 append）；否则回退 remoteAddress。
+   * 非回环来源一律不采信 XFF——远端客户端可任意伪造该头绕过限流。
+   *
+   * 与 denyNonLoopback/denyCrossOrigin 同为本文件内的守卫助手（安全原语在
+   * security.ts），不新增对外导出。
+   */
+  const clientKey = (req: IncomingMessage): string => {
+    if (isLoopbackRequest(req)) {
+      const xff = req.headers['x-forwarded-for']
+      const first = (typeof xff === 'string' ? xff : Array.isArray(xff) ? xff[0] : '')
+        .split(',')[0]
+        .trim()
+      if (first) return first
+    }
+    return req.socket.remoteAddress ?? 'unknown'
   }
 
   // --- SSE 客户端表：audio 帧 + mode 状态广播共用一条下行通道。 ---
@@ -698,13 +740,35 @@ export function apply(ctx: Context, config: Config): void {
     allowCustomHost: config.allowCustomModelHost,
     broadcast,
     // 批 7N（ADR-0006）：打断方式 getter（实时读设置）；manual 模式下 feed 需 manualPressed=true。
+    //
+    // I5（Issue #15 审查 Important）——toggle + manual 的已知缺口，注释如实登记：
+    // manual 下 host 与客户端双重丢帧（asr-host.ts feed 入口 manualPressed=false 直接
+    // 返回、asr.ts handleAudio 非 holdActive 丢弃），而客户端的 hold 入口（mic 长按 /
+    // Ctrl）**仅在 bus.ui.playing 为真时开放**（client.tsx 的 toggle 分支与 Ctrl 分支均以
+    // playing 为条件）。于是 toggle + manual 组合下：AI 朗读中可以长按打断并说话，
+    // 待机态（不播放）则完全无法输入——用户看到的是「麦克风亮着但说话没反应」的静默致聋，
+    // 而 bargeInMode=detect 在原生 AEC 未生效的机器上会自动落到 manual，即默认路径就可能命中。
+    // 待机态 push-to-talk 属产品决策（要改的是客户端手势开放条件），PM 已登记待用户拍板，
+    // 此处不加功能；host 侧只保证「manual 时非按压帧不入流」这一既有语义不被悄悄扩大。
     bargeInMode: () => vset.bargeInMode,
   })
   // 卸载/热重载时释放 ASR runtime（清段 + 定时器，防悬挂）。
   ctx.effect(() => () => asr.dispose())
   // 预热 ASR 模型（后台非阻塞）：把「首次开语音 ~5s 模型加载」前移到 host 启动。
-  // 仅本地模型文件已缓存时才值得预热；否则留待懒下载（下载进度会在设置页可见）。
-  void asr.warmup()
+  // I1（Issue #15 审查 Important）：早年实现只写「仅本地模型已缓存才预热」，代码却
+  // 无条件 `void asr.warmup()`——warmup 内部走 ensureModels()，缺文件即触发全量下载，
+  // 于是宿主每次启动都后台静默拉 ~390MB，config.enabled=false 时也照下。此处把注释
+  // 语义兑现为门控：总开关关闭不预热；模型文件不齐同样不预热（留给首次识别时的懒
+  // 下载——进度在设置页可见，且用户已显式表达过使用意图）。
+  const warmupAsrIfCached = (): void => {
+    if (!config.enabled) return
+    const st = asr.modelStatus()
+    if (!st.asr.ready || !st.vad.ready) return
+    // SenseVoice 仅在开启时参与预热（warmup() 同语义），未开不要求其文件齐备。
+    if (st.sense.enabled && !st.sense.ready) return
+    void asr.warmup()
+  }
+  warmupAsrIfCached()
 
   // --- TTS 引擎工厂（fork：edge 云端 / vits 本地中文 / kokoro 本地中英；设置面板即时切换）。 ---
   const makeEngine = (kind: 'edge' | 'vits' | 'kokoro'): TtsEngine => {
@@ -810,13 +874,12 @@ export function apply(ctx: Context, config: Config): void {
     activeTabId = null
     queue.cancel(sid)
     asr.reset(sid)
-    setTurn(sid, 'idle')
-    turnStates.delete(sid)
+    clearTurnState(sid)
     broadcast('mode', { active: null, ownerTabId: activeTabId })
   }
 
   // --- 语音口语化提示词：仅活跃语音会话的 system prompt 注入（TTS 朗读听感）。 ---
-  // 设置项 spokenFormat（默认关，实时生效）：开启后仅 activeVoiceSession 的请求被注入；
+  // 设置项 spokenFormat（默认开，实时生效）：开启后仅 activeVoiceSession 的请求被注入；
   // 关闭后 assemble 直接放行（对当前会话的后续回复立即失效）。不能直接改 llm/stream 的
   // options：agent-loop 的 request 经 deepFreeze（只读），赋值会抛 TypeError。改用 assembly
   // 瀑布：dsh-agent 的 assembleContextFor 在 assemble 上下文里注入 agent（官方
@@ -921,12 +984,12 @@ export function apply(ctx: Context, config: Config): void {
       handler: (req: IncomingMessage, res: ServerResponse) => {
         if (denyNonLoopback(req, res)) return
         if (denyCrossOrigin(req, res)) return
-        // fork 加固：试听限流（每来源 IP 20 次/分钟——设置面板对比音色
-        // 会连续点击，3 次/分钟误伤正常使用；20 次/分钟仍能防滥用打爆 TTS）。
-        if (!limiter.hit(`preview:${req.socket.remoteAddress ?? 'unknown'}`, 20, 60000)) {
-          res.statusCode = 429
-          res.setHeader('content-type', 'application/json')
-          res.end(JSON.stringify({ code: 'rate_limited', error: 'rate limited' }))
+        // fork 加固：试听限流（每来源 20 次/分钟——设置面板对比音色会连续点击，
+        // 3 次/分钟误伤正常使用；20 次/分钟仍能防滥用打爆 TTS）。
+        // I4：键经 clientKey 取（反代部署下 remoteAddress 恒为回环，裸用会让
+        // 所有经反代的用户共用一个桶——一人点满、全体 429）。
+        if (!limiter.hit(`preview:${clientKey(req)}`, 20, 60000)) {
+          respondJson(res, 429, { code: 'rate_limited', error: 'rate limited' })
           return
         }
         // 总开关一致语义（同 /toggle 403）：关闭时试听也不发起合成调用。
@@ -995,11 +1058,14 @@ export function apply(ctx: Context, config: Config): void {
         if (denyCrossOrigin(req, res)) return
         collectBody(req, res, MAX_JSON_BODY, (body) => {
           let text = ''
-          let lang: 'zh' | 'en' = 'zh'
+          let lang: PromptLang = 'zh'
           try {
             const parsed = JSON.parse(body || '{}') as { text?: unknown; lang?: unknown }
             text = typeof parsed.text === 'string' ? parsed.text : ''
-            lang = parsed.lang === 'en' ? 'en' : 'zh'
+            // M6：lang 归一化走 prompts.ts 单一真源（早年内联 `=== 'en'` 与
+            // normalizePromptLang 分叉——后者把 'en-US'/'zh-CN' 等带地区后缀的界面语言
+            // 也正确归并，内联版一律判成 zh，英文界面用户的纠错提示词用错语言）。
+            lang = normalizePromptLang(parsed.lang)
           } catch {
             // ignore malformed body——按空文本处理（下面原样回）
           }
@@ -1009,10 +1075,17 @@ export function apply(ctx: Context, config: Config): void {
             return
           }
           // 限流对齐 /preview（审查 M2）：本地页面可无上限触发 LLM 调用；10 次/60s 对
-          // 「每消息一次」足够。config.enabled 门同理（关闭时插件整体不可用）。429 也带
-          // 原文回退语义（客户端 !r.ok 或用 text 均不阻断发送）。
-          if (!config.enabled || !limiter.hit('correct', 10, 60000)) {
-            respondJson(res, 429, { text: trimmed })
+          // 「每消息一次」足够。M6：键从全局 'correct' 改为 per-client（同 I4 的
+          // 反代取键）——全局键下任一人点满 10 次，其余人的纠错全部静默回退原文。
+          // 语义分流（审查 M6 续）：enabled=false = 功能停用，是确定性的 403
+          // voice_disabled（客户端 errorText 据此给出「语音模式已关闭」），而不是
+          // 与「打太猛」混为一谈的 429。
+          if (!config.enabled) {
+            respondJson(res, 403, { code: 'voice_disabled', error: 'voice mode disabled', text: trimmed })
+            return
+          }
+          if (!limiter.hit(`correct:${clientKey(req)}`, 10, 60000)) {
+            respondJson(res, 429, { code: 'rate_limited', error: 'rate limited', text: trimmed })
             return
           }
           // .catch 恒 200 回原文（审查 B1）：correctText 理论上已全捕获，但路由层绝不
@@ -1052,17 +1125,23 @@ export function apply(ctx: Context, config: Config): void {
             respondJson(res, 400, { code: 'bad_request', error: 'sessionId required' })
             return
           }
+          // M7（Issue #15 审查 Minor）：缺 on 显式 400，不得静默落退出分支。
+          // 早年只拦「on 非布尔」，`on` 缺失（旧客户端/手滑漏字段）会走到 else 退出
+          // 分支——若该会话恰好是活跃会话，一次畸形请求就把用户踢出语音模式，
+          // 而客户端只看到一个 200 { active: null }，无从判断发生了什么。
+          if (on === undefined) {
+            respondJson(res, 400, { code: 'bad_request', error: 'on required' })
+            return
+          }
           // strict: on 非布尔显式 400，防误落退出分支
-          if (on !== undefined && typeof on !== 'boolean') {
+          if (typeof on !== 'boolean') {
             respondJson(res, 400, { code: 'bad_request', error: 'invalid on' })
             return
           }
           // fork 加固：切换限流（每会话 2 次/2 秒——允许「进+退」这类正常快速操作对；
           // 客户端另有 2 秒点击防抖，双保险防状态抖动）。
           if (!limiter.hit(`toggle:${sessionId}`, 2, 2000)) {
-            res.statusCode = 429
-            res.setHeader('content-type', 'application/json')
-            res.end(JSON.stringify({ code: 'rate_limited', error: 'rate limited' }))
+            respondJson(res, 429, { code: 'rate_limited', error: 'rate limited' })
             return
           }
           if (on === true) {
@@ -1102,9 +1181,9 @@ export function apply(ctx: Context, config: Config): void {
               queue.cancel(previous)
               // 打断根治：让出旧会话时一并释放其检测 VAD（对抗审查 Important#4）。
               asr.reset(previous)
-              // M4：显式复位旧会话回合状态 + 清 turnStates 残留（防 Map 增长 + 重入后首帧被去重）。
-              setTurn(previous, 'idle')
-              turnStates.delete(previous)
+              // M4：显式复位旧会话回合状态 + 清 turnStates/turnGen 残留
+              // （防 Map 增长 + 重入后首帧被去重）。
+              clearTurnState(previous)
             }
             broadcast('mode', { active: activeVoiceSession, ownerTabId: activeTabId })
           } else {
@@ -1121,9 +1200,8 @@ export function apply(ctx: Context, config: Config): void {
               queue.cancel(sessionId)
               // B1：退出即清 host ASR 段（释放 WASM stream，防残留文本/段泄漏）。
               asr.reset(sessionId)
-              setTurn(sessionId, 'idle')
-              // Fix：清理回合状态，防 turnStates Map 随会话数量无限增长。
-              turnStates.delete(sessionId)
+              // Fix：清理回合状态，防 turnStates/turnGen Map 随会话数量无限增长（M15）。
+              clearTurnState(sessionId)
               broadcast('mode', { active: null, ownerTabId: null })
             }
           }
@@ -1181,9 +1259,18 @@ export function apply(ctx: Context, config: Config): void {
             respondJson(res, 400, { code: 'bad_request', error: 'invalid json' })
             return
           }
-          void asr.retryModel(kind).then((done) => {
-            respondJson(res, 200, { ok: done, kind })
-          })
+          // M3（Issue #15 审查 Minor）：补 .catch，对齐 /models/download、/models/clean。
+          // retryModel 内部虽已自行捕获，但 broadcast/ensure 路径的同步抛（如宿主 SSE
+          // 监听器抛错）会逃逸成未处理 rejection——HTTP 永不响应，设置面板按钮转圈到超时。
+          void asr
+            .retryModel(kind)
+            .then((done) => {
+              respondJson(res, 200, { ok: done, kind })
+            })
+            .catch((e) => {
+              console.warn(`[dsh-voice-mode] model retry failed: ${String(e)}`)
+              respondJson(res, 500, { code: 'internal', error: 'model retry failed' })
+            })
         })
       },
     }),
@@ -1214,8 +1301,16 @@ export function apply(ctx: Context, config: Config): void {
             respondJson(res, 400, { code: 'bad_request', error: 'invalid json' })
             return
           }
-          const dir = join(config.cacheDir, engine === 'kokoro' ? kokoroModelDir(vset.kokoroModel) : TTS_MODEL_REPO)
-          void rm(dir, { recursive: true, force: true })
+          // M13（Issue #15 审查 Minor）：kokoro 的两个精度目录都删，不只删当前精度。
+          // int8 与 fp32 是不同缓存目录、可同时保留（tts-local.ts:29-30）；早年只删
+          // `kokoroModelDir(vset.kokoroModel)`——用户从 int8 切到 fp32 后点「清理」，
+          // 只清掉当前那一个，另一个精度的旧模型永久占着 ~300MB 且界面上毫无体现
+          // （「已清理」与磁盘实际占用对不上）。一并删除才与按钮语义一致。
+          const dirs =
+            engine === 'kokoro'
+              ? [kokoroModelDir('int8'), kokoroModelDir('fp32')].map((d) => join(config.cacheDir, d))
+              : [join(config.cacheDir, TTS_MODEL_REPO)]
+          void Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })))
             .then(() => {
               // 清理的是当前引擎：重建引擎（下一句合成触发重新下载/init）。
               if (engineKind === engine) {
@@ -1299,6 +1394,11 @@ export function apply(ctx: Context, config: Config): void {
       path: `${base}/asr`,
       handler: (req: IncomingMessage, res: ServerResponse) => {
         if (denyNonLoopback(req, res)) return
+        // M11（Issue #15 审查 Minor）：补跨源校验，与其它状态变更端点一致。
+        // 缺它时 /asr 是唯一「只校验回环」的 POST 端点：跨站页面可用表单/ fetch
+        // 打进来驱动 ASR（烧 CPU + 抢活跃会话识别结果）。同源客户端恒过——
+        // sameOriginRequest 对无 Origin 的非浏览器请求放行，浏览器同源请求 host 相等。
+        if (denyCrossOrigin(req, res)) return
         let sid = ''
         try {
           const url = new URL(req.url ?? '/', 'http://localhost')
@@ -1433,9 +1533,7 @@ export function apply(ctx: Context, config: Config): void {
             // malformed body → 400 below
           }
           if (!mode) {
-            res.statusCode = 400
-            res.setHeader('content-type', 'application/json')
-            res.end(JSON.stringify({ code: 'bad_request', error: 'mode must be toggle or hold' }))
+            respondJson(res, 400, { code: 'bad_request', error: 'mode must be toggle or hold' })
             return
           }
           // 输入框旁的模式切换按钮：写用户层设置（持久化）。
@@ -1446,15 +1544,11 @@ export function apply(ctx: Context, config: Config): void {
             : persistSettings({ mode })
           void persistMode
             .then(() => {
-              res.statusCode = 200
-              res.setHeader('content-type', 'application/json')
-              res.end(JSON.stringify({ ok: true, mode }))
+              respondJson(res, 200, { ok: true, mode })
             })
             .catch((e: unknown) => {
               console.warn(`[dsh-voice-mode] mode update failed: ${String(e)}`)
-              res.statusCode = 500
-              res.setHeader('content-type', 'application/json')
-              res.end(JSON.stringify({ code: 'internal', error: 'mode update failed' }))
+              respondJson(res, 500, { code: 'internal', error: 'mode update failed' })
             })
         })
       },
@@ -1467,6 +1561,10 @@ export function apply(ctx: Context, config: Config): void {
       path: `${base}/stream`,
       handler: (req, res: ServerResponse) => {
         if (denyNonLoopback(req, res)) return
+        // M11（Issue #15 审查 Minor）：补跨源校验。EventSource 无法自定义请求头，
+        // 因此是浏览器侧唯一「免预检就能建立长连接」的端点——缺校验时任意站点可用
+        // <event-source src> 把本机 SSE 连接占到 4 个上限，把真正的客户端挤出去。
+        if (denyCrossOrigin(req, res)) return
         // fork 加固：SSE 连接上限（防连接耗尽）。
         if (sseClients.size >= 4) {
           respondJson(res, 429, { code: 'too_many_streams', error: 'too many streams' })
@@ -1553,6 +1651,15 @@ function collectBody(
     if (received > maxBytes) {
       tooLarge = true
       respondJson(res, 413, { code: 'payload_too_large', error: 'request body too large' })
+      // M14（Issue #15 审查 Minor）：413 后必须停读并断流。早年只置标志位，
+      // 请求流仍在流动——后续 data 事件虽被 `tooLarge` 短路，但 Node 会继续从
+      // socket 读入并排队触发（恶意/失控客户端可持续上传拖住连接与内存），
+      // 且 'end' 之前连接不释放。
+      // pause() 止读；断流延到响应 flush 之后——req.destroy() 会连带销毁 socket，
+      // 而此刻 413 响应字节可能还没送出，立即 destroy 会让客户端收到截断响应
+      // （看不到 413，只看到连接被重置）。
+      req.pause()
+      res.once('finish', () => req.destroy())
       return
     }
     chunks.push(c)

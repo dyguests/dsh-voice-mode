@@ -23,7 +23,8 @@ await build({
   platform: 'node',
   logLevel: 'silent',
 })
-const { parseEmotionTags } = await import(pathToFileURL(out).href)
+const emotionMod = await import(pathToFileURL(out).href)
+const { parseEmotionTags } = emotionMod
 
 let passed = 0
 const t = (name, fn) => {
@@ -134,9 +135,7 @@ t('emotion 模块不再导出 stripEmotionTags（防回归：复活需走接线 
   // 批 D 选 2：stripEmotionTags 全 src 0 引用、ASR partial 不会含 emotion 标签；
   // 留 export 即留死代码——ponytail 原则删除。本断言反向门禁：未来若复活 stripEmotionTags export，
   // 应同时补一处接线 + 本断言移除（防止纯加 export 不加消费方）。
-  const mod = parseEmotionTags // 借用已绑定的导出做模块句柄引用探测（esbuild 单文件产物）
-  assert.equal(typeof mod, 'function', 'parseEmotionTags 仍为导出函数（基线）')
-  // 模块产物的 default / named 导出均不可见含 stripEmotionTags：测试文件自身无法 `import { stripEmotionTags }` 已是证据。
+  assert.ok(!('stripEmotionTags' in emotionMod), 'stripEmotionTags 不应再被导出（复活须同时补接线并移除本断言）')
 })
 
 console.log(`\nemotion：${passed} 项通过`)

@@ -27,6 +27,12 @@
  *   （detect 请求体起点口径，reqBodyStart=sentAt−请求体音频时长）-250ms」起的音频并入新识别段（absorbPreRoll）。
  *   本文件新增装置×4：vadOnly 响应可编程+detect 延迟 dial / hardBreak 序列注入 /
  *   reset 延迟档 / salvage 段纯 backchannel 弃段守卫（「嗯」不得作为消息发出）。
+ *
+ * Issue #15 批 8（2026-10-19）扩展——B1：wake 待机态一次 host 202 击穿唤醒门。
+ *   待机期 partial 收 202 即 setState('loading-model')，而唤醒分支判据是
+ *   state==='wake' → 门失效到下一段定稿，待机语音落入正常分段路径、唤醒词随语音
+ *   泄漏进消息/草稿（issue #10 症状回归，无测试覆盖）。新增装置：partial 响应一次性
+ *   202（armPartial202）；引擎 202 重试是真实 setTimeout(5000)，台架用 realSleep 真等。
  */
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
@@ -69,13 +75,30 @@ let DETECT_DELAY_MS = 0
 let RESET_DELAY_MS = 0
 const setDetectDelay = (ms) => { DETECT_DELAY_MS = ms }
 const setResetDelay = (ms) => { RESET_DELAY_MS = ms }
+// B1 装置：partial 响应一次性返回 202（模拟 host 模型下载中；引擎 5s 后重试同一载荷）。
+// 锁定「待机态一次 202 不得击穿唤醒门」——修复前 202 一到位就切 loading-model，
+// 唤醒分支判据 state==='wake' 随即失效。
+let PARTIAL_202_LEFT = 0
+const armPartial202 = (n = 1) => { PARTIAL_202_LEFT = n }
+// 观察项 2 装置（Issue #15 批 8）：AudioContext.close() 慢收尾 dial + close 计数 +
+// addModule 慢 dial——复现「stop 收尾在途时新 start 装配新 ctx，被旧收尾置空」竞态。
+// 真实浏览器 audioCtx.close() 可达数十 ms，而 getUserMedia/resume/addModule 在已授权
+// 环境下是微任务级——旧收尾续体因此能插进新 start 链中段（置空后新 start 读 ctx 抛错）。
+let CTX_CLOSE_DELAY_MS = 0
+let ADD_MODULE_DELAY_MS = 0
+let ctxCloseCount = 0
+const setCtxCloseDelay = (ms) => { CTX_CLOSE_DELAY_MS = ms }
+const setAddModuleDelay = (ms) => { ADD_MODULE_DELAY_MS = ms }
 const AI_PHRASE = '我明白了'
 const WAKE = '你好小李'
 const COMMAND = '给我说一百个字'
 
 let capturedNode = null
 class FakeAudioWorkletNode {
-  constructor() {
+  constructor(ctx) {
+    // 观察项 2 装置：真实 API 在 ctx 为 null/已关闭时抛 TypeError——旧收尾把新 ctx 置空后，
+    // 新 start 会在此抛错（台架复现「新 start 抛错」症状；正常路径 ctx 恒非空，不影响他例）。
+    if (!ctx) throw new TypeError('AudioWorkletNode: null AudioContext')
     this.port = { onmessage: null }
     capturedNode = this
   }
@@ -86,7 +109,10 @@ class FakeAudioContext {
   constructor() {
     this.sampleRate = SR
     this.destination = {}
-    this.audioWorklet = { addModule: async () => {} }
+    this.audioWorklet = { addModule: async () => {
+      // 观察项 2 装置：addModule 慢 dial（把新 start 的链拉长到覆盖旧收尾续体）。
+      if (ADD_MODULE_DELAY_MS > 0) await new Promise((r) => setTimeout(r, ADD_MODULE_DELAY_MS))
+    } }
   }
   createMediaStreamSource() {
     return { connect() {} }
@@ -95,7 +121,11 @@ class FakeAudioContext {
     return { connect() {}, disconnect() {}, onaudioprocess: null }
   }
   async resume() {}
-  async close() {}
+  async close() {
+    ctxCloseCount++
+    // 观察项 2 装置：慢收尾 dial（真实浏览器 close() 可达数十 ms）。
+    if (CTX_CLOSE_DELAY_MS > 0) await new Promise((r) => setTimeout(r, CTX_CLOSE_DELAY_MS))
+  }
 }
 const fakeTrack = { getSettings: () => ({ echoCancellation: true }), stop() {} }
 const fakeStream = { getAudioTracks: () => [fakeTrack], getTracks: () => [fakeTrack] }
@@ -237,6 +267,11 @@ globalThis.fetch = async (url, init = {}) => {
     hostLog.finals++
     return new Response(JSON.stringify({ text: feed(epoch, offset, raw, true, 500) }), { status: 200 })
   }
+  if (PARTIAL_202_LEFT > 0) {
+    // B1：模型下载中（引擎见 202 后 5s 重试同一载荷，见 asr.ts requestPartial）。
+    PARTIAL_202_LEFT--
+    return new Response(JSON.stringify({}), { status: 202 })
+  }
   hostLog.partials++
   return new Response(JSON.stringify({ text: feed(epoch, offset, raw, false), endpoint: false }), {
     status: 200,
@@ -286,10 +321,16 @@ const sleep = async (ms) => {
     await tick()
   }
 }
+// 真实时间等待：引擎 202 重试用真实 setTimeout(5000)（台架假时钟推不动它），只能真等。
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function makeEngine({ wakeWord = WAKE, isPlaying = () => false, bargeInSalvage } = {}) {
   streams.clear()
   hostLog.partials = hostLog.resets = hostLog.detects = hostLog.finals = 0
+  PARTIAL_202_LEFT = 0 // B1 装置不复用到下一用例（快照隔离）
+  CTX_CLOSE_DELAY_MS = 0 // 观察项 2 装置默认快收尾（不影响他例）
+  ADD_MODULE_DELAY_MS = 0
+  ctxCloseCount = 0
   let state = 'idle'
   const segments = []
   const partials = []
@@ -473,6 +514,64 @@ await t('待机段永不 finalize（standby 音频不得变成消息）', async 
   await say(SIL_AMP, 3000)
   assert.deepEqual(h.segments, [], `待机态不应产出定稿消息（实际 ${JSON.stringify(h.segments)}）`)
   await h.engine.stop()
+})
+
+await t('host 202（模型下载中）不得击穿唤醒门：待机语音不泄漏 + 唤醒词仍可匹配', async () => {
+  const h = makeEngine()
+  armPartial202() // 首个 partial 响应 = 202（引擎 5s 后重试同一载荷；须在 makeEngine 后武装）
+  await h.engine.start()
+  assert.equal(h.state, 'wake', '配置唤醒词后应进入 wake 待机态')
+  await say(SPEECH_AMP, 200 * 4) // 说唤醒词（首个 partial 拿到 202）
+  await say(SIL_AMP, 600) // 尾随静音（不足 silenceMs，不清待机段）
+  // B1 回归锁：修复前 202 一到位就 setState('loading-model')，唤醒分支判据
+  // state==='wake' 随即失效——待机语音落入正常分段路径，静音到点即定稿，唤醒词
+  // 随语音泄漏进消息/草稿（issue #10 症状回归）。
+  assert.equal(h.state, 'wake', `待机期 202 不得把 state 切出 wake（实际 ${h.state}）——唤醒门失效前兆`)
+  await realSleep(5200) // 等引擎 5s 重试窗过（真实 setTimeout，假时钟推不动）
+  await say(SIL_AMP, 300) // 重试落定后补几帧 → 下一拍 partial 上传完整段
+  assert.equal(h.state, 'listening', `202 之后唤醒词仍须被匹配（实际 ${h.state}）——唤醒门被击穿`)
+  await say(SIL_AMP, 2000) // 停口断句：门失效时这里会把「你好小李」作为消息定稿发出
+  assert.deepEqual(
+    h.segments,
+    [],
+    `待机态语音不得绕过唤醒门直接定稿发出（实际 ${JSON.stringify(h.segments)}）——唤醒词泄漏进消息`,
+  )
+  await h.engine.stop()
+})
+
+await t('stop 收尾与新 start 竞态：不置空新 ctx、不踩新会话状态（新 start 不抛错 + 新 ctx 不被泄漏）', async () => {
+  const h = makeEngine()
+  await h.engine.start()
+  assert.equal(ctxCloseCount, 0, '起始不应有 ctx 关闭')
+  // 慢收尾（close 1ms）+ 新 start 的 addModule 更慢（5ms）→ 旧收尾续体先跑，
+  // 恰好插在新 start 链中段（真实浏览器同构：close 数十 ms vs 已授权后微任务级启动）。
+  setCtxCloseDelay(1)
+  setAddModuleDelay(5)
+  const stopP = h.engine.stop() // 不 await——生产中 stop→start 可快速连续（重进语音模式）
+  let startErr = null
+  try {
+    // 旧收尾在途时新启动（active 已被 stop 置 false，start 不被挡）。
+    await h.engine.start()
+  } catch (e) {
+    startErr = e
+  }
+  await stopP // 旧收尾续体此刻才跑：修复前无条件 audioCtx=null 把新 ctx 置空
+  assert.equal(
+    startErr,
+    null,
+    `旧收尾置空新 ctx 会令新 start 读 audioCtx 抛错（${startErr?.message}）——麦道遗留 + 幽灵上行`,
+  )
+  // 观察项 3：旧 stop 收尾跨过新 start 完成——不得把新会话的 wake 踩成 idle。
+  // 修复前末尾无条件 setState('idle')：状态条误显退出，但引擎 active=true 仍在收音。
+  assert.equal(h.state, 'wake', `旧 stop 不得踩新会话状态（实际 ${h.state}）——状态条误显退出但引擎仍在收音`)
+  await h.engine.stop()
+  assert.equal(
+    ctxCloseCount,
+    2,
+    `两个 AudioContext 都必须被 close（实际 ${ctxCloseCount}）——新 ctx 被置空后无人能 close 它（泄漏）`,
+  )
+  // 末次 stop 无新 start 抢先 → 守卫放行，正常落 idle（防守卫误伤正常停止路径）。
+  assert.equal(h.state, 'idle', `无新 start 抢先时 stop 应落 idle（实际 ${h.state}）——世代守卫误伤正常路径`)
 })
 
 await t('朗读期检测通道仍工作（barge-in 不受自聊守卫影响）', async () => {

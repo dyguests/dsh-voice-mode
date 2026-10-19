@@ -348,9 +348,21 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
         } finally {
           engineLoading = false
         }
-      })().finally(() => {
-        ready = null
-      })
+      })().then(
+        (v) => {
+          // M10（Issue #15 审查 Minor）：成功路径保留 ready 句柄。
+          // 早年 `.finally(() => { ready = null })` 对成功/失败一视同仁——而 ready 正是
+          // 「引擎已就绪」的 memo（ensureReady 首行 `if (ready && child) return ready`）。
+          // 置空后每句合成都重新走一遍 ensureReady：重新校验/init 分支虽被 childInit
+          // 短路，但每次都重播一次 `tts-ready` 广播——客户端据此复位「加载中」状态、
+          // 刷新状态条，长回复下每句一次冗余 SSE + 状态抖动。失败时才清（下次重试）。
+          return v
+        },
+        (e) => {
+          ready = null // 失败：弃句柄，下次 ensureReady 重新走下载/init
+          throw e
+        },
+      )
     }
     return ready
   }

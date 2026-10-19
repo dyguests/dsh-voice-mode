@@ -66,7 +66,7 @@ t('asr.ts（审查 M3）：连败计数在段边界重置（clearWakeSegment/dis
 t('client：onNotice → bus.setNotice（5s 自动清除）', () => {
   const idx = clientSrc.indexOf('engine.onNotice(')
   assert.ok(idx >= 0, '缺 onNotice 处理')
-  const win = clientSrc.slice(idx, idx + 400)
+  const win = clientSrc.slice(idx, idx + 900)
   assert.ok(win.includes('bus.setNotice('), 'onNotice 未走 setNotice')
   // bus.setNotice 实现：5s 清除 + 仅当 notice 仍是本次文案才清
   const sIdx = clientSrc.indexOf('setNotice(hint)')
@@ -74,6 +74,22 @@ t('client：onNotice → bus.setNotice（5s 自动清除）', () => {
   const sWin = clientSrc.slice(sIdx, sIdx + 500)
   assert.ok(sWin.includes('5000'), '缺 5s 自动清除')
   assert.ok(sWin.includes('ui.notice === hint'), '缺「仅当仍是本次文案才清」保护——会冲掉用户新提示')
+})
+
+t('client（Issue #15 接口约定）：onNotice 特判 backchannelDropped——先剥 live 尾再提示', () => {
+  const idx = clientSrc.indexOf('engine.onNotice(')
+  assert.ok(idx >= 0, '缺 onNotice 处理')
+  const win = clientSrc.slice(idx, idx + 900)
+  const keyIdx = win.indexOf("key === 'backchannelDropped'")
+  assert.ok(keyIdx >= 0, '缺 backchannelDropped 特判（asr 弃段键无客户端处理）')
+  // 顺序锁：剥尾 → 清 partial → setNotice（清理必须先于提示，否则草稿残留 Ghost 文本）
+  const stripIdx = win.indexOf("composeDraft(draftRef.current, lastPartialRef.current, '')", keyIdx)
+  assert.ok(stripIdx > keyIdx, '未剥草稿 live 尾——被弃段的 partial 会残留进下次草稿')
+  assert.ok(win.includes("lastPartialRef.current = ''"), '剥尾未清 lastPartial 记录')
+  const clearIdx = win.indexOf("bus.setUi({ partial: '' })", stripIdx)
+  assert.ok(clearIdx > stripIdx, '未清状态条 partial')
+  const noticeIdx = win.indexOf('bus.setNotice(', clearIdx)
+  assert.ok(noticeIdx > clearIdx, '提示未走在清理之后')
 })
 
 t('client：SSE 断连指示（error 置位 / open 清除）', () => {
@@ -115,6 +131,41 @@ t('strings：六键双语', () => {
 
 t('VoiceBus 接口声明 setNotice（类型闭合）', () => {
   assert.ok(clientSrc.includes('setNotice(hint: string): void'), 'VoiceBus 接口缺 setNotice')
+})
+
+// ---- Issue #15 UX Blocker：错误提示表面与激活状态解耦（五条静默路径）----
+
+t('client（UX Blocker）：mic 按钮旁常驻提示面（data-dshvm=mic-hint，与 activeSessionId 解耦）', () => {
+  // 前提：错误/提示的唯一原渲染处是状态条，而状态条仅激活时渲染
+  const barIdx = clientSrc.indexOf('const isActive = b.active === sessionId')
+  assert.ok(barIdx >= 0, '缺状态条激活门')
+  assert.ok(clientSrc.slice(barIdx, barIdx + 80).includes('if (!isActive) return'), '状态条未在非激活态早退')
+  // 常驻提示面：mic 按钮（conversation.input.right 常驻）旁红字
+  assert.ok(clientSrc.includes('data-dshvm="mic-hint"'), '缺 mic 旁常驻提示面')
+  const hintIdx = clientSrc.indexOf('const micHint =')
+  assert.ok(hintIdx >= 0, '缺 micHint 计算')
+  const hintWin = clientSrc.slice(hintIdx, hintIdx + 500)
+  assert.ok(hintWin.includes('bus.activeSessionId !== sessionId'), '提示面未与激活态解耦（激活态应让位状态条，防双份）')
+  assert.ok(hintWin.includes('bus.ui.error ?? bus.ui.notice'), '提示面未读 error/notice')
+  // a11y：提示面可被屏幕阅读器播报（aria-live 在 data-dshvm 之后）
+  const domIdx = clientSrc.indexOf('data-dshvm="mic-hint"')
+  assert.ok(clientSrc.slice(domIdx, domIdx + 300).includes('aria-live'), '提示面缺 aria-live')
+})
+
+t('client（UX Blocker）：空闲超时提示在退出流程之后写入（exitMode 会清 error + 3s 计时器）', () => {
+  const idx = clientSrc.indexOf("const quitMsg = t('idleTimeoutQuit')")
+  assert.ok(idx >= 0, '缺 idleTimeoutQuit 文案')
+  const win = clientSrc.slice(idx, idx + 800)
+  const exitIdx = win.indexOf("exitModeRef.current('idle')")
+  const writeIdx = win.indexOf('bus.setUi({ error:')
+  assert.ok(exitIdx > 0, '缺退出调用')
+  assert.ok(writeIdx > exitIdx, '提示未在退出之后写——exitMode 内的 setUi({error:null}) 与 clearIdle 会擦掉提示（原顺序下永不可见）')
+})
+
+t('client（UX Blocker）：状态条补 role/aria-live（可访问性）', () => {
+  const idx = clientSrc.indexOf('role="status"')
+  assert.ok(idx >= 0, '状态条/提示面缺 role=status')
+  assert.ok(clientSrc.slice(idx, idx + 200).includes('aria-live="polite"'), '缺 aria-live=polite')
 })
 
 console.log(`\nsilent-path-hints：${passed} 项通过`)
