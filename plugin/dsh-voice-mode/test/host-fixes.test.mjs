@@ -11,13 +11,15 @@
  *    陈旧定稿文本写入新会话缓存（Important 回归）——loop2（resetGen 扫描）行为级实证。
  *  R3 验真轮：loop1（finalized 扫描）守卫行为级零锁 → 两段式用例补上（先产缓存再
  *    在途定稿+sweep；与 loop2 毒链用例互为独立变异锁定，只废其一另一个仍绿）。
- *    I-1 修复口径（落地 commit 4916bd8、R5 复核）：t 改 async 后**全部 16 个 await 站点**——
- *    13 个既有同步用例转换 + 2 个 R3（c11d311）新增的异步用例（毒链/listEdgeVoices，
- *    落地即为 await t( 调用，当时 t 仍同步故 await 空转——B1 反模式自此埋入）+ 1 个
- *    R4（4916bd8）同步新增的 loop1 两段式。commit message 的「15 个调用点」指**转换
- *    站点**（13+2，修复时点口径）、16 为**总站点**（含 R4 新增）——两者并存各有定义。
- *    口径约定：轮次标签按验真轮发现归标签时可能与落地 commit 差一轮，**以 git log
- *    为最终事实**（fix-docs 将在 STATE 落同款约定）。
+ *    I-1 修复口径（R3 验真轮发现、落 4916bd8；R5 全库扫尾复核）：t 改 async 后**全部
+ *    16 个 await 站点**——13 个既有同步用例转换 + 2 个异步用例（毒链/listEdgeVoices）
+ *    落 c11d311（R2 验真轮发现；落地即为 await t( 调用，当时 t 仍同步故 await 空转——
+ *    B1 反模式自此埋入）+ 1 个 R3 验真轮发现的 loop1 两段式（落 4916bd8）。commit
+ *    message 的「15 个调用点」指**转换站点**（13+2，修复时点口径）、16 为**总站点**
+ *    （含 R3 验真轮发现的 loop1 项）——两者并存各有定义。
+ *    口径约定：轮次标签按**验真轮发现**归标签（与落地 commit 可能差一轮，如两个异步
+ *    用例落 c11d311 但归 R2 标签），**以 git log 为最终事实**；同款约定已落 STATE
+ *    （docs(I15-R6)，commit 62698e5）。
  * 运行：node test/host-fixes.test.mjs（离线，无网络/无 dsh 依赖）。
  */
 import assert from 'node:assert/strict'
