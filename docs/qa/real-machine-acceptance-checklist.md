@@ -1,6 +1,6 @@
 # 真机验收清单（dsh-voice-mode 批 2/3/5 + 批 7 周全修复（10 批次 A-J））
 
-> **基准**：代码基线 = `2b28539`（Issue #15 R5 收口——fix 批 `0763966` + lib TAG 对齐 `2b28539`；本基线随收口批滚动更新）。历史基线 `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）/ `5e2d34f`（批 7O 代码块收口）/ `0b63a13`（块 3 HEAD）保留备查——其「`git diff 5e2d34f..HEAD -- src/ lib/` 为空即纯文档/资产差集」口径已作废（Issue #15 八批代码改动全部落在该差集内）。
+> **基准**：代码基线 = `77cb212`（Issue #15 R6 收口——docs 批 `62698e5` + lib TAG 对齐 `77cb212`；本基线随收口批滚动更新）。历史基线 `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）/ `5e2d34f`（批 7O 代码块收口）/ `0b63a13`（块 3 HEAD）保留备查——其「`git diff 5e2d34f..HEAD -- src/ lib/` 为空即纯文档/资产差集」口径已作废（Issue #15 八批代码改动全部落在该差集内）。
 > **范围**：5 审计轴（B1 UI Row 本地化 / B2 settings 即时生效 / B3 fetchConfig 白名单 / B4 break 静音错位 / B5 长段话丢失）+ 10 批次周全修复 31 个 commit（A-J 含 7 docs(state) 验收 + 6 docs/adr + 3 chore(lib)+release 收口）共 42 commits 的可重复真机验证步骤。
 > **目的**：每次发版前由用户亲跑 30 分钟闭环验证；所有失败项对应源码行号定位。
 > **纪律**：每步单点验证，不依赖其他步骤状态；预期/失败信号给到具体用户可识别现象。
@@ -306,26 +306,28 @@
 | 验收项 | 已存在自动测试 | 需新增 | 缺口 |
 |---|---|---|---|
 | 1.1 build 版本对齐 | 无（手动） | `test/build-tag.test.mjs`（curl /voice-mode 200 + grep build=） | **缺**：版本一致性测试 |
-| 1.2 B1 Row 本地化 | `caption-a11y.test.mjs` 20 项（部分覆盖） | 扩 4 Row 全字段遍历 | **缺**：strings.ts 4 键 vs settings-form Row label 全覆盖断言 |
-| 1.3 L1 中文识别+TTS | `endpoint.test.mjs` 7 项 + `asr-e2e.js` 113 行 | 无 | **够用**：endpoint 覆盖 `/voice-mode` 200 + JSON schema |
+| 1.2 B1 Row 本地化 | `caption-a11y.test.mjs` 19 项（部分覆盖） | 扩 4 Row 全字段遍历 | **缺**：strings.ts 4 键 vs settings-form Row label 全覆盖断言 |
+| 1.3 L1 中文识别+TTS | `endpoint.test.mjs` 7 项 + `asr-e2e.js` 222 行 | 无 | **够用**：endpoint 覆盖 `/voice-mode` 200 + JSON schema |
 | 2.1 ITN 开关 | `sense-worker.test.mjs` 8 项（部分覆盖） | 加 senseITN false 路径 | **够用**：worker level 已测 |
-| 3.1 字幕字号 24px | `caption-a11y.test.mjs` 20 项 + `verify-client` 40 项 | 无 | **够用**：client 端 `[12,14,18,24][...]` 已 grep 命中 |
+| 3.1 字幕字号 24px | `caption-a11y.test.mjs` 19 项 + `verify-client` 40 项 | 无 | **够用**：client 端 `[12,14,18,24][...]` 已 grep 命中 |
 | 3.2 字幕宽度 | 同 3.1 | 无 | **够用** |
 | 3.3 aria 标签 | `verify-client` 40 项 | 加 aria-label 中文断言 | **缺**：中文 aria-label 字符串匹配断言 |
-| 4.1 **B4 break 顺序** | `emotion-integration.test.mjs` 9 项 | **缺 tts-local 拼帧顺序测试** | **缺**：`test/emotion-tts-local.test.mjs`（mock `parseEmotionTags` 返多段 + 断言生成 PCM 顺序） |
+| 4.1 **B4 break 顺序** | `emotion-integration.test.mjs` 9 项 + `emotion-tts-local.test.mjs` 7 项（拼帧顺序/WAV 时长/段后置静音，批 D `2d247f6` 起在链） | 无 | **已补齐**：原缺的 tts-local 拼帧顺序测试已落地并全绿 |
 | 4.2 whisper 增益 | `emotion.test.mjs` 16 项 | 加 PCM 振幅断言 | **够用**：parseEmotionTags 已测 whisper 字段 |
 | 4.3 标签剥离 | `emotion.test.mjs` 16 项 + `segmenter.test.mjs` 13 项 | 无 | **够用** |
-| 5.1 backchannel 让位 | `backchannel.test.mjs` 30 项 | **缺 host 端 onBackchannel 回调测试** | 需 mock `config.onBackchannel` + 断言 skipAudio + hold 设置 |
+| 5.1 backchannel 让位 | `backchannel.test.mjs` 31 项 | **缺 host 端 onBackchannel 回调测试** | 需 mock `config.onBackchannel` + 断言 skipAudio + hold 设置 |
 | 5.2 hardBreak 优先 | 无（手动） | `test/hardbreak-vs-backchannel.test.mjs` | **缺**：分叉逻辑断言（完整句走 hardBreak vs backchannel） |
-| 5.3 让位 prompt | 无（手动） | 静态断言 VOICE_SPOKEN_PROMPT 含 YIELDING | **缺**：`grep "YIELDING\|让位" src/index.ts` 断言 |
-| 6.1 **B5 60s 不丢字** | `asr-e2e.js` 113 行 | **缺 fixture 场景** | **缺**：60s 中文 fixture（`test/fixtures/zh-60s.wav`）+ `asr-e2e.js` 长段断言（final 长度 ≥ 输入 95%） |
+| 5.3 让位 prompt | `i18n-protocol.test.mjs` 126-131（spokenPrompt zh/en 两版语义断言，含 interrupt/插话让位语义） | 无 | **已覆盖**：原「VOICE_SPOKEN_PROMPT 含 YIELDING」静态断言需求随符号 2026-10-02 迁入 `src/prompts.ts` 消亡，改由 i18n-protocol 锁两版让位语义 |
+| 6.1 **B5 60s 不丢字** | `asr-e2e.js` 222 行 | **缺 fixture 场景** | **缺**：60s 中文 fixture（`test/fixtures/zh-60s.wav`）+ `asr-e2e.js` 长段断言（final 长度 ≥ 输入 95%） |
 | 6.2 partial 不卡 | 无 | 增量检查（partial 间隔 ≤2s） | **缺**：长段 e2e 加 partial 间隔监控 |
 | 7.1 idle 预警 | 无 | 静态断言 idleTimeoutMinutes | **缺**：单测 idle 倒计时 toast 触发 |
 | 7.2 TTS 错误归类 | 无 | 无 | **缺**：错误分支 snapshot 测试 |
 | 7.3 浅色主题 | `verify-client` 部分 | 无 | **够用**：CSS grep 已验 |
 | 7.4 默认值 | 无（手动） | `test/defaults-snapshot.test.mjs` | **缺**：4 字段默认值快照断言 |
 
-**自动化覆盖率统计**（281 项单测；下表百分比为批 7M 砍前 254 项口径的历史估算，未按 281 重算）：
+> 本表随收口批刷新，历史口径以时点标注为准。
+
+**自动化覆盖率统计**（**批 7 时点** 281 项单测；下表百分比为批 7M 砍前 254 项口径的历史估算，未按 281 重算；现行全套件计数见上方「基线状态」611/611）：
 - 已覆盖：~135 项（53%）
 - 缺 host 端集成：~25 项（10%）— 全部为 settings 改变触发 rebuild 类
 - 缺 fixture/场景：~20 项（8%）— 长段话 / 真机音频流
@@ -346,7 +348,7 @@
   - 发版前必跑 L1（阶段 1 + 6），约 13 分钟
   - 每个批次独立发版前跑对应阶段，约 5 分钟
   - 全量 L1+L2+L3 = 33 分钟（含 idle 跳过可压到 23 分钟）
-- **基线状态**（代码基线 = `2b28539`，Issue #15 R5 收口；历史 `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（八批收口）/ `5e2d34f` / `0b63a13` 为历史陈述）：
+- **基线状态**（代码基线 = `77cb212`，Issue #15 R6 收口；历史 `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（八批收口）/ `5e2d34f` / `0b63a13` 为历史陈述）：
   - `npm test` 611/611 全绿（50 文件串联）
   - `/voice-mode/config` 返回 4 字段非 null（实证）
   - lib BUILD_TAG = HEAD 短哈希（批 7P P2 起每批 rebuild 对齐；见 STATE 口径澄清）
