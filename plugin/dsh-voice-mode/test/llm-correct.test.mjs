@@ -127,6 +127,9 @@ t('wiring：host /correct 路由存在（loopback+跨源守卫+collectBody+corre
   assert.ok(win.includes('denyNonLoopback'), '缺 loopback 守卫')
   assert.ok(win.includes('denyCrossOrigin'), '缺跨源守卫')
   assert.ok(win.includes('correctText(ctx,'), '未调 correctText')
+  // 审查 Minor-2：路由层 .catch 恒 200 与 limiter 门也要锁（删了全量套件仍绿过）
+  assert.ok(win.includes('.catch('), '缺 .catch 恒 200——correctText 异常会逃逸成未处理 rejection+HTTP 永不响应')
+  assert.ok(win.includes("limiter.hit('correct'"), '缺限流门——本地页面可无上限触发 LLM 调用')
 })
 
 t('wiring：llmCorrect 设置十站（interface/默认/DESC/zod×2/fromConfig×2/config 响应）', () => {

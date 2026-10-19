@@ -3,7 +3,7 @@
  * 无网络、无 dsh 依赖。运行：node test/verify-client.mjs（npm test 串联）。
  */
 import assert from 'node:assert/strict'
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -79,7 +79,12 @@ t('lib/client.js 是 __ModuleLoader__ 闭包且注入全部三个槽位', () => 
 })
 t('build 产物与源码时间戳对齐（lib 不早于 src）', () => {
   // 修正空断言：真实比较 lib mtime ≥ 最新 src mtime（重建保证）。
-  const srcFiles = ['src/index.ts', 'src/client.tsx', 'src/asr.ts', 'src/asr-host.ts', 'src/tts-queue.ts', 'src/segmenter.ts', 'src/aec.ts', 'src/resample.ts', 'src/llm-correct.ts', 'src/steer-submit.ts', 'src/draft-compose.ts', 'src/strings.ts', 'src/settings-form.tsx', 'src/prompts.ts', 'src/security.ts', 'src/errors.ts', 'src/models.ts', 'src/settings-store.ts']
+  // 审查 Minor-4：改 glob（src 下全部 .ts/.tsx，排除 *.d.ts）——逐个列文件必有遗漏
+  // （首批只列 8 个，批 4 补到 18 个仍缺 ~15 个），只改未列文件不重建可假绿。
+  const srcDir = join(root, 'src')
+  const srcFiles = readdirSync(srcDir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && (e.name.endsWith('.ts') || e.name.endsWith('.tsx')) && !e.name.endsWith('.d.ts'))
+    .map((e) => join(e.parentPath.slice(root.length + 1), e.name).replaceAll('\\', '/'))
   const newestSrc = Math.max(...srcFiles.map((s) => (existsSync(join(root, s)) ? statSync(join(root, s)).mtimeMs : 0)))
   for (const f of ['lib/index.js', 'lib/client.js']) {
     assert.ok(readFileSync(join(root, f)).length > 10_000, `${f} 疑似未构建`)

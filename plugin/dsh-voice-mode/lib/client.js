@@ -3235,7 +3235,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "50c452d";
+var BUILD_TAG = "faf4914";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4331,7 +4331,7 @@ function MicButton({
         submitTimerRef.current = setInterval(() => {
           retryCount++;
           const phase = phaseRef.current;
-          if (retryCount > 3 || phase === "submitting" || phase === "adjudicating" || draftRef.current.trim() !== snapshot) {
+          if (retryCount > 3 || phase === "submitting" || phase === "adjudicating" || draftRef.current.trim() !== (wroteBack ? snapshot : draftSnapshot)) {
             cancelPendingSubmit();
             return;
           }
@@ -4732,6 +4732,7 @@ function MicButton({
       clearIdle();
       cancelPendingSubmit();
       cancelAutoSend();
+      submitInFlightRef.current = false;
       isSpeechTrueCount = 0;
       if (autoResumeHintTimerRef.current) {
         clearTimeout(autoResumeHintTimerRef.current);

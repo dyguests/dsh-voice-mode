@@ -1625,7 +1625,7 @@ export function MicButton({
           retryCount++
           const phase = phaseRef.current
           // 已提交（草稿被清成空）/ 用户改写 / 进入提交态 → 停止重试
-          if (retryCount > 3 || phase === 'submitting' || phase === 'adjudicating' || draftRef.current.trim() !== snapshot) {
+          if (retryCount > 3 || phase === 'submitting' || phase === 'adjudicating' || draftRef.current.trim() !== (wroteBack ? snapshot : draftSnapshot)) {
             cancelPendingSubmit()
             return
           }
@@ -2155,6 +2155,7 @@ export function MicButton({
       clearIdle()
       cancelPendingSubmit()
       cancelAutoSend()
+      submitInFlightRef.current = false // 批 4 复审 Minor-1a：卸载同样清在途标记（纠错 RTT 内切会话/导航 → promise resolve 后幽灵提交）
       isSpeechTrueCount = 0 // 打断根治：卸载重置 isSpeech 计数（防残留）
       // 批 H 任务 4：autoResume 引导提示定时器兜底清理。
       if (autoResumeHintTimerRef.current) {
