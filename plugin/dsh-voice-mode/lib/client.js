@@ -714,6 +714,8 @@ function createAsrEngine(config, sessionId) {
     if (cut > 0) prePad = prePad.slice(cut);
   };
   const clearWakeSegment = () => {
+    partialFailStreak = 0;
+    detectFailStreak = 0;
     segmentEpoch++;
     segment = [];
     segmentMs = 0;
@@ -1152,6 +1154,8 @@ function createAsrEngine(config, sessionId) {
       stopRequested = false;
       startSeq++;
       segmentEpoch++;
+      partialFailStreak = 0;
+      detectFailStreak = 0;
       lastPollAt = 0;
       holdActive = false;
       detectChunks = [];
@@ -1212,6 +1216,8 @@ function createAsrEngine(config, sessionId) {
     },
     discardSegment() {
       segmentEpoch++;
+      partialFailStreak = 0;
+      detectFailStreak = 0;
       segment = [];
       segmentMs = 0;
       speechMs = 0;
@@ -3312,7 +3318,21 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "6e8287d";
+function telemetryDeltas(tel) {
+  const out = [];
+  let prev;
+  for (const { stage } of TELEMETRY_VIEW) {
+    const at = tel[stage];
+    if (typeof at !== "number") {
+      prev = void 0;
+      continue;
+    }
+    if (prev !== void 0) out.push(`${stage}=${Math.round(at - prev)}ms`);
+    prev = at;
+  }
+  return out;
+}
+var BUILD_TAG = "86d0566";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -5233,7 +5253,9 @@ function VoiceStatusBar({ bus, sessionId }) {
       `dsh-voice-mode build=${BUILD_TAG}`,
       `state=${b.ui.state}${b.ui.error ? " error=" + b.ui.error : ""}${b.ui.sseDown ? " sse=down" : ""}`,
       boot ? `settings silenceMs=${boot.silenceMs} senseVoice=${boot.senseVoice} llmCorrect=${boot.llmCorrect} bargeInSalvage=${boot.bargeInSalvage} mode=${boot.mode} wakeWord=${boot.wakeWord ? "set" : "none"}` : "settings=unavailable",
-      ...Object.entries(tel2).map(([k, v]) => `${k}=${typeof v === "number" ? Math.round(v) + "ms" : String(v)}`)
+      // telemetry 存的是各阶段绝对时刻（Date.now()）——输出**相邻阶段差值**（与状态条同算法），
+      // 不把绝对 epoch 当「ms 耗时」输出（审查 M1）。
+      ...telemetryDeltas(tel2)
     ];
     const text = lines.join("\n");
     try {

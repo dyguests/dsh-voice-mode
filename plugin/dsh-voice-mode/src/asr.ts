@@ -580,6 +580,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
    *  `segmentEpoch++` 作废在途 partial 响应——否则其会把已归零的 uploadedSamples
    *  水位写回旧值，后续增量对重置后的空 host 流只发尾部（段丢头）。 */
   const clearWakeSegment = (): void => {
+    // Issue #15 批 7（审查 M3）：段边界重置连败计数——防跨段累积把下一段首次失败凑成 3 次误提示。
+    partialFailStreak = 0
+    detectFailStreak = 0
     segmentEpoch++
     segment = []
     segmentMs = 0
@@ -1166,6 +1169,9 @@ const startRecorder = async (): Promise<void> => {
       stopRequested = false // Fix8：新一次启动清除取消标记
       startSeq++ // 防双路开麦：推进启动序号（startRecorder 入口捕获 mySeq，返回时按差序放弃旧启动）
       segmentEpoch++
+      // Issue #15 批 7（审查 M3）：新一次启动重置连败计数（上一会话的失败不计入本次）。
+      partialFailStreak = 0
+      detectFailStreak = 0
       lastPollAt = 0
       holdActive = false
       detectChunks = [] // 打断根治：进入清检测通道
@@ -1234,6 +1240,9 @@ const startRecorder = async (): Promise<void> => {
     discardSegment() {
       // 语义与 P1-3「短语音弃段」一致：清本地段 + 作废迟到 partial + host 流重置。
       segmentEpoch++
+      // Issue #15 批 7（审查 M3）：段边界重置连败计数（同 clearWakeSegment 口径）。
+      partialFailStreak = 0
+      detectFailStreak = 0
       segment = []
       segmentMs = 0
       speechMs = 0

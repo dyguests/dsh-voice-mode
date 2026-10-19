@@ -143,6 +143,22 @@ const TELEMETRY_VIEW: { stage: TelemetryStage; key: TKey }[] = [
   { stage: 'first-audio-played', key: 'telFirstPlayed' },
 ]
 
+/** Issue #15 批 7：telemetry 相邻阶段差值（诊断复制用；telemetry 存绝对时刻）。 */
+function telemetryDeltas(tel: Partial<Record<TelemetryStage, number>>): string[] {
+  const out: string[] = []
+  let prev: number | undefined
+  for (const { stage } of TELEMETRY_VIEW) {
+    const at = tel[stage]
+    if (typeof at !== 'number') {
+      prev = undefined
+      continue
+    }
+    if (prev !== undefined) out.push(`${stage}=${Math.round(at - prev)}ms`)
+    prev = at
+  }
+  return out
+}
+
 /**
  * 开发模式开关：localStorage['dsh-voice-mode.telemetry'] === '1' 时状态条实时显示
  * 「说完→首音」链路各段耗时（P1-5 延迟验收的测量面）。关闭时零采集零展示
@@ -649,7 +665,8 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     senseITN: true,
     senseVoice: true,
   }
-  /** Issue #15 批 7：notice 的 5s 自动清除计时器（bus 级，autoResume 提示/瞬态提示共用）。 */
+  /** Issue #15 批 7：notice 的 5s 自动清除计时器（bus 级 setNotice 用；autoResume 引导
+   *  提示仍用组件级自持计时器——两条路径的清除互不冲撞（双向 === hint 守卫，审查 M2 推证）。 */
   let noticeTimer: ReturnType<typeof setTimeout> | null = null
   const ui: VoiceUiState = {
     state: 'idle',
@@ -2722,7 +2739,9 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
       boot
         ? `settings silenceMs=${boot.silenceMs} senseVoice=${boot.senseVoice} llmCorrect=${boot.llmCorrect} bargeInSalvage=${boot.bargeInSalvage} mode=${boot.mode} wakeWord=${boot.wakeWord ? 'set' : 'none'}`
         : 'settings=unavailable',
-      ...Object.entries(tel).map(([k, v]) => `${k}=${typeof v === 'number' ? Math.round(v) + 'ms' : String(v)}`),
+      // telemetry 存的是各阶段绝对时刻（Date.now()）——输出**相邻阶段差值**（与状态条同算法），
+      // 不把绝对 epoch 当「ms 耗时」输出（审查 M1）。
+      ...telemetryDeltas(tel),
     ]
     const text = lines.join('\n')
     try {

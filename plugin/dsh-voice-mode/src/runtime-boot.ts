@@ -6,8 +6,9 @@
  * 模式）拉到的 boot 快照。host 的 /config 与 /settings 同源（都返回 vset）——拿它俩
  * 互比在稳态永相等（审查 I-1：那只能比出「挂载时的一次性快照」，是同类 misleading）。
  *
- * 生命周期：客户端 fetchConfig 成功即刷新（进入语音模式/轮询）；null = 本页面加载后
- * 还没进入过语音模式（此时所有可改项都还没生效过——如实显示待生效）。
+ * 生命周期：客户端 fetchConfig 成功即刷新（仅进入语音模式/会话切换两个调用点，无轮询）；
+ * null = 本页面加载后还没进入过语音模式——此时卡片**不渲染**待生效列表（保守：没有
+ * 运行态快照可比对，不猜）。
  */
 
 let runtimeBoot: Record<string, unknown> | null = null
