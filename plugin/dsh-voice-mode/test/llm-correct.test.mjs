@@ -72,8 +72,12 @@ await t('B1 回归：属性访问抛错的真 cordis 形态 ctx（proxy）→ �
   const throwing = new Proxy({}, { get(_t, prop) { throw new Error(`cannot get property "${String(prop)}" without inject`) } })
   assert.equal(await correctText(throwing, '原文', 'zh'), '原文', '属性访问抛错不得逃逸（否则 host 未处理 rejection+HTTP 永不响应）')
   // get 可用但 llm/agentDefaultModel 属性仍抛——证明走 get 即可正常工作
-  const mixed = new Proxy({ get: (n) => (n === 'llm' ? { stream: () => streamOf([{ type: 'text-delta', index: 0, text: '纠错后' }]) } : n === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined) }, { get(t, prop) { if (prop === 'get') return t.get; throw new Error('no inject') } })
-  assert.equal(await correctText(mixed, '原文', 'zh'), '纠错后', '走 ctx.get 的属性抛错形态下纠错仍生效')
+  // 注意：mock 的纠错输出不能以纠正动词（修正/纠正/更正/纠错）开头——那会被
+  // llm-correct.ts 的 CORRECTION_PREAMBLE_RE 前言护栏命中并回退原文（R1 I-3，
+  // 方向正确：这类输出本就是前言样文本）。故用 '改好的文本' 这类非动词前缀串，
+  // 保持本用例意图（proxy 抛错形态下纠错仍生效）不变。
+  const mixed = new Proxy({ get: (n) => (n === 'llm' ? { stream: () => streamOf([{ type: 'text-delta', index: 0, text: '改好的文本' }]) } : n === 'agentDefaultModel' ? { currentSelection: () => ({ provider: 'p', model: 'm' }) } : undefined) }, { get(t, prop) { if (prop === 'get') return t.get; throw new Error('no inject') } })
+  assert.equal(await correctText(mixed, '原文', 'zh'), '改好的文本', '走 ctx.get 的属性抛错形态下纠错仍生效')
 })
 
 await t('回退③：stream 抛错 → 原样返回（纠错不可用不阻断发送）', async () => {

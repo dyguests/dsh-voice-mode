@@ -1,12 +1,16 @@
 /**
- * Issue #15 host 侧修复回归（B1 之外的 Important/Minor 行为锁）：
+ * Issue #15 host 侧修复回归（B1 之外的 Important/Minor）：混合定位——**合同级快速锁
+ * **（源码形态/正则断言，毫秒级、不依赖时序）+ **行为级实证**（真编译 asr-host.ts /
+ * tts-queue.ts 驱动，分钟级）。行为级用例共 3 条（文末两段 sweep + listEdgeVoices）：
  *  I2 错误响应一律 writeHead（gzip 包装器下隐式头会产出 ERR_CONTENT_DECODING_FAILED）；
- *  I4 限流键反代不塌缩（X-Forwarded-For 首段，仅回环来源采信）；
+ *  I4 限流键反代不塌缩（X-Forwarded-Host 首段，仅回环来源采信）；
  *  M7 /toggle 缺 on 显式 400；M6 /correct enabled=false 返 403 + per-client 限流键；
  *  M11 /asr、/stream 补跨源校验；M13 /models/clean 删两个 kokoro 精度目录；
  *  M3 /models/retry 补 .catch；M14 collectBody 413 后 pause + flush 后断流。
  *  R2 验真轮：M1 sweep 孤立 sid 扫描漏判 finalizing 在途定稿 → resetGen 代际可复用 →
- *  陈旧定稿文本写入新会话缓存（Important 回归）——见文末行为级复现。
+ *    陈旧定稿文本写入新会话缓存（Important 回归）——loop2（resetGen 扫描）行为级实证。
+ *  R3 验真轮：loop1（finalized 扫描）守卫行为级零锁 → 两段式用例补上（先产缓存再
+ *    在途定稿+sweep；与 loop2 毒链用例互为独立变异锁定，只废其一另一个仍绿）。
  * 运行：node test/host-fixes.test.mjs（离线，无网络/无 dsh 依赖）。
  */
 import assert from 'node:assert/strict'
@@ -22,14 +26,14 @@ const src = (f) => readFileSync(join(here, '..', 'src', f), 'utf8')
 const indexSrc = src('index.ts')
 
 let passed = 0
-const t = (name, fn) => {
-  fn()
+const t = async (name, fn) => {
+  await fn()
   passed++
   console.log('  ✓ ' + name)
 }
 
 console.log('I2 错误响应走 respondJson（writeHead 铁律）')
-t('denyNonLoopback / denyCrossOrigin 无隐式头路径', () => {
+await t('denyNonLoopback / denyCrossOrigin 无隐式头路径', () => {
   // 隐式头 = statusCode 赋值 + setHeader + end 三段式；gzip 包装器只拦 writeHead。
   for (const guard of ['denyNonLoopback', 'denyCrossOrigin']) {
     const i = indexSrc.indexOf(`const ${guard} =`)
@@ -40,7 +44,7 @@ t('denyNonLoopback / denyCrossOrigin 无隐式头路径', () => {
     assert.ok(/respondJson\(res, 403/.test(body), `${guard} 未走 respondJson`)
   }
 })
-t('preview / toggle / cancel 三处 429 与 /mode 400/500 全部 respondJson', () => {
+await t('preview / toggle / cancel 三处 429 与 /mode 400/500 全部 respondJson', () => {
   // 路由体内不得再出现隐式头三段式（405 Allow 头是合法的非 JSON 响应，排除）。
   const implicit = [...indexSrc.matchAll(/res\.statusCode\s*=\s*(\d+)[\s\S]{0,200}?res\.setHeader\('content-type'/g)]
   assert.equal(implicit.length, 0, `仍有 ${implicit.length} 处隐式头 JSON 响应（gzip 包装器下断链）`)
@@ -60,7 +64,7 @@ t('preview / toggle / cancel 三处 429 与 /mode 400/500 全部 respondJson', (
 })
 
 console.log('I4 限流键反代不塌缩')
-t('clientKey：仅回环来源采信 X-Forwarded-For 首段', () => {
+await t('clientKey：仅回环来源采信 X-Forwarded-For 首段', () => {
   const i = indexSrc.indexOf('const clientKey =')
   assert.ok(i > 0, '缺 clientKey 助手')
   const body = indexSrc.slice(i, indexSrc.indexOf('\n  }\n', i))
@@ -69,7 +73,7 @@ t('clientKey：仅回环来源采信 X-Forwarded-For 首段', () => {
   assert.ok(/split\(','\)\[0\]/.test(body), '未取首段（最左=原始客户端）')
   assert.ok(/remoteAddress/.test(body), '缺 remoteAddress 回退')
 })
-t('preview / correct 限流键都经 clientKey（不再裸 remoteAddress / 全局键）', () => {
+await t('preview / correct 限流键都经 clientKey（不再裸 remoteAddress / 全局键）', () => {
   assert.ok(indexSrc.includes('preview:${clientKey(req)}'), 'preview 键未走 clientKey')
   assert.ok(indexSrc.includes('correct:${clientKey(req)}'), 'correct 键未走 clientKey')
   assert.ok(!/preview:\$\{req\.socket\.remoteAddress/.test(indexSrc), 'preview 仍裸用 remoteAddress')
@@ -77,7 +81,7 @@ t('preview / correct 限流键都经 clientKey（不再裸 remoteAddress / 全�
 })
 
 console.log('M6 /correct 语义分流')
-t('enabled=false 返 403 voice_disabled（不再与限流 429 混谈）', () => {
+await t('enabled=false 返 403 voice_disabled（不再与限流 429 混谈）', () => {
   const i = indexSrc.indexOf('path: `${base}/correct`')
   const end = indexSrc.indexOf('ctx.effect(() =>', i + 10)
   const body = indexSrc.slice(i, end)
@@ -87,7 +91,7 @@ t('enabled=false 返 403 voice_disabled（不再与限流 429 混谈）', () => 
 })
 
 console.log('M7 /toggle 缺 on 显式 400')
-t('on 缺失显式 400，不静默落退出分支', () => {
+await t('on 缺失显式 400，不静默落退出分支', () => {
   const i = indexSrc.indexOf('path: `${base}/toggle`')
   const end = indexSrc.indexOf('ctx.effect(() =>', i + 10)
   const body = indexSrc.slice(i, end)
@@ -98,7 +102,7 @@ t('on 缺失显式 400，不静默落退出分支', () => {
 })
 
 console.log('M11 /asr 与 /stream 补跨源校验')
-t('两个路由都在 denyNonLoopback 之后紧跟 denyCrossOrigin', () => {
+await t('两个路由都在 denyNonLoopback 之后紧跟 denyCrossOrigin', () => {
   for (const p of ['asr', 'stream']) {
     const i = indexSrc.indexOf(`path: \`\${base}/${p}\``)
     assert.ok(i > 0, `缺 /${p} 路由`)
@@ -110,7 +114,7 @@ t('两个路由都在 denyNonLoopback 之后紧跟 denyCrossOrigin', () => {
 })
 
 console.log('M13 /models/clean 删两个 kokoro 精度目录')
-t('kokoro 清理覆盖 int8 + fp32', () => {
+await t('kokoro 清理覆盖 int8 + fp32', () => {
   const i = indexSrc.indexOf('path: `${base}/models/clean`')
   const end = indexSrc.indexOf('ctx.effect(() =>', i + 10)
   const body = indexSrc.slice(i, end)
@@ -121,7 +125,7 @@ t('kokoro 清理覆盖 int8 + fp32', () => {
 })
 
 console.log('M3 /models/retry 补 .catch')
-t('retryModel 链带 .catch（对齐 download/clean）', () => {
+await t('retryModel 链带 .catch（对齐 download/clean）', () => {
   const i = indexSrc.indexOf('path: `${base}/models/retry`')
   const end = indexSrc.indexOf('ctx.effect(() =>', i + 10)
   const body = indexSrc.slice(i, end)
@@ -130,7 +134,7 @@ t('retryModel 链带 .catch（对齐 download/clean）', () => {
 })
 
 console.log('M14 collectBody 413 后止读断流')
-t('413 分支 pause + flush 后 destroy', () => {
+await t('413 分支 pause + flush 后 destroy', () => {
   const i = indexSrc.indexOf('function collectBody')
   const body = indexSrc.slice(i, indexSrc.indexOf('\n}\n', i))
   const over = body.indexOf("respondJson(res, 413")
@@ -141,7 +145,7 @@ t('413 分支 pause + flush 后 destroy', () => {
 })
 
 console.log('I3 + M7 zod 界（两层一致）')
-t('Config 数值字段与 settings schema 同界', () => {
+await t('Config 数值字段与 settings schema 同界', () => {
   const cfg = indexSrc.slice(indexSrc.indexOf('export const Config:'), indexSrc.indexOf('/**\n * 0.1.7+ 路径 B'))
   const expect = [
     ['rate', 0.5, 2],
@@ -160,7 +164,7 @@ t('Config 数值字段与 settings schema 同界', () => {
 })
 
 console.log('M15 turnGen 随回合表一并清理')
-t('clearTurnState 同时清 turnStates 与 turnGen，三处收尾都走它', () => {
+await t('clearTurnState 同时清 turnStates 与 turnGen，三处收尾都走它', () => {
   assert.ok(/const clearTurnState = /.test(indexSrc), '缺 clearTurnState 助手')
   const uses = indexSrc.match(/clearTurnState\((?:sid|previous|sessionId)\)/g) ?? []
   assert.equal(uses.length, 3, `clearTurnState 应覆盖 退出/让出/被抢占 三处，实际 ${uses.length}`)
@@ -170,11 +174,13 @@ t('clearTurnState 同时清 turnStates 与 turnGen，三处收尾都走它', () 
 })
 
 console.log('R2：sweep 孤立 sid 扫描必须排除 finalizing 在途定稿（快速契约锁）')
-t('两个扫描循环的 continue 条件都含 finalizing.has(sid)', () => {
+await t('两个扫描循环的 continue 条件都含 finalizing.has(sid)', () => {
   const asrSrc = src('asr-host.ts')
   // M1 引入的回归：只判 segments.has(sid) 会在 senseP 窗口内误删 resetGen → 代际可复用
-  // → 陈旧定稿文本写入新会话缓存（Important）。完整毒链的行为级实证见本文件末尾
-  // （耗时 ~32s），此处为不依赖时序的快速锁。
+  // → 陈旧定稿文本写入新会话缓存（Important）。行为级实证两条（文末，耗时长）：
+  //   loop2（resetGen 扫描）= R2 毒链用例；loop1（finalized 扫描）= R3 两段式用例。
+  // 本快速锁不依赖时序，但单独不足以定位到具体循环——变异实证：只废 loop1 守卫时
+  // 本锁对 loop1 的失守不可见（两条循环同形），行为级用例才分得开。
   const guards = [...asrSrc.matchAll(/if \(segments\.has\(sid\)[^\n]*continue/g)]
   assert.equal(guards.length, 2, `sweep 应有 2 处孤立 sid 扫描循环，实际 ${guards.length}`)
   for (const [full] of guards) {
@@ -243,21 +249,25 @@ export async function ensureModelFile() { return true }
 export async function ensureModelTree() { return true }
 `,
 )
-// sense-worker 桩：decode 可控——第 1 次（idx=0）挂起等放行（制造 senseP 在途窗口），
-// 第 2 次起立即返回「新鲜」文本。这样「缓存命中」与「重新定稿」在返回值上可区分：
-// 命中=STALE-TEXT（投毒），重定=FRESH-TEXT（正常）。terminate 真终止 worker 线程并
-// 暴露可 await 的完成句柄，让测试收尾确定性等待（不靠魔法 sleep）。
+// sense-worker 桩：decode 可控——默认 0 号挂起等放行（旧毒链用例依赖），其余经
+// __senseHang(idx) 显式挂起（R3 两段式 loop1 用例用）；未挂起的调用立即返回
+// textFor(idx)（0→STALE-TEXT，其余→FRESH-TEXT）。这样「缓存命中」与「重新定稿」
+// 在返回值上可区分。terminate 真终止 worker 线程并暴露可 await 的完成句柄，
+// 让测试收尾确定性等待（不靠魔法 sleep）。
 const senseStub = join(sweepTmp, 'sense-stub.mjs')
 writeFileSync(
   senseStub,
   `
 const releases = []
+const hang = new Set([0])
 let calls = 0
 let realWorker = null
 let terminateDone = Promise.resolve()
 const textFor = (idx) => (idx === 0 ? 'STALE-TEXT' : 'FRESH-TEXT')
 globalThis.__senseCalls = () => calls
-globalThis.__senseReleaseFirst = (text) => releases[0](text)
+globalThis.__senseHang = (idx) => hang.add(idx)
+globalThis.__senseRelease = (idx, text) => releases[idx]?.(text)
+globalThis.__senseReleaseFirst = (text) => releases[0]?.(text)
 globalThis.__senseAwaitTerminate = () => terminateDone
 export function createSenseWorkerClient(w) {
   realWorker = w
@@ -265,7 +275,7 @@ export function createSenseWorkerClient(w) {
     request: async (op) => {
       if (op === 'create') return true
       const idx = calls++
-      if (idx === 0) return new Promise((resolve) => { releases[0] = resolve })
+      if (hang.has(idx)) return new Promise((resolve) => { releases[idx] = resolve })
       return textFor(idx)
     },
     onDeath: () => {},
@@ -350,6 +360,82 @@ await t('定稿在途时 sweep 不回收 resetGen：barge-in 后旧定稿不得�
     //     路径由 bundle 的 import.meta.url 推导，worker 线程可能在测试结束后才排空/
     //     加载入口模块；若目录被 rmSync 掉，该线程抛 MODULE_NOT_FOUND 污染输出
     //     （两个 teammate 实测复现）。占位文件仅数 KB，留 tmpdir 由 OS 回收。
+    rt.dispose()
+    await globalThis.__senseAwaitTerminate()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// R3 验真轮：sweep loop1（finalized 扫描循环）的 finalizing 守卫零有效锁——
+// 现有毒链用例首句在途时 finalized 为空（reset 会清 finalized，见 runtime.reset），
+// loop1 的 finalized.keys() 迭代结构上够不到；上方「快速契约锁」虽两条循环都扫，
+// 但行为级只覆盖了 loop2（resetGen 扫描）。
+//
+// 两段式（关键：全程不插 reset——reset 会清 finalized，缓存存活本身即是判据）：
+//   阶段 1：epoch0 定稿成功 → finalized[SID][0]='FIRST-OK'（loop1 的扫描对象）；
+//   阶段 2：等到 30s sweep 临近 → epoch1 定稿在途（senseP 挂起、段已摘除）→
+//           sweep 落入窗口：loop1 见 finalized 非空 + finalizing 在途；
+//           修复 → continue（缓存与代际都存活）；bug → 删 finalized+resetGen；
+//   阶段 3：第三句 final（epoch0）→ 修复：命中阶段 1 缓存原样返回（不重新定稿）；
+//           bug：缓存被删 → 重新定稿得 FRESH-TEXT（且 sense 调用数 +1）。
+// 耗时 ~31s（sweep 间隔 30s 无法压缩）。
+// ---------------------------------------------------------------------------
+console.log('R3：sweep loop1（finalized 扫描）不得在定稿在途时删缓存')
+
+await t('sweep loop1 finalizing 守卫：定稿缓存存在时在途定稿不回收（缓存存活+不重定稿）', async () => {
+  const SID = 's-sweep-loop1'
+  const samples = new Float32Array(1600).fill(0.1)
+  const base = globalThis.__senseCalls()
+  const rt = createAsrRuntime({
+    cacheDir: sweepTmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => true,
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto',
+  })
+  try {
+    rt.reset(SID) // gen=1
+    // ── 阶段 1：epoch0 定稿成功 → 产生 finalized 缓存
+    const i1 = globalThis.__senseCalls()
+    globalThis.__senseHang(i1)
+    const first = rt.feed(SID, samples, true, 0, 0, true)
+    await sleep(300)
+    globalThis.__senseRelease(i1, 'FIRST-OK')
+    await first
+    await sleep(100)
+    // ── 阶段 2：逼近 30s sweep 间隔 → epoch1 定稿在途（senseP 挂起制造窗口）
+    // 注意 feed 实参顺序是 (sessionId, samples, final, offset, epoch, manualPressed)：
+    // 阶段 2 必须用**不同 epoch**（1），否则会命中阶段 1 的 epoch0 缓存而直接返回，
+    // 根本不会产生在途定稿——那样 sweep 见 finalizing 无该 sid 而删缓存是**正确**行为，
+    // 用例会假红（实测阶段 2 返回 'FIRST-OK'、senseCalls 不增即此因）。
+    await sleep(29200)
+    const i2 = globalThis.__senseCalls()
+    globalThis.__senseHang(i2)
+    const second = rt.feed(SID, samples, true, 0, 1, true)
+    await sleep(400) // 等 finalizing 登记完成（feed 内有 await getRecognizer）
+    // T≈30s：sweep 触发。loop1 见 finalized.has(SID)（阶段 1 产出）+ finalizing.has(SID)
+    //   → 修复 continue；bug（守卫废）删 finalized+resetGen。
+    await sleep(2200)
+    // 放行在途定稿（无 reset → 代际不变，写回守卫 1===1 两条路径都放行；
+    // 差别只在缓存是否被 sweep 删过：bug 路径 finalized 被删后由写回重建为 {1:…}，
+    // 阶段 1 的 epoch0 条目已丢失）。
+    globalThis.__senseRelease(i2, 'STALE-TEXT-1')
+    await second
+    await sleep(100)
+    // ── 阶段 3：第三句 final（epoch0）：修复命中阶段 1 缓存；bug 缓存缺席重新定稿
+    const third = await rt.feed(SID, samples, true, 0, 0, true)
+    assert.equal(
+      third.text,
+      'FIRST-OK',
+      'loop1 守卫失效：sweep 在定稿在途时删了 finalized 缓存——客户端重试同 epoch final 将丢缓存重定稿（loop1 行为级零锁）',
+    )
+    assert.equal(globalThis.__senseCalls(), base + 2, '第三句应命中阶段 1 缓存（未重新定稿）')
+  } finally {
+    // 生命周期依赖同上方毒链用例（勿改回随手 rmSync）：dispose 清 sweep timer +
+    // 确定性等 worker 终止；sweepTmp 固定目录不删除（worker 入口模块延迟加载）。
     rt.dispose()
     await globalThis.__senseAwaitTerminate()
   }

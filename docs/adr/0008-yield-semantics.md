@@ -126,7 +126,7 @@ YIELDING (let the user interrupt)
 - `src/client.tsx:1539`（`onAecState` 回调已用，证明回调注入机制成熟）
 - `CONTEXT.md:26`（"打断计数仅在播放期累积"不变量）
 - `CONTEXT.md:27`（"不丢句"不变量）
-- `CONTEXT.md:34-35`（"echoGateDb 原生 AEC 生效时从未被执行"真机事实）
+- `CONTEXT.md:39-40`（"echoGateDb 原生 AEC 生效时从未被执行"真机事实；lead 提示 38-39，实测该 bullet 在 39-40，38 为播放门行）
 - `@deepseek-ai/dsh-system-prompt@0.1.5-rc.1/lib/types/index.d.ts:12-13, 27`（`SystemPrompt` service 已暴露）
 - `docs/findings/2026-09-15-yield-semantics-research.md`（让位调研 7 机制详细）
 - `docs/competitive/sources/scan-system-prompt-design-2026-09.md`（4 层模板完整设计稿）
@@ -155,7 +155,7 @@ YIELDING (let the user interrupt)
 - [ ] 1s 后 LLM 没继续生成（TTS 不重启）—— 真机实测
 - [ ] 6s 沉默触发"自动续话 break silence"（若用户启用此项设置）
 - [ ] **不破坏** `CONTEXT.md:27 finalize 不丢句不变量`（pauseAtBoundary 必须经 epoch 通道）
-- [ ] **不破坏** `CONTEXT.md:33 播放门分支不得 return`（pauseAtBoundary 只入队、不 broadcast return）
+- [ ] **不破坏** `CONTEXT.md:38 播放门分支不得 return`（pauseAtBoundary 只入队、不 broadcast return）
 - [ ] schema 兼容：现有用户配置 reload 时不报错（zod union 兜底）
 - [ ] 跨 dsh 版本矩阵（0.1.1-rc.2 → 0.1.5-rc.2）typecheck + smoke 跑过
 

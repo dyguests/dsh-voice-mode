@@ -497,7 +497,7 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 7. **批 6 已闭环** `bf09967`+`86d0566`+`3bb0519`（四档生效文案+当前生效值提示（runtime-boot 镜像源，审查 I-1 后修）+静默路径提示/SSE 断连/诊断复制（批 7）；两路审查 fail 项全修——批 6 I-1 镜像口径/I-2 补字段、批 7 B1 补提测试文件/I1 mtime/I2 锁紧/I3 计划收窄登记）。
 8. **批 8 已入库**：0.2.1-rc.2 runtime 冒烟全量通过（含设置卡片 16 断言）；0.2.1-alpha.5 设置卡片探针稳定失败 3/3 但经发布包 0.7.25 A/B 实证非插件回归（compat-contract §20）；桌面 Electron 冒烟无桌面环境未跑（用户侧 Windows 先例，已登记真机项）。
 9. **收口完成**：CHANGELOG [Unreleased] Issue #15 条目、CONTEXT.md 设置语义刷新、`docs/issue-15-reply.md` 回复稿（待用户直发——注意本机 GitHub token 是 fine-grained PAT 无跨仓库 discussions:write 权限，需用户网页端发或提供 classic token，同 #8250 排查结论）。
-10. **待用户拍板**：发版（建议 patch 0.7.26）；issue 回帖；桌面冒烟补跑；alpha.5 探针复跑。npm test 583 项全绿（48 个测试文件；口径 = 各文件「N 项通过」之和 = `npm test 2>&1 | grep -c '✓'` 行数 = 583，两种求和法一致，2026-10-19 集成轮实测）。计数沿革：R1 docs 审查时为 41 文件 / 518 项（22:36 实测）；R1 测试审查 B1 发现 `steer-submit` 9 处 + `llm-correct` 10 处漏 await 曾使这两个文件 summary 在 19 个用例执行完前提前打印、自报少 19（修复后两口径一致）；集成轮 fix-test 新增 7 个登记文件 + 31 项**行为级**测试 → 48 文件 / 583 项（两个口径勿混用：31 项为行为级；48 文件/583 项为全套件计数，另含合同级/静态守卫类用例，如 `host-fixes.test.mjs` 为合同级非行为级）。
+10. **待用户拍板**：发版（建议 patch 0.7.26）；issue 回帖；桌面冒烟补跑；alpha.5 探针复跑。npm test 603 项全绿（49 个测试文件；口径 = 各文件「N 项通过」之和 = `npm test 2>&1 | grep -c '✓'` 行数 = 603，两种求和法一致，2026-10-20 R3 后实测）。计数沿革：R1 docs 审查时 41 文件 / 518 项（22:36 实测）→ R1 测试审查 B1（`steer-submit` 9 处 + `llm-correct` 10 处漏 await 致两文件 summary 提前打印少报 19，修后两口径一致）→ R2 集成轮 fix-test 新增 7 登记文件 + 31 项**行为级**测试 → 48 文件 / 583 项 → R3 后 49 文件 / 603 项（+20 = correct-cycle-behavior 9 + host-fixes 12→15 + silent-path-hints 13→19 + finalize-ux 8→9 + settings-effective 13→14）。两口径勿混用：行为级测试数（R2 31 项 → R3 42 项，以 fix-test 枚举为准）与全套件 49 文件/603 项（另含合同级/静态守卫类，如 `host-fixes.test.mjs`）是两回事。
 
 ---
 
@@ -507,7 +507,7 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 
 **R1 发现轮**（7 个只读代理并行：asr.ts / client.tsx / host 侧 / 新模块+i18n / docs 事实核查 / test 全套 / UX 第一性原理）→ 汇总去重后创建 R2 修复任务板。
 **R2 修复轮**（6 个 teammate：fix-asr / fix-client / fix-host / fix-modules / fix-docs / fix-test，write scope 不相交）+ 3 轮收尾派单（backchannelDropped 消费接线、stopRecorder 竞态、缺失 strings 键、descBargeIn 披露、行为测试补齐）。
-**R2 集成轮**：fix-test 补 31 项行为测试（fail-streak-notice / steer-submit-behavior / partial-gating / host-security-behavior）+ 登记 7 个新测试文件；fix-docs 终态 sync（计数 583/48、27 处行号、93 处 sed 自检）。
+**R2 集成轮**（R2 时点口径 583/48，现为 603/49）：fix-test 补 31 项行为测试（fail-streak-notice / steer-submit-behavior / partial-gating / host-security-behavior）+ 登记 7 个新测试文件；fix-docs 终态 sync（计数 583/48、27 处行号、93 处 sed 自检）。
 **R2 入库并 push**：`6995ae7`（73 文件 +3952/-837；78200ec..6995ae7 已推 origin/main）。
 
 **R2 修复的 5 个 Blocker**（均经独立审查 fail→修复→验真）：ECHO_TAIL 400ms 回声尾音宽限自 6b1ea37 起从未生效（createAudioEngine 收裸闭包不记 playing 降沿）；错误提示面与激活态耦合（micDenied/429/空闲退出/autoResume 五条路径永不可见）；wake 门被 host 202 击穿（唤醒词泄漏进消息，issue #10 症状回归）；tts-queue setEngine 不升 epoch（引擎热切换后前 N 句静默丢弃+孤儿泵双轨）；README 设置表漏 2 项与回复稿直接矛盾。
@@ -520,7 +520,13 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 5. CHANGELOG [Unreleased] 缺 R2 条目；
 6. asr.ts 12 项修复仅 2 项有抓红测试（I1-I4 无行为测试锁定）+ start() 漏世代守卫 + worklet 回退路径漏复检。
 
-**R3 修复轮（进行中）**：6 个 teammate 并行修上述项；fix-test 的行为测试在 src 落定后补。
+**R3 修复轮已落库**（`c11d311`+`6ddfb09`，已 push）：6 Important 全修（sweep finalizing 判定/纠错周期令牌/回填窗收移/短输入护栏/start 世代守卫+worklet 回退/5xx 连败）+ host-fixes 退出崩溃三层修法 + correct-cycle-behavior 9 项行为测试；npm test 603/49。
+**R3 验真轮结论（4 只读代理）**：**无 Blocker**；R3 修复本体 6/7 关闭+1 部分关闭（仅 tts-queue B1 注释行号）；新增 6 个 Important 转 R4：①host-fixes 同步 t 复辟 R2-B1 反模式（两个代理独立发现）②双发防护腿缺行为级锁（移位置后全绿）③**modules R3 的 en 前言放宽引入不安全方向漏拦**（三类元叙述形态穿过护栏且被测试固化——R3 修法的副作用）④lib BUILD_TAG 指向 dangling commit（13b9252 被 amend 掉）⑤文档计数 15 处过期（583/48→603/49）+缺 R3 CHANGELOG 条目+基线未滚 ⑥sweep loop1 守卫零有效锁（mutD 单废 loop1 全套件绿）。
+**R4 修复轮（进行中）**：fix-test（t 改 async+双发腿行为锁+loop1 两段式毒链+asr 生命周期行为锁）/fix-modules（en 前言回退严格形态+测试固化修正+注释数字）/fix-client（M-f 机制注释+矛盾注释）/fix-docs（603/49 十五处+R3 CHANGELOG+基线滚 6ddfb09+STATE+行号终态 sync）/fix-host（unref 表述）。
+
+**产品待决项（R3 验真轮实测数据支撑，待用户拍板）**：
+1. **LLM 纠错相似度护栏**：验真代理实测归一化 Levenshtein ≥0.5 区分度干净——合法纠错 0.75-0.95（「现再几点」→「现在几点」0.75、「帮我差一下天气」→「帮我查一下天气」0.86）vs 作答/复述形态 0.11-0.43（「现在几点」→「现在是下午三点。」0.38）；约 15 行无依赖，误报方向安全（回退原文）。当前长度护栏够不到「与原文等长的简短作答」（已实测复证）。建议上车，待用户确认。
+2. backchannel 让位丢一句（行为不改、注释如实）；待机期附和词护栏；toggle+manual 待机态 push-to-talk；yieldedSegment 弃段误伤面（让位后只说单个附和词会被弃）；待机期模型下载提示；host 202 不喂流致重复 202 的段音频处理（新旧同症，已论证不丢段）。
 
 **流程校正（记入）**：`6995ae7` 的 commit message 称「每个 Blocker/Important 修复均有变异实证」——asr 验真实证 12 项仅 2 项有抓红测试，言过其实。后续 commit message 只写实证过的范围。
 **产品取舍登记待用户**（未擅自做）：backchannel 让位丢一句、待机期附和词护栏、toggle+manual 待机态 push-to-talk、yieldedSegment 弃段的误伤面（让位后只说单个附和词会被弃）、steer 前 beginSubmission 回显（宿主无此符号，待核）、待机期模型下载提示（202 不亮 loading-model 的代价）、host 202 不喂流致重复 202 丢段音频（新旧同症）。

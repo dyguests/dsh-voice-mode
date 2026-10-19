@@ -1108,7 +1108,11 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   // （host 串行逐句合成，句间不交错；新句/打断后自动重建缓冲）。
   // 双重奏根治：skip/打断/退出后，SSE 在途的旧回合帧（已发出无法撤回）会在拼帧缓冲
   // 重建后重新入队播放。以 sentenceId 记拒绝线：≤ 线的帧一律丢弃；host 的 sentenceId
-  // 跨回合单调递增（cancel 不清 seq），新回合必然 > 线；enter 重入成功后清线。
+  // 跨回合单调递增（cancel 不清 seq），新回合必然 > 线。
+  // R3：此处原注「enter 重入成功后清线」与下方 enter 的「拒绝线保留…不清线」直接
+  // 矛盾（6995ae7 起既有）——以代码行为为准：线只在 SSE 'open'（断线重连）清、
+  // doSkipAudio（skip/打断/退出）设；enter 既不清也不设（重入后新句 seq > 线，
+  // 旧帧 ≤ 线仍被拒，见 enter 内注释）。
   const rejectSeqUpTo = new Map<string, number>()
   /** 各会话最后完整入队（final）的 sentenceId（skip 取线用）。 */
   const lastFinalSeq = new Map<string, number>()
@@ -1260,6 +1264,10 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         // M-c：重置回声尾音宽限起点——上会话自然停播 ≤400ms 内快速重入并立即开口时，
         // 残留 playingEndAt 会让 isPlaying 误判「朗读中」→ 丢首 400ms 语音（skip 路径
         // doSkipAudio 已置 0，自然停播路径没有，补在进入口）。
+        // 已知取舍（R3 登记，真机验证由 PM 安排）：typing 退出（keepAudio）→ 自然
+        // 停播 ≤400ms 内快速重入并立即开口，这条路径的尾音宽限同样被重置丢掉——
+        // 物理残响仍在，只剩 AEC 兜底。窄窗口 + 优先级合理：丢用户首 400ms 比
+        // 漏残响（自聊/误打断）更糟，故接受。
         playingEndAt = 0
         notify()
         if (!res.ok) return { ok: false, error: errorText(out, 'enterFail') }
@@ -1287,6 +1295,13 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         // 重入后新句 seq > 线、旧帧 ≤ 线仍被拒）。
         doSkipAudio()
       }
+      // R3（M-f 登记，设计取舍不改码）：keepAudio 路径**故意不清拼帧缓冲**——
+      // 清缓冲属停播路径（doSkipAudio）的清理，与「不停播」语义相悖。悬挂的半句
+      // 缓冲无害，真实安全机制是拼帧自身的两道守卫，**不是**拒绝线（rejectSeqUpTo
+      // 只在 SSE 'open' 清、skip/退出设，enter 既不清也不设）：
+      //  ① sentenceId 变化即重建缓冲（audioListeners 内 frame.sentenceId !== curSentenceId）；
+      //  ② final 帧 chunkId 与 curChunkCount 完整性校验，不匹配整句丢弃。
+      // 重入后 host 新句 seq 不同 → 守卫①重建；即便同号，守卫②丢坏句——无跨会话混帧。
       try {
         const res = await fetch(`${location.origin}${basePath}/toggle`, {
           method: 'POST',

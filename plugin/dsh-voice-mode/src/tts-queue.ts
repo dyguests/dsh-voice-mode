@@ -163,9 +163,17 @@ export async function listEdgeVoices(force = false): Promise<Array<{ ShortName: 
     // 设置面板「选 Edge 音色」转圈到浏览器超时，且 tts 实例悬挂。库不暴露信号，
     // 故在调用侧用 Promise.race 兜底（库内超时只覆盖 WS，与 models.ts 同思路：
     // 只兜「上游不响应」，不限制正常往返）。
-    // R2 验真轮：超时 timer 成功后也必须 clear——早年只 unref，race 落定后 timer
-    // 仍走完（与 asr-host.ts senseP 的 M2 同一反模式）：/voices 每次调用留一个
-    // 30s 悬挂 timer，设置面板多次拉取音色即累积，拖慢 host 且阻挠进程自然退出。
+    // R2 验真轮：超时 timer 落定后也 clear（与 asr-host.ts senseP 的 M2 同一反模式：
+    // 持句柄 + race 落定即 clear）。注意 impact 表述要如实——早年实现带了 `.unref()`，
+    // **unref 的 timer 不阻挠进程自然退出**（实测仅挂一个 unref 30s timer 的进程 37ms
+    // 即退出），所以这里不是「修退出阻塞」。clear 的价值有两条：
+    //  1) 避免长会话累积悬挂句柄——/voices 每次调用留一个 30s timer，设置面板反复
+    //     拉取音色（或 force 刷新）即累积，虽不阻退出但仍常驻 timer 堆；
+    //  2) 与 asr-host senseP 修法统一——那一处的 timer **没有** unref（是 ref'd），
+    //     不 clear 真的会拖住 host 退出，两处同一模式便于对照审查。
+    // 已知测试局限：「只 unref 不 clear」这一中间态在外部不可观测
+    // （getActiveResourcesInfo / _getActiveHandles 均不报 unref'd timer），故回归测试
+    // 只能锁「clear 到位」，抓不住回退到 unref-only——已在 test/host-fixes.test.mjs 注明。
     let voicesTimer: ReturnType<typeof setTimeout> | null = null
     const voices = await Promise.race([
       tts.getVoices(),
@@ -245,7 +253,7 @@ export class TtsQueue {
    *  2) seq 归零撞拒绝线：删队列后重入的新 SessionQueue seq 从 0 起算，而 client 的
    *     sentenceId 拒绝线（rejectSeqUpTo）是「旧会话遗留的最大句号」，新回复前 N 句
    *     全部 ≤ 线被静默丢弃——正是 /toggle 用 cancel 而非 prune 保 seq 连续的同一条
-   *     不变式（index.ts:1169-1170 进模式、index.ts:1201-1203 让出/退出）。
+   *     不变式（index.ts:1176 进模式 cancel / :1190 让出旧会话 cancel(previous) / :1209 退出 cancel）。
    * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身
    * （seq 连续递增，跨引擎切换不归零）。
    */

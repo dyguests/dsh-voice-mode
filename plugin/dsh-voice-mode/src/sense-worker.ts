@@ -8,7 +8,7 @@
  * 本文件把「createOfflineRecognizer（约 1.5s 载入 228MB）+ 整段 decode」整体搬进
  * worker_threads：worker 常驻、持有 recognizer 缓存（create 后复用），decode 在
  * worker 内同步执行——不阻塞主线程事件循环。主线程侧经消息 RPC 异步等待回执，
- * 20s 兜底（在 asr-host.ts:595 真源）此时才真正可触发。
+ * 20s 兜底（在 asr-host.ts:598-606 真源）此时才真正可触发。
  *
  * 消息协议（JSON，request id 配对）：
  *   主 → worker: { id, op: 'create' } | { id, op: 'decode', samples: Float32Array }

@@ -83,7 +83,8 @@ await t('I-3 护栏①：超长输出（复述/作答形态）→ 回退原文',
   assert.equal(await correctText(ctxWith([{ type: 'text-delta', index: 0, text: bloated }]), '帮我查一下天气', 'zh'), '帮我查一下天气')
 })
 
-await t('I-3 护栏②：前言前缀（「修正后：」「Corrected:」）→ 回退原文', async () => {
+await t('I-3 护栏②：前言前缀/元叙述（动词前缀即命中，R3 回退冒号要求）→ 回退原文', async () => {
+  // 带冒号的说明头（R1 原始形态）。
   assert.equal(
     await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '修正后：帮我查一下天气' }]), '帮我查一下天气', 'zh'),
     '帮我查一下天气',
@@ -92,14 +93,32 @@ await t('I-3 护栏②：前言前缀（「修正后：」「Corrected:」）→
     await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Corrected: check the weather' }]), 'check the weather', 'en'),
     'check the weather',
   )
-  // R2 Minor-2：en 分支补冒号要求——无冒号的 "Corrected …" 不再是前缀命中形态。
+  // R3：R2 的冒号要求放过三类元叙述（失败方向=静默替换用户消息）——回退「前缀即命中」后全收。
+  //   ① 无冒号元叙述；② 动词后句点阻断（[^.\n] 窗口够不着冒号）；③ 冒号超 20 字窗。
   assert.equal(
-    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Corrected the typo in the config file' }]), 'fix the confg file', 'en'),
-    'Corrected the typo in the config file',
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Correction applied to your text' }]), 'fix the confg file', 'en'),
+    'fix the confg file',
+    '无冒号元叙述应回退',
+  )
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Corrected. Here it is: check the weather' }]), 'check the weather', 'en'),
+    'check the weather',
+    '动词后句点阻断形态应回退',
+  )
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Corrected the typo in the config file you mentioned earlier: done' }]), 'fix the confg file', 'en'),
+    'fix the confg file',
+    '冒号超 20 字窗形态应回退',
+  )
+  // zh 无冒号前言样输出同样命中（前缀即命中，不再要求冒号）。
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '纠错后' }]), '原文', 'zh'),
+    '原文',
+    'zh 无冒号前言样输出应回退',
   )
 })
 
-await t('I-3 护栏边界：阈值 = max(3×原文, 原文+24)（R2 收短输入；无冒号前缀不误伤）', async () => {
+await t('I-3 护栏边界：阈值 = max(3×原文, 原文+24)（R2 收短输入）', async () => {
   // L=20：3L=60 主导（L+24=44）——60 通过 / 65 回退（与 R1 用例同值，公式切换不破）。
   const src20 = '原'.repeat(20)
   assert.equal(await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '改'.repeat(60) }]), src20, 'zh'), '改'.repeat(60), '60 字符（=3L）应通过')
@@ -113,12 +132,10 @@ await t('I-3 护栏边界：阈值 = max(3×原文, 原文+24)（R2 收短输入
   const src7 = '原'.repeat(7)
   assert.equal(await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '改'.repeat(31) }]), src7, 'zh'), '改'.repeat(31), '31 字符（=L+24, L=7）应通过')
   assert.equal(await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '改'.repeat(32) }]), src7, 'zh'), src7, '32 字符（>L+24, L=7）应回退')
-  // 无冒号的前言样文本（历史 llm-correct 测试的「纠错后」形态）不触发前缀护栏——只拦带说明头的输出。
-  assert.equal(await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '纠错后' }]), '原文', 'zh'), '纠错后')
 })
 
-await t('I-3 护栏不误伤（R2 Minor-2）：「修改：」开头的用户指令不再被前缀护栏回退', async () => {
-  // 误伤修复：「修改：把那个接口改成异步的」是真实用户指令——命中=白丢一次纠错（方向安全但误伤）。
+await t('I-3 护栏不误伤（R2 Minor-2 保留）：「修改：」开头的用户指令不被前缀护栏回退', async () => {
+  // 「修改：把那个接口改成异步的」是真实用户指令——「修改」已从动词表排除，不应误伤。
   const cmd = '修改：把那个接口改成异步的'
   assert.equal(
     await correctText(ctxWith([{ type: 'text-delta', index: 0, text: cmd }]), '修改：把那个接口改成异步的', 'zh'),

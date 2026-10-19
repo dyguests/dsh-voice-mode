@@ -607,7 +607,8 @@ export function apply(ctx: Context, config: Config): void {
    * 已知取舍（R2 验真轮补注）：回环上的**本地进程**仍可轮换伪造 XFF 换新桶绕过
    * 限流。彻底防住需要「反代颁发的可信连接标识」（如反代注入的带密钥头），超出本
    * 插件威胁模型——本地回环进程本就与插件同权限，可直连其它端口。现有兜底：
-   * RateLimiter.maxKeys=10000 在键满时 fail-closed 拒绝新键（security.ts:52-54），
+   * RateLimiter.maxKeys=10000 在键满时 fail-closed 拒绝新键（security.ts:60-62，:61 即
+   * `if (this.buckets.size >= this.maxKeys) return false`），
    * 伪造换桶最终会撞满键表而全体被拒，攻击者先伤己。
    *
    * 与 denyNonLoopback/denyCrossOrigin 同为本文件内的守卫助手（安全原语在

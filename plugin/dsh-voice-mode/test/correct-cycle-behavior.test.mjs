@@ -358,6 +358,38 @@ await t('令牌只增不减：同周期内重复 resolve 不重复提交（无�
   cleanup()
 })
 
+await t('双发防护腿：resolve 前已有提交在途（submitInFlightRef=true）→ 弃（防双发）', async () => {
+  // R2 I-2 后移后的形态：RTT 内别的提交已真正发出（runSubmit 置位）→ 本周期 then 必须弃。
+  // 对照见 ① 第三条（不预置 → 提交 exactly 1 次）。
+  const d = deferredCorrect()
+  const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
+  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  submitDraftNow()
+  await tick()
+  deps.submitInFlightRef.current = true // 预置：另一提交已在途
+  d.resolve('纠错文本')
+  await tick()
+  await tick()
+  assert.equal(counters.submit, 0, '纠错 then 发现提交已在途必须弃——否则同一文本双发')
+  assert.equal(counters.setDraft.length, 0, '弃置不得写回草稿')
+  cleanup()
+})
+
+await t('草稿改写腿：resolve 前用户改写草稿 → 弃（旧 snapshot 不得覆盖用户文本）', async () => {
+  const d = deferredCorrect()
+  const { deps, counters, cleanup } = makeDeps({ correctDraft: () => d.promise })
+  const submitDraftNow = makeSubmitDraftNow(Object.values(deps))
+  submitDraftNow()
+  await tick()
+  deps.draftRef.current = '用户改写后的新文本' // RTT 内用户打字（审查 I1 + UX-I2 复核条件）
+  d.resolve('旧 snapshot 的纠错文本')
+  await tick()
+  await tick()
+  assert.equal(counters.submit, 0, '纠错 RTT 内草稿被改写必须弃——旧 snapshot 提交会覆盖用户文本')
+  assert.equal(counters.setDraft.length, 0, '弃置不得写回草稿（用户改写留给用户）')
+  cleanup()
+})
+
 // ---------------------------------------------------------------- ③ hardBreak 清在途 + 废周期
 console.log('③ R2 I-3：hardBreak 清提交在途标记 + 废当前纠错周期')
 

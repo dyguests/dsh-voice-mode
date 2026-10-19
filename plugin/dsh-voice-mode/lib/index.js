@@ -1191,7 +1191,7 @@ var TtsQueue = class {
    *  2) seq 归零撞拒绝线：删队列后重入的新 SessionQueue seq 从 0 起算，而 client 的
    *     sentenceId 拒绝线（rejectSeqUpTo）是「旧会话遗留的最大句号」，新回复前 N 句
    *     全部 ≤ 线被静默丢弃——正是 /toggle 用 cancel 而非 prune 保 seq 连续的同一条
-   *     不变式（index.ts:1169-1170 进模式、index.ts:1201-1203 让出/退出）。
+   *     不变式（index.ts:1176 进模式 cancel / :1190 让出旧会话 cancel(previous) / :1209 退出 cancel）。
    * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身
    * （seq 连续递增，跨引擎切换不归零）。
    */
@@ -2261,7 +2261,7 @@ var en = {
 function correctionSystem(lang) {
   return lang === "en" ? "You are a speech-recognition corrector. The user text comes from ASR and may contain homophone errors, typos, or missing/wrong punctuation. Make only minimal fixes: correct typos/homophones and fix punctuation, preserving the original meaning and colloquial style. Do not rewrite sentences, do not add content, do not answer questions, and do not alter numbers or proper nouns. Output only the corrected text, with no explanation. If the input has no obvious errors, return it unchanged." : "\u4F60\u662F\u4E2D\u6587\u8BED\u97F3\u8BC6\u522B\u7EA0\u9519\u5668\u3002\u7528\u6237\u7684\u8BDD\u6765\u81EA\u8BED\u97F3\u8BC6\u522B\uFF08ASR\uFF09\uFF0C\u53EF\u80FD\u6709\u540C\u97F3\u5B57\u3001\u9519\u522B\u5B57\u3001\u6807\u70B9\u7F3A\u5931\u6216\u9519\u8BEF\u3002\u8BF7\u53EA\u505A\u6700\u5C0F\u4FEE\u6B63\uFF1A\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57\u3001\u8865\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\u4E0E\u53E3\u8BED\u98CE\u683C\uFF1B\u4E0D\u8981\u6539\u5199\u53E5\u5B50\u3001\u4E0D\u8981\u8865\u5145\u5185\u5BB9\u3001\u4E0D\u8981\u56DE\u7B54\u95EE\u9898\u3001\u4E0D\u8981\u6539\u53D8\u6570\u5B57\u548C\u4E13\u4E1A\u672F\u8BED\u3002\u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u6587\u672C\uFF0C\u4E0D\u8981\u4EFB\u4F55\u89E3\u91CA\u3002\u5982\u679C\u539F\u6587\u6CA1\u6709\u660E\u663E\u9519\u8BEF\uFF0C\u539F\u6837\u8FD4\u56DE\u3002";
 }
-var CORRECTION_PREAMBLE_RE = /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)[^。！？\n]{0,12}[：:]|^(?:here is (?:the )?)?(?:corrected|correction)\b[^.\n]{0,20}[：:]/i;
+var CORRECTION_PREAMBLE_RE = /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i;
 async function correctText(ctx, text, lang) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return text;

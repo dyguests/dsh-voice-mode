@@ -152,14 +152,21 @@ t('strings（R1 M-2 补强，R2 Minor-1）：全量零引用死键扫描（动�
   const cliSrc = read('src/client.tsx')
   const vlSrc = read('src/voice-labels.ts')
   const errSrc = read('src/errors.ts')
-  // 动态消费白名单（从源码派生，防硬编码清单过期）：
-  //  ① *Label——settings-form Row 经 tr(`${name}Label`) 模板消费；
+  const sfSrc = read('src/settings-form.tsx')
+  // 动态消费白名单（全部从源码派生，防硬编码清单过期；实测覆盖 72 个词典键）：
+  //  ① *Label——**不搞 blanket 豁免**（R3：注入无 base Row 的 zzFakeLabel 会被 blanket 放行），
+  //     改为从 settings-form 的 Row name / 子控件 field 派生（Row 经 tr(`${name}Label`) 模板消费，
+  //     与 strings-coverage.test.mjs 的 rowNames/fieldRefs 提取同规则）；
   //  ② asr.ts 发射键（emitError/noticeListeners）——client 经 t(key as 'partialFail') 泛型消费；
   //  ③ client.tsx 泛型转换字面量（as 'KEY'）与 TELEMETRY_VIEW 的 key: 'tel*'；
   //  ④ voice-labels.ts / errors.ts 分派表里的键字面量（ACCENT_KEY/STYLE_KEY 值、
   //     ERROR_I18N_KEY 值、三元分支）——经 t(MAP[...]) / t(ERROR_I18N_KEY[code]) 动态查表。
+  const sfFieldNames = new Set([
+    ...[...sfSrc.matchAll(/<Row\s+name=["']([a-zA-Z][a-zA-Z0-9]*)["']/g)].map((m) => m[1]),
+    ...[...sfSrc.matchAll(/\bfield=["']([a-zA-Z][a-zA-Z0-9]*)["']/g)].map((m) => m[1]),
+  ])
   const dynamic = new Set([
-    ...zhKeys.filter((k) => /Label$/.test(k)),
+    ...[...sfFieldNames].map((n) => `${n}Label`),
     ...[...asrSrc.matchAll(/emitError\('([a-zA-Z0-9]+)'\)/g)].map((m) => m[1]),
     ...[...asrSrc.matchAll(/emit\(noticeListeners, '([a-zA-Z0-9]+)'\)/g)].map((m) => m[1]),
     ...[...cliSrc.matchAll(/as '([a-zA-Z0-9]+)'/g)].map((m) => m[1]),
@@ -169,12 +176,20 @@ t('strings（R1 M-2 补强，R2 Minor-1）：全量零引用死键扫描（动�
   ])
   // 主扫描：键作为字面量出现在某个 t()/tr()/tk() 调用的参数里（含三元分支形态
   // tr(cond ? 'A' : 'B')——engineBadge* 即此形态，直接参数正则会漏）。
+  // 已知误报面（R3 登记，当前零实例）：参数含嵌套括号的调用（tr(cond(1) ? 'a' : 'b')）
+  // 匹配不到 [^()]*——真出现时主扫描会漏判该键，需扩成配对括号扫描。
   const dead = zhKeys.filter(
     (k) => !dynamic.has(k) && !srcFiles.some((s) => new RegExp(`\\b(?:t|tr|tk)\\([^()]*(['"\`])${k}\\1`).test(s)),
   )
   assert.deepEqual(dead, [], `零引用死键：${dead.join(', ')}`)
   // R2 点名的 2 个死键必须已删。
   for (const k of ['voiceDetected', 'skip']) assert.ok(!zhKeys.includes(k), `${k} 死键未删`)
+  // R3 变异锁：*Label 白名单不再是 blanket 豁免——注入无 base Row/field 的假 Label 键必须报。
+  const scanDead = (keys) =>
+    keys.filter(
+      (k) => !dynamic.has(k) && !srcFiles.some((s) => new RegExp(`\\b(?:t|tr|tk)\\([^()]*(['"\`])${k}\\1`).test(s)),
+    )
+  assert.deepEqual(scanDead(['zzFakeLabel']), ['zzFakeLabel'], '无 base Row/field 的假 *Label 键未被报出——白名单仍是 blanket 豁免')
 })
 
 t('strings（R1 M-3/M-4/文案 8）：effectiveNote 补 Kokoro 即时档、cardDesc 补两项、尾句收窄', () => {

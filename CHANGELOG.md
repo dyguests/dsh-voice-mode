@@ -68,11 +68,28 @@
 
 - 测试套件自身修复：B1 五个文件 40 处 `t()` 异步不匹配（summary 提前打印少报 19——「518 全绿」口径的根源）；B2 preview-error 中文检查改扫原始 src（esbuild ascii 转义致证伪不了）。
 - **新增 31 项行为级测试**（`fail-streak-notice` / `steer-submit-behavior` / `partial-gating` / `host-security-behavior` 等，连败提示 / steer 双发 / partial 门控 / 安全守卫，全部变异实证），连同 echo-tail 等共 7 个新文件登记入 `scripts.test`；装饰锁 5 处、死断言、K:/ 死脚本删除、陈旧行号实测刷新。
-- 计数口径：`npm test` exit 0 / **583 ✓ / 48 文件**（两种求和法一致：各文件「N 项通过」之和 = `grep -c '✓'` = 583）。两个数字勿混用：**31 项为行为级测试**（驱动真实链路断言行为）；**48 文件 / 583 项为全套件计数**，另含合同级/静态守卫类用例（如 `host-fixes.test.mjs` 为合同级非行为级）。
+- 计数口径（**R2 时点**；R3 后为 603 ✓ / 49 文件，见下条）：`npm test` exit 0 / **583 ✓ / 48 文件**（两种求和法一致：各文件「N 项通过」之和 = `grep -c '✓'` = 583）。两个数字勿混用：**31 项为行为级测试**（驱动真实链路断言行为）；**48 文件 / 583 项为全套件计数**，另含合同级/静态守卫类用例（如 `host-fixes.test.mjs` 为合同级非行为级）。
 
 **文档事实同步**
 
-- 测试计数 583/48 全位置落地（README 中英徽章/正文、TEST-SYSTEM、qa/checklist、STATE 口径注记含沿革）；ADR 11→12；must-verify/checklist/docs-CONTEXT 基线滚至 `6995ae7`；ADR-0012/0003/0008/CONTEXT/plan 共 30+ 处行号终态 sync（sed 逐行自检）；echoGate 0/937；issue 回复稿「开口前约 250ms」。
+- 测试计数 583/48 全位置落地（**R2 时点**；README 中英徽章/正文、TEST-SYSTEM、qa/checklist、STATE 口径注记含沿革）；ADR 11→12；must-verify/checklist/docs-CONTEXT 基线滚至 `6995ae7`；ADR-0012/0003/0008/CONTEXT/plan 共 30+ 处行号终态 sync（sed 逐行自检）；echoGate 0/937；issue 回复稿「开口前约 250ms」。
+
+### Issue #15 R3 修复轮 + R3 验真轮（6 Important + 测试缺口；2026-10-20，`c11d311`+`6ddfb09`）
+
+R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的回归），R3 六个 teammate 并行修复并落库。
+
+**修复**
+
+- **sweep 孤立会话回收的代际投毒**（R2 自身回归）：sweep 只判 `segments` 不判 `finalizing` 在途 → 「定稿在途 + 30s 一扫 + barge-in」可构造陈旧定稿写入新会话 epoch 0 缓存 → 下一句 final 缓存命中返回旧文本（autoSend 默认开，错文本可能直接发出）。判定同时排除 `finalizing` 在途。
+- **纠错周期串话**（R2 自身回归）：`correctInFlightRef` 单布尔跨周期复用 → 旧纠错周期 `.then` 清新周期标记 → 新文本静默漏发。改计数器令牌（只增不减），submitDraftNow / hardBreak / 退出 / 抢占 / 卸载均参与取废。
+- **回填窗收窄 + 短输入护栏**：提交在途窗内 onPartial 不回写草稿（防已提交文本被写回且 steer 守卫跳过清草稿）；llm-correct 短输入长度护栏失效（64 下限旁路 3x 比率）修复。
+- **start() 世代守卫 + worklet 回退路径复检**：授权返回/双启动竞态下旧启动不再抢新流；ScriptProcessor 回退路径补齐与 worklet 路径同构的复检（I1-I4 补行为级锁定）。
+- **host-fixes 退出崩溃三层修法**：dispose/退出路径资源释放顺序修正（timer 清理 → 在途作废 → 句柄释放），修复设置面板多次拉取音色后的退出崩溃。
+
+**测试**
+
+- 新增 `correct-cycle-behavior` 9 项行为测试；行为级测试总数 31 → **42** 项（**占位**：以 fix-test 本轮枚举为准，回报后回填）；全套件 `npm test` exit 0 / **603 ✓ / 49 文件**（两种求和法一致）。计数沿革：R2 集成轮 583/48 → R3 后 603/49（+20 = correct-cycle-behavior 9 + host-fixes 12→15 + silent-path-hints 13→19 + finalize-ux 8→9 + settings-effective 13→14）。
+- R3 验真轮结论（4 只读代理）：**无 Blocker**；R3 修复本体 6/7 关闭 + 1 部分关闭（仅 tts-queue B1 注释行号）；新增 6 个 Important 转 R4 修复中（host-fixes 同步 t 复辟 / 双发防护腿行为锁 / en 前言放宽漏拦 / lib BUILD_TAG dangling / 文档计数与基线 / sweep loop1 守卫零锁），详见 `docs/rules/STATE.md`。
 
 ### 规划中
 
