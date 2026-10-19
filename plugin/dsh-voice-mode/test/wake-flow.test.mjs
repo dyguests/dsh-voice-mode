@@ -24,7 +24,7 @@
  *   播放期用户语音只进 detectChunks 检测通道、不进识别段（asr.ts:774/828-837）；
  *   hardBreak 后 /cancel asr.reset + discardSegment 双清场 → 打断前说的话全丢。
  *   修复：AEC 后墙钟预录环（PRE_ROLL_MS=2000）+ hardBreak 弃段时把「VAD 首真
- *   （detect 请求 sentAt 口径）-250ms」起的音频并入新识别段（absorbPreRoll）。
+ *   （detect 请求体起点口径，reqBodyStart=sentAt−请求体音频时长）-250ms」起的音频并入新识别段（absorbPreRoll）。
  *   本文件新增装置×4：vadOnly 响应可编程+detect 延迟 dial / hardBreak 序列注入 /
  *   reset 延迟档 / salvage 段纯 backchannel 弃段守卫（「嗯」不得作为消息发出）。
  */
@@ -62,7 +62,8 @@ const SIL_AMP = 0.0005 // 静音（低于门限）
 const BC_AMP = 0.04
 const BC_CHAR = '嗯'
 // Issue #15 批 1：两个延迟 dial（台架装置，可复零）。
-//   detect 延迟：vadOnly 响应延迟（模拟检测通道 RTT，证 onset 锚 sentAt 不受响应到达影响）。
+//   detect 延迟：vadOnly 响应延迟（模拟检测通道 RTT，证 onset 锚请求体起点不受响应到达影响；
+//   延迟期间伴音频推进保持墙钟/音频 timeline 同步）。
 //   reset 延迟：reset=1 响应延迟（模拟 host 清场慢，证 absorb 同步 seed 无 offset 错位）。
 let DETECT_DELAY_MS = 0
 let RESET_DELAY_MS = 0
@@ -111,6 +112,17 @@ globalThis.AudioWorkletNode = FakeAudioWorkletNode
 // ---------------------------------------------------------------- 假 host（流式 ASR 模拟）
 const streams = new Map() // epoch -> stream state
 const hostLog = { partials: 0, resets: 0, detects: 0, finals: 0 }
+
+// Issue #15 批 1：带音频推进的延迟（detect dial 用）——推进墙钟的同时持续推送同频段
+// 音频帧（RTT 期间用户持续发声的生产语义），保持墙钟与音频 timeline 同步。
+const delayWithAudio = async (ms, amp) => {
+  const frames = Math.max(1, Math.round(ms / 64))
+  for (let i = 0; i < frames; i++) {
+    NOW += (FRAME / SR) * 1000
+    capturedNode?.port?.onmessage?.({ data: new Float32Array(FRAME).fill(amp) })
+    await new Promise((r) => setImmediate(r))
+  }
+}
 
 const meanAbs = (arr) => {
   let s = 0
@@ -195,8 +207,10 @@ globalThis.fetch = async (url, init = {}) => {
   const final = p.get('final') === '1'
   if (p.get('reset') === '1') {
     hostLog.resets++
-    // Issue #15 批 1：reset 延迟 dial（模拟 host 清场慢）。
-    if (RESET_DELAY_MS > 0) await sleep(Math.ceil(RESET_DELAY_MS / 64))
+    // Issue #15 批 1：reset 延迟 dial（模拟 host 清场慢）。sleep 入参是毫秒（内部按
+    // 64ms/帧换算）——曾误传帧数（ceil(ms/64)）导致 1000ms 只推进 64ms，名义失真。
+    // reset 窗口无 seek/锚点数学（seed 已同步完成），时钟推进即可，不需伴音频。
+    if (RESET_DELAY_MS > 0) await sleep(RESET_DELAY_MS)
     streams.clear()
     return new Response(JSON.stringify({ ok: true }), { status: 200 })
   }
@@ -204,11 +218,19 @@ globalThis.fetch = async (url, init = {}) => {
   if (p.get('vadOnly') === '1') {
     hostLog.detects++
     // Issue #15 批 1：vadOnly 响应可编程 + detect 延迟 dial。忠实真机 fixture 语义：
-    // Silero 检测 VAD 不被纯回声触发（0/937 帧，CONTEXT.md:59），故回声段（>0.2）回
-    // false；用户语音段（0.03~0.2）回 true。onset 由引擎锚请求 sentAt（不受本延迟影响）。
-    if (DETECT_DELAY_MS > 0) await sleep(Math.ceil(DETECT_DELAY_MS / 64))
-    const amp = meanAbs(raw)
-    const isSpeech = amp >= 0.03 && amp < 0.2
+    // Silero 检测 VAD 不被纯回声触发（0/937 帧，CONTEXT.md:59），故纯回声段（>0.2）回
+    // false；用户语音段回 true。**子窗帧级近似**（任一 100ms 子窗均值落语音频段即 true）：
+    // 整窗均值判会把「回声尾+语音」混合体误判为回声（RTT 劣化下混合体常见），帧级判才
+    // 忠实「VAD 在窗内某处见到语音」。onset 由引擎锚请求体起点（不受本延迟影响）。
+    // 延迟期间**持续推送同频段音频帧**（RTT 期间用户持续发声的生产语义）：纯 sleep 只推
+    // 墙钟会让墙钟跑在音频 timeline 前面，salvage 的墙钟 seek/锚点数学失真（实测抓红）。
+    if (DETECT_DELAY_MS > 0) await delayWithAudio(DETECT_DELAY_MS, meanAbs(raw))
+    let isSpeech = false
+    const sub = Math.round(SR * 0.1)
+    for (let off = 0; off + sub <= raw.length && !isSpeech; off += sub) {
+      const a = meanAbs(raw.subarray(off, off + sub))
+      if (a >= 0.03 && a < 0.2) isSpeech = true
+    }
     return new Response(JSON.stringify({ isSpeech }), { status: 200 })
   }
   if (final) {
@@ -505,23 +527,28 @@ await t('bargeInSalvage=false 逃生口：丢弃打断前语音（回退 issue �
   await h.engine.stop()
 })
 
-await t('detect 响应延迟（RTT p99≈430ms）不切句首（锚请求体起点，非 sentAt/响应到达）', async () => {
-  setDetectDelay(430)
+await t('detect 响应劣化（RTT 800ms 压力档）不切句首（锚请求体起点，非 sentAt/响应到达）', async () => {
+  setDetectDelay(800)
   try {
     let playing = true
     const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
     await h.engine.start()
     await say(ECHO_AMP, 800)
+    await sleep(400) // 相位偏移：让 CMD 在 detect 请求在途时开始（生产常见相位）
     await say(CMD_AMP, 1000)
-    await sleep(900) // detect 轮询 + 430ms 模拟 RTT
+    await sleep(900) // detect 轮询 + 800ms 劣化 RTT
     playing = false
     await h.engine.discardSegment()
     await say(SPEECH_AMP, 600)
     await say(SIL_AMP, 2500)
     assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条）`)
+    // 判别式：剥前导 AI 尾音字后，前 3 字内必含命令首字「给」——句首不被切。若锚点退化为
+    // sentAt-250（计划字面口径），RTT 劣化 cadence 下 sentAt 滞后语音起点多达一个窗长，
+    // 首块「给」被切，前 3 字变「我说一」→ 红（本断言是锚点策略的区分度保证）。
+    const head = h.segments[0].replace(/^[我明白了]+/, '').slice(0, 3)
     assert.ok(
-      h.segments[0].includes('给我说'),
-      `RTT 延迟下句首不得被切（实际 "${h.segments[0]}"）——onset 误锚响应到达时刻会切掉句首`,
+      head.includes('给'),
+      `RTT 延迟下句首不得被切（前 3 字 "${head}"，全段 "${h.segments[0]}"）——onset 误锚 sentAt/响应到达会切掉句首`,
     )
     await h.engine.stop()
   } finally {
@@ -595,6 +622,59 @@ await t('salvage 标记不泄漏：抢救段后立刻按住说话，hold 段内�
     `hold 段内容必须正常发出（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）——salvagedSegment 标记泄漏会把 hold 段的「嗯」误抑制`,
   )
   await h.engine.stop()
+})
+
+await t('跨播放窗：AI 播完→用户口述→AI 再开播→打断，抢救必须仍生效（环跨窗不错位）', async () => {
+  let playing = true
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
+  await h.engine.start()
+  await say(ECHO_AMP, 800) // AI 回合 1 朗读
+  playing = false // 回合 1 播完（环残留旧帧、原点冻结——B1 事故现场）
+  await say(CMD_AMP, 1000) // 用户口述追问（非播放期，走正常识别路径）
+  await say(SIL_AMP, 2500) // 静音断句 → 定稿发出
+  h.segments.length = 0 // 只关心打断段
+  playing = true // AI 回合 2 开播（上升沿：环应被清空重整，否则 seek 跨窗错位）
+  await say(ECHO_AMP, 600)
+  await say(CMD_AMP, 1000) // 用户在回合 2 播放期打断
+  await sleep(300)
+  playing = false
+  await h.engine.discardSegment()
+  await say(SPEECH_AMP, 600) // 打断后把话说完
+  await say(SIL_AMP, 2500)
+  assert.equal(h.segments.length, 1, `应产出 1 条打断定稿（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）`)
+  assert.ok(
+    h.segments[0].includes('给我'),
+    `跨窗抢救必须生效（实际 "${h.segments[0]}"）——环跨窗不错位（B1 修复锁定；未修则 seek 落空静默回退丢句）`,
+  )
+  await h.engine.stop()
+})
+
+await t('wake 启用 + reset 慢（> silenceMs）：打断后静默，抢救段不得被 clearWakeSegment 抹掉', async () => {
+  setResetDelay(3000) // host 清场往返 3s > silenceMs 1500ms（I1 事故窗口）
+  try {
+    let playing = true
+    const h = makeEngine({ wakeWord: WAKE, isPlaying: () => playing, bargeInSalvage: true })
+    await h.engine.start() // wake 待机态
+    await say(ECHO_AMP, 800)
+    await say(SIL_AMP, 600)
+    await say(CMD_AMP, 600) // 播放期打断（打断=engaged，不要求唤醒词）
+    await sleep(300)
+    playing = false
+    // 不 await——音频线程不等 host 清场（生产语义：mic 在 reset 往返期间持续收音）。
+    // 未修则 reset 窗口内 state 仍 'wake'，下面的静音帧会走 wake 分支抹掉抢救段。
+    const discardP = h.engine.discardSegment()
+    await say(SIL_AMP, 2500) // 打断后持续静默（reset 窗口内到达）
+    await discardP
+    assert.equal(
+      h.segments.length,
+      1,
+      `抢救段不得在 reset 窗口被 clearWakeSegment 抹掉（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）——I1 修复锁定`,
+    )
+    assert.ok(h.segments[0].includes('给'), `抢救段应含打断前的话（实际 "${h.segments[0]}"）`)
+    await h.engine.stop()
+  } finally {
+    setResetDelay(0)
+  }
 })
 
 rmSync(tmp, { recursive: true, force: true })

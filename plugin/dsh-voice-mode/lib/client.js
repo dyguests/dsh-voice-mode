@@ -824,7 +824,10 @@ function createAsrEngine(config, sessionId) {
         const rawText = out.text ?? "";
         const finalText = consumedWake ? stripWakePrefix(rawText, wakeWord) : rawText;
         if (finalText) {
-          if (wasSalvaged && matchBackchannel(finalText)) return;
+          if (wasSalvaged && matchBackchannel(finalText)) {
+            if (active && wakeEnabled) setState("listening");
+            return;
+          }
           emit(transcriptListeners, finalText, meta);
         } else if (consumedWake && active && !speechActive && !holdActive) {
           setState("listening");
@@ -902,6 +905,9 @@ function createAsrEngine(config, sessionId) {
     if (playingNow && !wasPlaying) {
       wasPlaying = true;
       preRollSeedWall = null;
+      preRoll = [];
+      preRollMs = 0;
+      preRollStartWall = 0;
     } else if (!playingNow && wasPlaying) {
       wasPlaying = false;
     }
@@ -1240,8 +1246,9 @@ function createAsrEngine(config, sessionId) {
       preRollMs = 0;
       preRollStartWall = 0;
       preRollSeedWall = null;
+      if (salvaged && active) setState("speech");
       return resetHostStream().then(() => {
-        if (active) setState(salvaged ? "speech" : wakeEnabled ? "wake" : "listening");
+        if (active && !salvaged) setState(wakeEnabled ? "wake" : "listening");
       });
     },
     endHeld(cancel = false) {
@@ -3191,7 +3198,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "8cc2e7b";
+var BUILD_TAG = "d7f3e25";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);

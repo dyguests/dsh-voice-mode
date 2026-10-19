@@ -715,7 +715,12 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
           // （现状是静默丢弃，修打断吃句不能顺带制造幽灵消息）。**engine 侧弃段**而非
           // 「跳过 submit」：累积草稿语义下只跳 submit 会让「嗯」留草稿并随后续定稿段
           // 的 autoSend 发出（复审 Important#1）。范围严格限抢救段+整段命中。
-          if (wasSalvaged && matchBackchannel(finalText)) return
+          if (wasSalvaged && matchBackchannel(finalText)) {
+            // 终态与短噪声弃段对齐（审查 M4）：唤醒用户丢「嗯」后保持 listening（打断=已
+            // engaged，ADR-0012 决策 3），不回待机态要求重说唤醒词。
+            if (active && wakeEnabled) setState('listening')
+            return
+          }
           emit(transcriptListeners, finalText, meta)
         } else if (consumedWake && active && !speechActive && !holdActive) {
           // D5：本段只说了唤醒词（剥完为空）→ **不关命令窗口**，保持聆听等用户补命令。
@@ -831,10 +836,16 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         }
       }
     }
-    // 播放入口重置 onset 记录（上一播放窗的起始对本次打断无意义）。
+    // 播放入口重置 onset 记录**与预录环**（上一播放窗的音频对本次打断无意义）。保留旧环会
+    // 让 seek 的墙钟数学跨窗错位一个「播放间隙」：常见流程「AI 播完→用户口述→AI 再开播
+    // →用户打断」下 seek 判据全部落空→抢救静默失效（回退 issue 原症状）；backchannel
+    // 让位恢复播放后（gap≈1.5s）还会反向切句首（审查 B1，跨窗台架用例锁定）。
     if (playingNow && !wasPlaying) {
       wasPlaying = true
       preRollSeedWall = null
+      preRoll = []
+      preRollMs = 0
+      preRollStartWall = 0
     } else if (!playingNow && wasPlaying) {
       wasPlaying = false
     }
@@ -1260,9 +1271,13 @@ const startRecorder = async (): Promise<void> => {
       preRollMs = 0
       preRollStartWall = 0
       preRollSeedWall = null
+      // 抢救段**同步**置 speech（不等 reset 落地）：reset 窗口内 state 若仍为 'wake'，
+      // wake 分支的静音处理器会在 reset 往返 > silenceMs 时 clearWakeSegment 把抢救段
+      // 抹掉（审查 I1）。resetGate 已保证上行次序，状态展示不必等 reset。
+      if (salvaged && active) setState('speech')
       // Fix：等待 host 流重置完成后再恢复状态（防新段使用旧流）
       return resetHostStream().then(() => {
-        if (active) setState(salvaged ? 'speech' : (wakeEnabled ? 'wake' : 'listening'))
+        if (active && !salvaged) setState(wakeEnabled ? 'wake' : 'listening')
       })
     },
     endHeld(cancel = false) {
