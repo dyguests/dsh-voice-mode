@@ -68,7 +68,7 @@
 
 - 测试套件自身修复：B1 五个文件 40 处 `t()` 异步不匹配（summary 提前打印少报 19——「518 全绿」口径的根源）；B2 preview-error 中文检查改扫原始 src（esbuild ascii 转义致证伪不了）。
 - **新增 31 项行为级测试**（`fail-streak-notice` / `steer-submit-behavior` / `partial-gating` / `host-security-behavior` 等，连败提示 / steer 双发 / partial 门控 / 安全守卫，全部变异实证），连同 echo-tail 等共 7 个新文件登记入 `scripts.test`；装饰锁 5 处、死断言、K:/ 死脚本删除、陈旧行号实测刷新。
-- 计数口径（**R2 时点**；R3 后为 603 ✓ / 49 文件，见下条）：`npm test` exit 0 / **583 ✓ / 48 文件**（两种求和法一致：各文件「N 项通过」之和 = `grep -c '✓'` = 583）。两个数字勿混用：**31 项为行为级测试**（驱动真实链路断言行为）；**48 文件 / 583 项为全套件计数**，另含合同级/静态守卫类用例（如 `host-fixes.test.mjs` 为合同级非行为级）。
+- 计数口径（**R2 时点**；R3 后 603 ✓ / 49 文件、R4 后 611 ✓ / 50 文件，见下两条）：`npm test` exit 0 / **583 ✓ / 48 文件**（两种求和法一致：各文件「N 项通过」之和 = `grep -c '✓'` = 583）。两个数字勿混用：**31 项为行为级测试**（R2 时点口径；R4 后 fix-test scope 枚举为 74 项）；**48 文件 / 583 项为全套件计数**，另含合同级/静态守卫类用例（如 `host-fixes.test.mjs` 为合同级非行为级）。
 
 **文档事实同步**
 
@@ -88,8 +88,20 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 
 **测试**
 
-- 新增 `correct-cycle-behavior` 9 项行为测试；行为级测试总数 31 → **42** 项（**占位**：以 fix-test 本轮枚举为准，回报后回填）；全套件 `npm test` exit 0 / **603 ✓ / 49 文件**（两种求和法一致）。计数沿革：R2 集成轮 583/48 → R3 后 603/49（+20 = correct-cycle-behavior 9 + host-fixes 12→15 + silent-path-hints 13→19 + finalize-ux 8→9 + settings-effective 13→14）。
+- 新增 `correct-cycle-behavior` 9 项行为测试；行为级测试总数 31 → **74** 项（fix-test scope 枚举口径，R4 落定；明细见 R4 条目）；全套件 `npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；本数字为 R4 后终态，沿革：R2 集成轮 583/48 → R3 后 603/49 → R4 后 611/50，+20 与 +8 拆解见 R4 条目）。
 - R3 验真轮结论（4 只读代理）：**无 Blocker**；R3 修复本体 6/7 关闭 + 1 部分关闭（仅 tts-queue B1 注释行号）；新增 6 个 Important 转 R4 修复中（host-fixes 同步 t 复辟 / 双发防护腿行为锁 / en 前言放宽漏拦 / lib BUILD_TAG dangling / 文档计数与基线 / sweep loop1 守卫零锁），详见 `docs/rules/STATE.md`。
+
+### Issue #15 R4 修复轮（R3 验真轮 6 Important；2026-10-20，`ad824b4`）
+
+**修复**
+
+- **host-fixes 同步 `t()` 复辟 R2-B1 反模式**（两个代理独立发现）：改 `async` + `await`；**双发防护腿补行为级锁**（移位置后全绿的空档）；**sweep loop1 守卫两段式毒链行为锁**（单废 loop1 全套件绿的空档）；**asr 生命周期行为锁**（`asr-lifecycle` 5 项：start/stop 世代、双启动竞态、stopRecorder 收尾）。
+- **modules：en 前言放宽回退严格形态**（R3 修法副作用——三类元叙述形态穿过护栏且被测试固化，本次回退并修正测试固化）；**client/host 注释与矛盾注释修正**（含多处注释行号实测刷新）。
+
+**测试与口径（终态）**
+
+- 计数：`npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；`scripts.test` 链 50 个文件调用）。沿革：R1 41 文件/518 项 → R2 48 文件/583 项 → R3 49 文件/603 项（+20）→ R4 50 文件/611 项（**+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16**）。
+- **行为级测试 74 项**（fix-test scope 枚举口径，R4 落定）：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（余 13 条合同级）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
 
 ### 规划中
 

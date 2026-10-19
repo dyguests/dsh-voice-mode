@@ -56,7 +56,7 @@ export interface TtsEngine {
 ```
 
 **`src/tts-local.ts` 加 `normalizeEmotionTags(text: string, engine: TtsEngine): string`**：
-- 在 `enqueue` 之前调一次（`src/tts-queue.ts:250`）
+- 在 `enqueue` 之前调一次（`src/tts-queue.ts:304` 接口 / 调用点 `src/index.ts:1716,1735`）
 - 解析 `<\w+(?:\s+\d+ms)?>` → 按引擎映射替换为对应 SSML/停顿/emoji
 - 返回**纯字符串**（注意：Edge 引擎后续需走 `rawToFile`/`rawToStream` 路径而非 `_SSMLTemplate`，因为后者的 `<prosody>` 包裹破坏 `<mstts:express-as>` 嵌入）
 

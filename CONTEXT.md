@@ -75,11 +75,11 @@ DSH 语音双工插件：进入语音模式 → 流式识别入草稿 → 静音
 
 - 原生 AEC 失效兜底（耳机无原生 AEC / Safari）：自研 AEC 的 delay 对齐需 FDLMS+RES；
   该场景**尚无真机数据**，也是回声地板棘轮唯一还可能发作的一格
-- ADR-0006：第一级探测**已实现**（asr.ts:1118-1129 / client.tsx:2068-2080，探测到原生 AEC 失效即落 manual 并提示）；未做的是二级探测，阈值可用 fixture verdict 数据标定。
+- ADR-0006：第一级探测**已实现**（asr.ts:1126-1137 / client.tsx:2106-2118，探测到原生 AEC 失效即落 manual 并提示）；未做的是二级探测，阈值可用 fixture verdict 数据标定。
   副作用：manual 下待机态拿不到音频，唤醒词不触发（设置面板已声明「hold / 手动打断下不生效」）——无原生 AEC 的浏览器（Safari）+ 唤醒词 = 持续聆听等于关闭
 - Ctrl 强制发送在「已停顿但草稿有累积」时不 flush（Minor，需处理 in-flight 定稿竞态）
 - 松手恰在 30s 滚段边界（~1-3s 窗口）的竞态（Rare，需给 hold 引入待发块队列）
-- **2026-10-15 静态审计登记（未真机复核，发版前不盲改引擎）**：① `stop()` 落在 getUserMedia 之后、active=true 之前（resume/addModule 窗口）时麦克风不被清理（asr.ts:1091-1189，startRecorder→active=true 窗口）；② `stop()` 后紧跟 `start()` 时旧 stopRecorder 收尾会清掉新 audioCtx 引用（asr.ts:1192-1251 stopRecorder 收尾；client.tsx:1646 `void engine.stop()` 调用点有风险）；③ toggle 下 Ctrl 取消 hold（endHeld(true)）不清 uploadedSamples/不 reset host 流，下一段开头丢一小段（asr.ts:1437-1454，endHeld cancel 分支）；④ 回声地板棘轮：外放音量调大后 doubleTalk 持续为真，地板冻结在旧低值（asr.ts:871-879）；⑤ NLMS 权重一旦 NaN 永久输出 0（aec.ts:91-92）；⑥ 句切分：小数点落在 delta 边界会被拆句、跨 chunk 的 ``` 代码块会被朗读（segmenter.ts:57 切分正则 / :16 代码块剥离）
+- **2026-10-15 静态审计登记（未真机复核，发版前不盲改引擎）**：① `stop()` 落在 getUserMedia 之后、active=true 之前（resume/addModule 窗口）时麦克风不被清理（asr.ts:1099-1210，startRecorder→active=true 窗口）；② `stop()` 后紧跟 `start()` 时旧 stopRecorder 收尾会清掉新 audioCtx 引用（asr.ts:1213-1272 stopRecorder 收尾；client.tsx:1672 `void engine.stop()` 调用点有风险）；③ toggle 下 Ctrl 取消 hold（endHeld(true)）不清 uploadedSamples/不 reset host 流，下一段开头丢一小段（asr.ts:1466-1484，endHeld cancel 分支）；④ 回声地板棘轮：外放音量调大后 doubleTalk 持续为真，地板冻结在旧低值（asr.ts:879-887）；⑤ NLMS 权重一旦 NaN 永久输出 0（aec.ts:91-92）；⑥ 句切分：小数点落在 delta 边界会被拆句、跨 chunk 的 ``` 代码块会被朗读（segmenter.ts:57 切分正则 / :16 代码块剥离）
 - **host 侧待核对（依赖宿主 Host/Origin 前置防护）**：DNS rebinding（`sameOriginRequest` 只比 Origin 与 Host，不校验 Host 白名单；dsh 以 `--trusted-host` 启动时宿主已拦）；经 HTTPS 反代时回环判定与限流键都取 remoteAddress（所有用户共享一个桶）；`toggle:${sessionId}` 限流键先于会话存在性校验，可被任意构造占满 maxKeys；SSE `/stream` 无 Origin 校验、tabId/sessionId 可见；`/models/status` 经 `queue.status()` 透出本地引擎 engineError 原文
 - 发布流程见维护者本机文档（git push + npm publish + tag + GitHub release；`docs/RELEASE-WORKFLOW.md` 与 `scripts/release.sh`、`check-dsh-version.sh` 按 publication-policy 不入库）
 

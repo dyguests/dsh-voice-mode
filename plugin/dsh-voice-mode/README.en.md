@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue)](./LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases)](https://github.com/qishuilalala/dsh-voice-mode/releases)
 [![npm version](https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange)](https://www.npmjs.com/package/dsh-voice-mode)
-[![Tests: 583 passing](https://img.shields.io/badge/tests-583%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
+[![Tests: 611 passing](https://img.shields.io/badge/tests-611%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
 
 Full-duplex voice conversation mode for DeepSeek Harness (dsh): speak, get a
 spoken answer. Streamed zipformer2 ASR → editable draft → auto send → the
@@ -376,7 +376,7 @@ After changing dependencies run `npm pack --dry-run`, `npm test` and `bash scrip
 
 ```sh
 pnpm install && pnpm build    # esbuild: lib/index.js (host) + lib/client.js (browser) + lib/msedge-tts.cjs
-pnpm test                     # 48 test files chained: unit tests + harnesses (fake browser driving the real engine) + structure guards + pre-release self-check (no network)
+pnpm test                     # 50 test files chained: unit tests + harnesses (fake browser driving the real engine) + structure guards + pre-release self-check (no network)
 bash scripts/smoke-runtime.sh <dsh-core-bin.js> <port>   # boot an isolated dsh core: endpoints, mic button, settings page, i18n
 bash scripts/full-e2e.sh <dsh-core-bin.js> <port>        # real-LLM end to end: create → toggle → prompt → SSE audio frames
 systemctl restart dsh         # Linux; restart the dsh process on other platforms

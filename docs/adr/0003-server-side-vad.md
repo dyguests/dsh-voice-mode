@@ -6,7 +6,7 @@
 - 前置：[ADR-0001](0001-native-aec-primary.md)
 
 > **命名纠正（2026-09-16）**：原文件名 `0003-client-side-vad.md` 暗示 VAD 已下沉到客户端，与实际不符。
-> 真实运行态：Silero VAD 位于 host 侧（`src/asr-host.ts:717-728` detect 异步函数内 `acceptWaveform`（:723）→ `isDetected`（:724）→ `isSpeech`（:728）），
+> 真实运行态：Silero VAD 位于 host 侧（`src/asr-host.ts:729-740` detect 异步函数内 `acceptWaveform`（:735）→ `isDetected`（:736）→ `isSpeech`（:740）），
 > 客户端只做计数（`src/client.tsx:37` `INT_CONFIRM_FRAMES`）。本 ADR 的「下沉」是**未实施的提议**，
 > 故重命名为 `0003-server-side-vad.md`，标题同步纠正；正文「决策（提议）」段保留原提议内容（搬迁方向与代价分析）。
 >
@@ -25,7 +25,7 @@
   → 客户端连续 confirmFrames 次为真 → 回声门控 → hardBreak
 ```
 
-判定信号在 host 产生（`src/asr-host.ts:717-728`，detect 异步函数内 acceptWaveform（:723）→ isDetected（:724）→ isSpeech（:728）），客户端只做计数（`src/client.tsx:37` `INT_CONFIRM_FRAMES[interruptLevel]`）。
+判定信号在 host 产生（`src/asr-host.ts:729-740`，detect 异步函数内 acceptWaveform（:735）→ isDetected（:736）→ isSpeech（:740）），客户端只做计数（`src/client.tsx:37` `INT_CONFIRM_FRAMES[interruptLevel]`）。
 
 实测确认延迟 ≈525ms（CONTEXT.md 记录）。拆解：
 
