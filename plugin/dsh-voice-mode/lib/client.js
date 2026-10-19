@@ -462,6 +462,7 @@ function createAsrEngine(config, sessionId) {
   };
   const transcriptListeners = /* @__PURE__ */ new Set();
   const partialListeners = /* @__PURE__ */ new Set();
+  const noticeListeners = /* @__PURE__ */ new Set();
   const levelListeners = /* @__PURE__ */ new Set();
   const telemetryListeners = /* @__PURE__ */ new Set();
   let utteranceEndAt = null;
@@ -509,6 +510,8 @@ function createAsrEngine(config, sessionId) {
   let preRollStartWall = 0;
   let preRollSeedWall = null;
   let wasPlaying = false;
+  let partialFailStreak = 0;
+  let detectFailStreak = 0;
   let salvagedSegment = false;
   const asrUrl = (final, offset, epoch) => `${location.origin}${config.basePath.replace(/\/+$/, "")}/asr?sessionId=${encodeURIComponent(sessionId)}&final=${final ? 1 : 0}` + (offset !== void 0 ? `&offset=${offset}` : "") + (epoch !== void 0 ? `&epoch=${epoch}` : "") + // 批 7N（ADR-0006）：manual 模式下上传带 &manual=1，host 服务端据此放行（防御性守卫）。
   // handleAudio 入口已先在 manual + !holdActive 时 early return，所以能到这儿的帧必然
@@ -620,6 +623,7 @@ function createAsrEngine(config, sessionId) {
       if (out.isSpeech !== void 0) config.onIsSpeech?.(out.isSpeech);
       if (state === "loading-model") setState("speech");
       uploadedSamples = Math.max(uploadedSamples, from + samples.length);
+      partialFailStreak = 0;
       emit(partialListeners, wakeConsumed ? stripWakePrefix(out.text ?? "", wakeWord) : out.text ?? "");
       if (config.backchannelYield !== false && // 默认 true（I10 豁免）；显式 false 时跳过
       speechActive && (config.isPlaying?.() ?? false) && matchBackchannel(out.text ?? "")) {
@@ -627,6 +631,7 @@ function createAsrEngine(config, sessionId) {
       }
       if (out.endpoint && active && speechActive && !holdActive) finalizeSegment();
     } catch {
+      if (++partialFailStreak >= 3) emit(noticeListeners, "partialFail");
     } finally {
       partialInFlight = false;
     }
@@ -666,12 +671,14 @@ function createAsrEngine(config, sessionId) {
       if (epoch !== segmentEpoch || gen !== detectGeneration) return;
       if (out.isSpeech !== void 0) config.onIsSpeech?.(out.isSpeech);
       if (out.isSpeech === true && preRollSeedWall === null) preRollSeedWall = reqBodyStartWall - 250;
+      detectFailStreak = 0;
       detectSent += samples.length;
       while (detectChunks.length > 0 && detectSent >= detectChunks[0].length) {
         detectSent -= detectChunks[0].length;
         detectChunks.shift();
       }
     } catch {
+      if (++detectFailStreak >= 3) emit(noticeListeners, "detectFail");
     } finally {
       detectInFlight = false;
       if (fixtureRecorder.isActive) {
@@ -1284,6 +1291,12 @@ function createAsrEngine(config, sessionId) {
         transcriptListeners.delete(fn);
       };
     },
+    onNotice(fn) {
+      noticeListeners.add(fn);
+      return () => {
+        noticeListeners.delete(fn);
+      };
+    },
     onError(fn) {
       errorListeners.add(fn);
       return () => {
@@ -1510,6 +1523,12 @@ var zh = {
   sayWake: "\u8BF4\u300C{wake}\u300D\u5F00\u59CB",
   reading: "\u6717\u8BFB\u4E2D\u2026",
   recognitionFail: "\u8BC6\u522B\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5",
+  partialFail: "\u5B9E\u65F6\u5B57\u5E55\u6682\u65F6\u4E0D\u53EF\u7528\uFF08\u8BC6\u522B\u901A\u9053\u5F02\u5E38\uFF0C\u91CD\u8BD5\u4E2D\uFF09",
+  detectFail: "\u6253\u65AD\u68C0\u6D4B\u6682\u65F6\u4E0D\u53EF\u7528\uFF08\u68C0\u6D4B\u901A\u9053\u5F02\u5E38\uFF0C\u91CD\u8BD5\u4E2D\uFF09",
+  sseReconnect: "\u72B6\u6001\u540C\u6B65\u65AD\u8FDE\uFF0C\u91CD\u8FDE\u4E2D\u2026",
+  diagCopy: "\u590D\u5236\u8BCA\u65AD",
+  diagCopied: "\u8BCA\u65AD\u4FE1\u606F\u5DF2\u590D\u5236",
+  diagCopyFailed: "\u590D\u5236\u5931\u8D25\uFF08\u6D4F\u89C8\u5668\u62D2\u7EDD\u4E86\u526A\u8D34\u677F\uFF09",
   sessionExpired: "\u8BED\u97F3\u4F1A\u8BDD\u5DF2\u65AD\u5F00\uFF0C\u6B63\u5728\u91CD\u8FDE\u2026",
   sessionExpiredFail: "\u8BED\u97F3\u4F1A\u8BDD\u91CD\u8FDE\u5931\u8D25\uFF0C\u8BF7\u91CD\u65B0\u5F00\u542F\u8BED\u97F3\u6A21\u5F0F",
   modelDownloadFail: "\u8BED\u97F3\u6A21\u578B\u4E0B\u8F7D\u5931\u8D25\uFF08{file}\uFF09\uFF1A\u8BF7\u68C0\u67E5\u7F51\u7EDC\u540E\u91CD\u65B0\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u91CD\u8BD5",
@@ -1599,7 +1618,7 @@ var zh = {
   descWakeWord: "\u5524\u9192\u8BCD\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5982\u300C\u4F60\u597D\u5C0FD\u300D\uFF09\uFF1A\u8BF4\u51FA\u8BCD\u5934\u624D\u8FDB\u5165\u8BC6\u522B\uFF0C\u907F\u514D\u8BEF\u89E6\u3002\u53EF\u4E0E\u547D\u4EE4\u8FDE\u8BF4\uFF08\u300C\u4F60\u597D\u5C0FD\uFF0C\u5E2E\u6211\u67E5\u5929\u6C14\u300D\u2014\u2014\u8BCD\u5934\u4F1A\u81EA\u52A8\u5265\u6389\u3001\u4E0D\u8FDB\u6D88\u606F\uFF09\uFF1B\u6BCF\u53E5\u65AD\u53E5\u6216\u6253\u65AD\u540E\u9700\u91CD\u8BF4\uFF1B\u4EC5 toggle \u6A21\u5F0F\u751F\u6548\uFF08hold / \u624B\u52A8\u6253\u65AD\u4E0B\u4E0D\u751F\u6548\uFF09\uFF1B\u6717\u8BFB\u671F\u8BF4\u5524\u9192\u8BCD\u4E0D\u89E6\u53D1\uFF08\u6253\u65AD\u4ECD\u6309 VAD \u5F00\u53E3\u5373\u6253\u65AD\uFF09\u3002\u5339\u914D\u5E26\u5BB9\u9519\uFF08\u540C\u97F3\u5B57 / \u524D\u5BFC\u8BED\u6C14\u8BCD\uFF09\uFF0C\u5EFA\u8BAE 3-4 \u5B57\uFF1B\u975E\u4E13\u7528 KWS \u5F15\u64CE\uFF0C\u5608\u6742\u73AF\u5883\u53EF\u80FD\u5EF6\u8FDF\u6216\u8BEF\u6FC0\u6D3B",
   wakePlaceholder: "\u5982\uFF1A\u4F60\u597D\u5C0FD",
   settingsCardDesc: "\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u9759\u97F3\u505C\u987F / \u7A7A\u95F2\u8D85\u65F6 / \u6A21\u578B\u955C\u50CF / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u9006\u6587\u672C\u5F52\u4E00\u5316 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3",
-  settingsEffectiveNote: "\u751F\u6548\u65F6\u673A\u5206\u56DB\u6863\uFF1A\u2460 \u5373\u65F6\u2014\u2014\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F\uFF1B\u2461 \u4E0B\u6B21\u8BC6\u522B\u65F6\u2014\u2014\u6A21\u578B\u7CBE\u5EA6\uFF08SenseVoice \u91CD\u8BD1\uFF09/ \u9006\u6587\u672C\u5F52\u4E00\u5316\uFF1B\u2462 \u4E0B\u4E00\u6BB5\u8BDD\u2014\u2014\u9759\u97F3\u5224\u5B9A\u65F6\u957F\uFF08\u65AD\u53E5\u7AEF\u70B9\uFF0C\u53D1\u9001\u7B49\u5F85\u56FA\u5B9A 1.2 \u79D2\u4E0D\u53D7\u5F71\u54CD\uFF09\uFF1B\u2463 \u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u2014\u2014\u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u5FEB\u6377\u952E / \u53E3\u8BED\u5316\u63D0\u793A\u8BCD / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519 / \u7A7A\u95F2\u65F6\u957F / \u6A21\u578B\u955C\u50CF\u3002\u5DF2\u4FDD\u5B58\u4F46\u672A\u751F\u6548\u7684\u9879\u4F1A\u5217\u5728\u5361\u7247\u9876\u90E8\uFF08\u542B\u5F53\u524D\u751F\u6548\u503C\uFF09\u3002",
+  settingsEffectiveNote: "\u751F\u6548\u65F6\u673A\u5206\u56DB\u6863\uFF1A\u2460 \u5373\u65F6\u2014\u2014\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u5BF9\u540E\u7EED\u56DE\u590D\u751F\u6548\uFF09/ \u6A21\u578B\u955C\u50CF\uFF08\u4E0B\u6B21\u4E0B\u8F7D\u5C1D\u8BD5\u5373\u751F\u6548\uFF09\uFF1B\u2461 \u4E0B\u6B21\u8BC6\u522B\u65F6\u2014\u2014\u5B9A\u7A3F\u91CD\u8BD1\uFF08SenseVoice\uFF09/ \u9006\u6587\u672C\u5F52\u4E00\u5316\uFF1B\u2462 \u4E0B\u4E00\u6BB5\u8BDD\u2014\u2014\u9759\u97F3\u5224\u5B9A\u65F6\u957F\uFF08\u65AD\u53E5\u7AEF\u70B9\uFF1B\u53D1\u9001\u7B49\u5F85\u56FA\u5B9A 1.2 \u79D2\u4E0D\u53D7\u5F71\u54CD\uFF09\uFF1B\u2463 \u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u2014\u2014\u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u5FEB\u6377\u952E / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519 / \u7A7A\u95F2\u65F6\u957F\u3002\u5DF2\u4FDD\u5B58\u4F46\u672A\u751F\u6548\u7684\u9879\u4F1A\u5217\u5728\u5361\u7247\u9876\u90E8\uFF08\u542B\u5F53\u524D\u751F\u6548\u503C\uFF09\u3002",
   effectivePending: "\u6709 {count} \u9879\u4FEE\u6539\u5C06\u5728\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u65F6\u751F\u6548\uFF1A{items}",
   valueOn: "\u5F00",
   valueOff: "\u5173",
@@ -1760,6 +1779,12 @@ var en = {
   sayWake: 'Say "{wake}" to start',
   reading: "Reading aloud\u2026",
   recognitionFail: "Recognition failed, try again",
+  partialFail: "Live captions temporarily unavailable (recognition channel error, retrying)",
+  detectFail: "Break-in detection temporarily unavailable (detect channel error, retrying)",
+  sseReconnect: "State sync disconnected, reconnecting\u2026",
+  diagCopy: "Copy diagnostics",
+  diagCopied: "Diagnostics copied",
+  diagCopyFailed: "Copy failed (clipboard rejected by browser)",
   sessionExpired: "Voice session expired, reconnecting\u2026",
   sessionExpiredFail: "Voice session reconnect failed; please re-enter voice mode",
   modelDownloadFail: "Model download failed ({file}): check network and re-enter voice mode",
@@ -1847,7 +1872,7 @@ var en = {
   descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
   settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window",
-  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate; \u2461 next recognition \u2014 model precision (SenseVoice re-transcription) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / spoken format / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout / model mirror. Saved-but-not-yet-effective items are listed at the top of this card with their current effective values.",
+  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / spoken format (applies to later replies) / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Saved-but-not-yet-effective items are listed at the top of this card with their current effective values.",
   effectivePending: "{count} change(s) will apply next time you enter voice mode: {items}",
   valueOn: "On",
   valueOff: "Off",
@@ -2081,6 +2106,15 @@ function composeDraft(current, tail, addition) {
 }
 function shouldWritePartial(state) {
   return state !== "wake";
+}
+
+// src/runtime-boot.ts
+var runtimeBoot = null;
+function setRuntimeBoot(boot) {
+  runtimeBoot = boot;
+}
+function getRuntimeBoot() {
+  return runtimeBoot;
 }
 
 // src/settings-form.tsx
@@ -2786,10 +2820,12 @@ var NEXT_ENTRY_FIELDS = [
   { key: "backchannelYield", label: "backchannelYieldLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
   { key: "yieldMs", label: "yieldMsLabel", fmt: (v) => `${v} ms` },
   { key: "bargeInSalvage", label: "bargeInSalvageLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
-  { key: "llmCorrect", label: "llmCorrectLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") }
+  { key: "llmCorrect", label: "llmCorrectLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
+  { key: "idleTimeoutMinutes", label: "idleTimeoutMinutesLabel", fmt: (v) => `${v} min` },
+  { key: "shortcut", label: "shortcutLabel", fmt: (v) => v ? String(v) : t("valueOff") }
 ];
-function EffectivePending({ effective, value }) {
-  if (!effective) return null;
+function EffectivePending({ effective, value, ready }) {
+  if (!ready || !effective) return null;
   const pending = NEXT_ENTRY_FIELDS.filter((f) => effective[f.key] !== void 0 && effective[f.key] !== value[f.key]);
   if (pending.length === 0) return null;
   const items = pending.map((f) => {
@@ -3041,16 +3077,6 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
       alive = false;
     };
   }, [engine]);
-  const [effective, setEffective] = (0, import_react2.useState)(null);
-  (0, import_react2.useEffect)(() => {
-    let alive = true;
-    void fetch(location.origin + BASE_PATH + "/config").then((res) => res.ok ? res.json() : null).then((data) => {
-      if (alive && data && typeof data === "object") setEffective(data);
-    }).catch(() => void 0);
-    return () => {
-      alive = false;
-    };
-  }, []);
   const voiceOptions = engine === "edge" ? edgeRaw ? edgeAllOptions(edgeRaw, activeLocale()) : edgeCommonOptions() : engine === "kokoro" ? kokoroOptions() : vitsOptions();
   if (unavailable) {
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { "data-dshvm-settings": "card", style: { color: t2.term, fontSize: 12, padding: "14px 16px", ...cardStyle }, children: [
@@ -3068,7 +3094,7 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { ...setChevron, transform: collapsed ? "rotate(0deg)" : "rotate(180deg)" }, "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", { viewBox: "0 0 16 16", width: 14, height: 14, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { fill: "currentColor", d: "M4 6l4 4 4-4z" }) }) })
     ] }),
     !collapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { id: "dshvm-settings-card-body", style: setBody, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EffectivePending, { effective, value }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EffectivePending, { effective: getRuntimeBoot(), value, ready: snap?.status === "ready" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { marginTop: 4 }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, { title: t("secRead"), children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "ttsEngine", desc: t("descTtsEngine"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -3286,7 +3312,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "f472557";
+var BUILD_TAG = "6e8287d";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3625,6 +3651,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     senseITN: true,
     senseVoice: true
   };
+  let noticeTimer = null;
   const ui = {
     state: "idle",
     partial: "",
@@ -3641,7 +3668,8 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     turn: "idle",
     wakeWord: "",
     // 批 H 任务 4：autoResume 引导提示（一次会话内一次）。
-    notice: null
+    notice: null,
+    sseDown: false
   };
   const listeners = /* @__PURE__ */ new Set();
   const audioListeners = /* @__PURE__ */ new Set();
@@ -3810,6 +3838,16 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("open", () => {
       rejectSeqUpTo.clear();
       lastFinalSeq.clear();
+      if (ui.sseDown) {
+        ui.sseDown = false;
+        notify();
+      }
+    });
+    source.addEventListener("error", () => {
+      if (!ui.sseDown) {
+        ui.sseDown = true;
+        notify();
+      }
     });
     source.addEventListener("mode", (e) => {
       try {
@@ -4020,6 +4058,18 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
       return () => {
         listeners.delete(fn);
       };
+    },
+    setNotice(hint) {
+      ui.notice = hint;
+      notify();
+      if (noticeTimer) clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => {
+        noticeTimer = null;
+        if (ui.notice === hint) {
+          ui.notice = null;
+          notify();
+        }
+      }, 5e3);
     },
     setUi(patch) {
       if (patch.playing === false && ui.playing === true) playingEndAt = Date.now();
@@ -4237,6 +4287,7 @@ function MicButton({
         senseVoice: c.senseVoice === false ? false : true
       };
       bus.setUi({ boot: next, mode: next.mode, wakeWord: next.wakeWord });
+      setRuntimeBoot(next);
       return next;
     } catch {
       return bootNow();
@@ -4645,6 +4696,9 @@ function MicButton({
       });
       engine.onError((key) => {
         bus.setUi({ error: t(key) });
+      });
+      engine.onNotice((key) => {
+        bus.setNotice(t(key));
       });
       engine.onLevel((l) => {
         const cur = bus.ui.levels;
@@ -5172,6 +5226,23 @@ function VoiceStatusBar({ bus, sessionId }) {
     const id = setInterval(() => setElapsedSec((s) => s + 1), 1e3);
     return () => clearInterval(id);
   }, [b.active, sessionId]);
+  const copyDiagnostics = async () => {
+    const tel2 = b.ui.telemetry ?? {};
+    const boot = b.ui.boot;
+    const lines = [
+      `dsh-voice-mode build=${BUILD_TAG}`,
+      `state=${b.ui.state}${b.ui.error ? " error=" + b.ui.error : ""}${b.ui.sseDown ? " sse=down" : ""}`,
+      boot ? `settings silenceMs=${boot.silenceMs} senseVoice=${boot.senseVoice} llmCorrect=${boot.llmCorrect} bargeInSalvage=${boot.bargeInSalvage} mode=${boot.mode} wakeWord=${boot.wakeWord ? "set" : "none"}` : "settings=unavailable",
+      ...Object.entries(tel2).map(([k, v]) => `${k}=${typeof v === "number" ? Math.round(v) + "ms" : String(v)}`)
+    ];
+    const text = lines.join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      bus.setNotice(t("diagCopied"));
+    } catch {
+      bus.setNotice(t("diagCopyFailed"));
+    }
+  };
   const [transcribingSec, setTranscribingSec] = (0, import_react3.useState)(0);
   (0, import_react3.useEffect)(() => {
     if (b.ui.state !== "transcribing") {
@@ -5264,7 +5335,27 @@ function VoiceStatusBar({ bus, sessionId }) {
             },
             i
           )) }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexGrow: 1 }, children: b.ui.error ? b.ui.error : b.ui.notice ? b.ui.notice : b.ui.idleWarn ? t("idleWarn30s") : b.ui.state === "loading-model" || b.ui.model ? b.ui.model ? `${t("loadingModel")} ${b.ui.model.file} ${b.ui.model.percent}%` : stateText : b.ui.playing || b.ui.turn === "agent-speaking" ? stateText : b.ui.state === "wake" && b.ui.partial ? `${stateText} \xB7 ${b.ui.partial}` : b.ui.partial ? b.ui.partial : b.ui.ttsNotice ? b.ui.ttsNotice : stateText }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexGrow: 1 }, children: b.ui.error ? b.ui.error : b.ui.sseDown ? t("sseReconnect") : b.ui.notice ? b.ui.notice : b.ui.idleWarn ? t("idleWarn30s") : b.ui.state === "loading-model" || b.ui.model ? b.ui.model ? `${t("loadingModel")} ${b.ui.model.file} ${b.ui.model.percent}%` : stateText : b.ui.playing || b.ui.turn === "agent-speaking" ? stateText : b.ui.state === "wake" && b.ui.partial ? `${stateText} \xB7 ${b.ui.partial}` : b.ui.partial ? b.ui.partial : b.ui.ttsNotice ? b.ui.ttsNotice : stateText }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+            "button",
+            {
+              type: "button",
+              "data-dshvm": "diag",
+              title: t("diagCopy"),
+              "aria-label": t("diagCopy"),
+              onClick: () => void copyDiagnostics(),
+              style: {
+                flexShrink: 0,
+                border: "none",
+                background: "transparent",
+                color: "var(--dsw-alias-label-tertiary)",
+                cursor: "pointer",
+                padding: "0 4px",
+                fontSize: 11
+              },
+              children: t("diagCopy")
+            }
+          ),
           b.ui.isSpeech === true && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
             "span",
             {

@@ -17,6 +17,7 @@ import { fixtureRecorder } from './fixture-recorder.ts'
 import { errorText } from './error-text.ts'
 import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
 import { composeDraft, shouldWritePartial } from './draft-compose.ts'
+import { setRuntimeBoot } from './runtime-boot.ts'
 import { activeLocale, bindLocale, t, useLang, type TKey } from './i18n.ts'
 
 /**
@@ -80,6 +81,8 @@ interface VoiceUiState {
   /** 批 H 任务 4：一次性提示文案（状态条展示 5s 后自动清；与 idleTimeoutQuit toast 共用模式）。
    *  当前用于 autoResume 关 + 切回上次会话时引导用户开启自动恢复。 */
   notice?: string | null
+  /** Issue #15 批 7：SSE 断连指示（EventSource 自动重连，重连成功清除）。 */
+  sseDown?: boolean
   /** 延迟埋点链各阶段时刻（开发模式状态条展示；null = 未启用/已清空）。 */
   telemetry: Partial<Record<TelemetryStage, number>> | null
   /** 唤醒词（空 = 关）：wake 待机态状态条展示用。 */
@@ -217,6 +220,8 @@ interface VoiceBus {
   /** Issue #15 批 2：运行中 steer 直提交（SessionFace.prompt 一等 API）。
    *  true=已直达（调用方清草稿+跳过 submit 防双发）；false=回退队列路径。 */
   steerSubmit(sessionId: string, text: string): Promise<boolean>
+  /** Issue #15 批 7：瞬态提示（5s 自动清除；仅当 notice 仍是本次文案才清，防冲掉用户新提示）。 */
+  setNotice(hint: string): void
   /** P1-5 开发埋点：ASR 引擎事件（utterance-end/endpoint-fired/submitted）入链。 */
   stampTelemetry(stage: TelemetryStage, at?: number): void
   /** P1-5 开发埋点：打断/退出/让出时清空当前链。 */
@@ -644,6 +649,8 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     senseITN: true,
     senseVoice: true,
   }
+  /** Issue #15 批 7：notice 的 5s 自动清除计时器（bus 级，autoResume 提示/瞬态提示共用）。 */
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null
   const ui: VoiceUiState = {
     state: 'idle',
     partial: '',
@@ -661,6 +668,7 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     wakeWord: '',
     // 批 H 任务 4：autoResume 引导提示（一次会话内一次）。
     notice: null,
+    sseDown: false,
   }
   const listeners = new Set<(b: { active: string | null; ui: VoiceUiState }) => void>()
   const audioListeners = new Set<(frame: TtsChunkFrame) => void>()
@@ -878,6 +886,19 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     source.addEventListener('open', () => {
       rejectSeqUpTo.clear()
       lastFinalSeq.clear()
+      // Issue #15 批 7：重连成功清除断连提示（首次连接时 sseDown 恒 false，no-op）。
+      if (ui.sseDown) {
+        ui.sseDown = false
+        notify()
+      }
+    })
+    source.addEventListener('error', () => {
+      // Issue #15 批 7：SSE 断连提示（EventSource 自带重连，但用户该知道状态同步断了——
+      // 否则表现为「字幕/状态不更新」的无头故障）。重连成功由 open 监听清除。
+      if (!ui.sseDown) {
+        ui.sseDown = true
+        notify()
+      }
     })
     source.addEventListener('mode', (e: MessageEvent<string>) => {
       try {
@@ -1149,6 +1170,18 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
       return () => {
         listeners.delete(fn)
       }
+    },
+    setNotice(hint) {
+      ui.notice = hint
+      notify()
+      if (noticeTimer) clearTimeout(noticeTimer)
+      noticeTimer = setTimeout(() => {
+        noticeTimer = null
+        if (ui.notice === hint) {
+          ui.notice = null
+          notify()
+        }
+      }, 5000)
     },
     setUi(patch) {
       // 记录 playing 降沿（true→false），供 isPlaying 回声尾音宽限判定。
@@ -1456,6 +1489,9 @@ export function MicButton({
         senseVoice: c.senseVoice === false ? false : true,
       }
       bus.setUi({ boot: next, mode: next.mode, wakeWord: next.wakeWord })
+      // Issue #15 批 6：刷新运行态 boot 镜像（设置卡片「当前生效值」的数据源——真语义是
+      // 运行中会话在用的配置，不是 host vset 自比）。
+      setRuntimeBoot(next as unknown as Record<string, unknown>)
       return next
     } catch {
       return bootNow()
@@ -1965,6 +2001,11 @@ export function MicButton({
       })
       engine.onError((key) => {
         bus.setUi({ error: t(key as 'recognitionFail') })
+      })
+      engine.onNotice((key) => {
+        // Issue #15 批 7：瞬态提示（识别通道连败 3 次等可自愈场景）——setNotice 内置
+        // 5s 自动清除（仅当 notice 仍是本次文案才清，防冲掉用户新提示）。
+        bus.setNotice(t(key as 'partialFail'))
       })
       engine.onLevel((l) => {
         // 波形：14 根滚动条
@@ -2669,6 +2710,29 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
     return () => clearInterval(id)
   }, [b.active, sessionId])
 
+  // Issue #15 批 7：诊断信息一键复制。**隐私口径：只含构建版本/运行状态/设置快照/阶段
+  //  耗时（telemetry 仅 dev 模式采集），不含任何转写原文或会话内容**——用户报 issue 时
+  //  附上即可定位版本与状态，无内容泄露面。
+  const copyDiagnostics = async (): Promise<void> => {
+    const tel = b.ui.telemetry ?? {}
+    const boot = b.ui.boot
+    const lines = [
+      `dsh-voice-mode build=${BUILD_TAG}`,
+      `state=${b.ui.state}${b.ui.error ? ' error=' + b.ui.error : ''}${b.ui.sseDown ? ' sse=down' : ''}`,
+      boot
+        ? `settings silenceMs=${boot.silenceMs} senseVoice=${boot.senseVoice} llmCorrect=${boot.llmCorrect} bargeInSalvage=${boot.bargeInSalvage} mode=${boot.mode} wakeWord=${boot.wakeWord ? 'set' : 'none'}`
+        : 'settings=unavailable',
+      ...Object.entries(tel).map(([k, v]) => `${k}=${typeof v === 'number' ? Math.round(v) + 'ms' : String(v)}`),
+    ]
+    const text = lines.join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      bus.setNotice(t('diagCopied'))
+    } catch {
+      bus.setNotice(t('diagCopyFailed'))
+    }
+  }
+
   // Issue #15 批 4：定稿耗时（transcribing 持续秒数）——SenseVoice 定稿在 CPU 上慢时
   // 让用户看到「仍在工作」，避免以为卡死（问题④用户感知面）。<2s 不显示（快定稿
   // 无意义，防闪烁）。**hook 必须在早退之前**（审查 B2：dock 槽位常驻、isActive 随
@@ -2797,7 +2861,9 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexGrow: 1 }}>
           {b.ui.error
             ? b.ui.error
-            : b.ui.notice
+            : b.ui.sseDown
+              ? t('sseReconnect')
+              : b.ui.notice
               ? b.ui.notice
               : b.ui.idleWarn
                 ? t('idleWarn30s')
@@ -2815,6 +2881,24 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
                       ? b.ui.ttsNotice
                       : stateText}
         </span>
+        <button
+          type="button"
+          data-dshvm="diag"
+          title={t('diagCopy')}
+          aria-label={t('diagCopy')}
+          onClick={() => void copyDiagnostics()}
+          style={{
+            flexShrink: 0,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--dsw-alias-label-tertiary)',
+            cursor: 'pointer',
+            padding: '0 4px',
+            fontSize: 11,
+          }}
+        >
+          {t('diagCopy')}
+        </button>
         {b.ui.isSpeech === true && (
           <span
             title={t('vadDetected')}

@@ -148,6 +148,9 @@ export interface AsrEngine {
   readonly onPartial: (fn: (text: string) => void) => () => void
   readonly onState: (fn: (s: AsrState) => void) => () => void
   readonly onError: (fn: (msg: string) => void) => () => void
+  /** Issue #15 批 7：瞬态提示通道（连败计数达阈值的识别通道异常等可自愈场景）。
+   *  与 onError（硬失败、持续显示）区分：notice 由客户端 5s 自动清除。 */
+  readonly onNotice: (fn: (key: string) => void) => () => void
   /** 归一化电平 0..1（波形条）。 */
   readonly onLevel: (fn: (level: number) => void) => () => void
   /** 延迟埋点链客户端事件（P1-5：utterance-end / endpoint-fired / submitted）。 */
@@ -193,6 +196,8 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
   }
   const transcriptListeners = new Set<(text: string, meta?: SegmentMeta) => void>()
   const partialListeners = new Set<(text: string) => void>()
+  // Issue #15 批 7：瞬态提示监听（onNotice）。
+  const noticeListeners = new Set<(key: string) => void>()
   const levelListeners = new Set<(level: number) => void>()
   const telemetryListeners = new Set<(e: TelemetryEvent) => void>()
   /** 本段「说完」时刻是否已上报（每段至多一次；无静音过渡路径在 finalize 补报）。 */
@@ -275,6 +280,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
   let preRollSeedWall: number | null = null
   /** 播放态边沿跟踪（播放入口重置种子记录）。 */
   let wasPlaying = false
+  // Issue #15 批 7：识别通道连败计数（瞬时失败下一拍自愈；连续 3 次才提示，防噪）
+  let partialFailStreak = 0
+  let detectFailStreak = 0
   /** 当前段是否抢救段（定稿时 backchannel 弃段守卫用）。 */
   let salvagedSegment = false
 
@@ -432,6 +440,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       uploadedSamples = Math.max(uploadedSamples, from + samples.length)
       // 唤醒后（wakeConsumed）实时字幕同样剥掉词头：字幕与「实际会发出的内容」保持一致
       // （待机期的字幕不剥——那正是「它听到了什么」的诊断反馈）。
+      partialFailStreak = 0 // Issue #15 批 7：成功即清零（瞬时失败不计提示）
       emit(partialListeners, wakeConsumed ? stripWakePrefix(out.text ?? '', wakeWord) : (out.text ?? ''))
       // 批 5 / ADR-0008 Phase 1：backchannel 软让位。I2 保护：仅在「朗读期 + 已开口」下才判——
       //   朗读期（config.isPlaying()）= TTS 在播；speechActive = 本地检测已开口（避免用户自言自语被误让位）。
@@ -452,7 +461,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       // I3：hold 按住期间不判端点（松手才发，防思考停顿被拆句）。
       if (out.endpoint && active && speechActive && !holdActive) finalizeSegment()
     } catch {
-      // 预览失败静默（Q16：识别重试由定时轮询自然覆盖）
+      // 预览失败：下一拍轮询自然重试（Q16）；Issue #15 批 7：连续 3 次才提示（可自愈的
+      // 瞬时失败不噪——单次静默，持续失败说明通道真断，用户该知道字幕为什么不走）。
+      if (++partialFailStreak >= 3) emit(noticeListeners, 'partialFail')
     } finally {
       partialInFlight = false
     }
@@ -509,6 +520,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       // 锚 sentAt 会切句首（台架 detect 延迟档实测抓红）。锚窗头保证永不切，代价是多带
       // ≤一个检测窗的 AI 尾音——由 AEC 残差水平与 bargeInSalvage 逃生口兜底。
       if (out.isSpeech === true && preRollSeedWall === null) preRollSeedWall = reqBodyStartWall - 250
+      detectFailStreak = 0 // Issue #15 批 7：成功即清零
       detectSent += samples.length
       // 释放已消费帧（长朗读下防缓冲无界增长）。
       while (detectChunks.length > 0 && detectSent >= detectChunks[0].length) {
@@ -516,7 +528,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
         detectChunks.shift()
       }
     } catch {
-      // 超时/网络波动静默：未推进水位，下一拍重传
+      // 超时/网络波动：未推进水位，下一拍重传；Issue #15 批 7：连续 3 次才提示
+      // （打断检测通道持续断 = 打断失效，用户该知道）。
+      if (++detectFailStreak >= 3) emit(noticeListeners, 'detectFail')
     } finally {
       detectInFlight = false
       if (fixtureRecorder.isActive) {
@@ -1310,6 +1324,12 @@ const startRecorder = async (): Promise<void> => {
       transcriptListeners.add(fn)
       return () => {
         transcriptListeners.delete(fn)
+      }
+    },
+    onNotice(fn) {
+      noticeListeners.add(fn)
+      return () => {
+        noticeListeners.delete(fn)
       }
     },
     onError(fn) {

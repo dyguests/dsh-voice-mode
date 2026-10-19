@@ -36,8 +36,13 @@ t('文案诚实：四档分组，白名单字段归「下次进入」不再声�
   const m = /settingsEffectiveNote: '([^']*)'/.exec(stringsSrc)
   assert.ok(m, '缺 settingsEffectiveNote zh')
   const note = m[1]
-  // 旧文案的 actively misleading 形态：把字幕字号/让位窗口与「即时生效」写在一起
-  assert.ok(!/即时生效；[^']*字幕字号/.test(note), '仍有把字幕字号等白名单字段称即时的旧形态')
+  // 旧文案的 actively misleading 形态：「字幕字号 / 字幕宽度 / … 即时生效」连写
+  // （实测该正则对批 6 前旧文案匹配、对新文案不匹配——有区分度）
+  assert.ok(!/字幕字号[^']*即时生效/.test(note), '仍有把字幕字号等白名单字段称即时的旧形态')
+  // M-1：口语化提示词/模型镜像归即时档（源码自述 index.ts:136-137/691），不得在第四档
+  assert.ok(/即时[^；]*口语化提示词/.test(note), '口语化提示词应归即时档（对后续回复生效）')
+  assert.ok(/即时[^；]*模型镜像/.test(note), '模型镜像应归即时档（下次下载尝试即生效）')
+  assert.ok(note.includes('定稿重译'), '第二档应用卡片行名「定稿重译」（避免与 Kokoro 模型精度撞名，M-2）')
   assert.ok(note.includes('四档'), '缺四档分组框架')
   assert.ok(note.includes('下次进入语音模式'), '缺第四档（下次进入）')
   assert.ok(note.includes('当前生效值'), '缺生效值提示')
@@ -48,19 +53,34 @@ t('strings：effectivePending 双语占位键（{count}/{items}）', () => {
   assert.ok(/effectivePending: '\{count\} change\(s\) will apply next time you enter voice mode: \{items\}'/.test(stringsSrc), 'en effectivePending 缺失或占位不符')
 })
 
-t('settings-form：/config 运行态探针存在（fetch BASE_PATH + /config）', () => {
-  assert.ok(formSrc.includes("fetch(location.origin + BASE_PATH + '/config')"), '缺运行态探针——无当前生效值数据源')
-  assert.ok(formSrc.includes('const [effective, setEffective]'), '缺 effective 状态')
+t('settings-form（审查 I-1）：当前生效值取运行态 boot 镜像（不拉 host /config 自比）', () => {
+  assert.ok(formSrc.includes("from './runtime-boot.ts'"), '缺 runtime-boot 导入')
+  assert.ok(formSrc.includes('getRuntimeBoot()'), '未读运行态镜像——与 host vset 自比稳态永相等（I-1）')
+  assert.ok(!/fetch\(location\.origin \+ BASE_PATH \+ '\/config'\)/.test(formSrc), '仍在拉 host /config 自比——effective 与 saved 同源，只能比出挂载时快照（I-1）')
+})
+
+t('runtime-boot 模块存在且客户端 fetchConfig 刷新镜像', () => {
+  const rb = read('src/runtime-boot.ts')
+  assert.ok(rb.includes('export function setRuntimeBoot'), '缺 setRuntimeBoot')
+  assert.ok(rb.includes('export function getRuntimeBoot'), '缺 getRuntimeBoot')
+  const cli = read('src/client.tsx')
+  assert.ok(cli.includes("from './runtime-boot.ts'"), '客户端未导入 runtime-boot')
+  assert.ok(/setRuntimeBoot\(next as unknown as Record<string, unknown>\)/.test(cli), 'fetchConfig 成功未刷新镜像')
+})
+
+t('settings-form（审查 M-4）：pending 列表有 ready 门控（加载中 value={} 不全量误报）', () => {
+  assert.ok(formSrc.includes("ready={snap?.status === 'ready'}"), '缺 ready 门控——HttpScope 初始空值会把全部字段误判 pending')
+  assert.ok(/if \(!ready \|\| !effective\) return null/.test(formSrc), 'EffectivePending 未用 ready 门控')
 })
 
 t('settings-form：NEXT_ENTRY_FIELDS 清单 + EffectivePending 渲染', () => {
   assert.ok(formSrc.includes('const NEXT_ENTRY_FIELDS'), '缺下次进入字段清单')
   // 白名单字段必须在清单里（字幕字号/让位窗口/打断抢救/LLM 纠错）
-  for (const k of ['captionFontSize', 'yieldMs', 'bargeInSalvage', 'llmCorrect', 'autoSend', 'wakeWord']) {
+  for (const k of ['captionFontSize', 'yieldMs', 'bargeInSalvage', 'llmCorrect', 'autoSend', 'wakeWord', 'idleTimeoutMinutes', 'shortcut']) {
     assert.ok(formSrc.includes(`key: '${k}'`), `清单缺 ${k}——该字段的生效反馈不显示`)
   }
   assert.ok(formSrc.includes('function EffectivePending'), '缺提示块组件')
-  assert.ok(formSrc.includes('<EffectivePending effective={effective} value={value} />'), '卡片体未渲染提示块')
+  assert.ok(formSrc.includes('<EffectivePending effective={getRuntimeBoot()} value={value} ready={snap?.status === \'ready\'} />'), '卡片体未渲染提示块')
 })
 
 t('README：设置入口引导 + 四档生效时机', () => {
