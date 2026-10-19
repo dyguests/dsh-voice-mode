@@ -79,7 +79,7 @@ t('lib/client.js 是 __ModuleLoader__ 闭包且注入全部三个槽位', () => 
 })
 t('build 产物与源码时间戳对齐（lib 不早于 src）', () => {
   // 修正空断言：真实比较 lib mtime ≥ 最新 src mtime（重建保证）。
-  const srcFiles = ['src/index.ts', 'src/client.tsx', 'src/asr.ts', 'src/asr-host.ts', 'src/tts-queue.ts', 'src/segmenter.ts', 'src/aec.ts', 'src/resample.ts']
+  const srcFiles = ['src/index.ts', 'src/client.tsx', 'src/asr.ts', 'src/asr-host.ts', 'src/tts-queue.ts', 'src/segmenter.ts', 'src/aec.ts', 'src/resample.ts', 'src/llm-correct.ts', 'src/steer-submit.ts', 'src/draft-compose.ts', 'src/strings.ts', 'src/settings-form.tsx', 'src/prompts.ts', 'src/security.ts', 'src/errors.ts', 'src/models.ts', 'src/settings-store.ts']
   const newestSrc = Math.max(...srcFiles.map((s) => (existsSync(join(root, s)) ? statSync(join(root, s)).mtimeMs : 0)))
   for (const f of ['lib/index.js', 'lib/client.js']) {
     assert.ok(readFileSync(join(root, f)).length > 10_000, `${f} 疑似未构建`)

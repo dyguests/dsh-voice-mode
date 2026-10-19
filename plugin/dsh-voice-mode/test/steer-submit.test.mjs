@@ -138,7 +138,7 @@ t('wiring：VoiceBus 接口声明 steerSubmit（类型闭合）', () => {
 t('wiring：用户改写守卫（RPC 在途改写不清草稿，审查 M-1）', () => {
   const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
-  assert.ok(win.includes('draftRef.current.trim() === snapshot'), 'delivered 分支缺用户改写守卫')
+  assert.ok(win.includes('draftRef.current.trim() === (wroteBack ? snapshot : draftSnapshot)'), 'delivered 分支缺用户改写守卫')
 })
 
 console.log(`\nsteer-submit：${passed} 项通过`)

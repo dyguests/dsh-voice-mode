@@ -173,7 +173,7 @@ async function main() {
             console.warn(`警告：S01 字段校验异常：${bad.map((b) => `${b.key}(期望 ${b.type})`).join('、')}`);
             ok = false;
           } else {
-            console.log('S01 /voice-mode/config 4 字段全部非 null 且类型正确 ✓');
+            console.log('S01 /voice-mode/config 5 字段全部非 null 且类型正确 ✓');
           }
         } catch (err) {
           console.warn(`警告：S01 config 请求失败：${err.message}（仍会截屏当前页面）`);

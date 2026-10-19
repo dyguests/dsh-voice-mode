@@ -2191,15 +2191,18 @@ function correctionSystem(lang) {
 async function correctText(ctx, text, lang) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return text;
-  const llm = ctx?.llm;
-  const sel = ctx?.agentDefaultModel?.currentSelection?.();
-  if (!llm || typeof llm.stream !== "function") return text;
-  if (!sel?.provider || !sel?.model) return text;
   try {
+    const llm = ctx?.get?.("llm");
+    const sel = ctx?.get?.("agentDefaultModel")?.currentSelection?.();
+    if (!llm || typeof llm.stream !== "function") return text;
+    if (!sel?.provider || !sel?.model) return text;
     const stream = llm.stream({
       provider: sel.provider,
       model: sel.model,
       system: correctionSystem(lang),
+      // host 侧自弃 10s（早于客户端 12s，审查 M3）：超时后流抛错→catch→回退原文，
+      // 客户端不必等自己的 AbortSignal.timeout 才拿到响应（省 token 与等待）。
+      signal: AbortSignal.timeout(1e4),
       messages: [{ role: "user", content: [{ type: "text", text: trimmed }] }]
     });
     let out = "";
@@ -2946,9 +2949,13 @@ function apply(ctx, config) {
             respondJson2(res, 200, { text });
             return;
           }
+          if (!config.enabled || !limiter.hit("correct", 10, 6e4)) {
+            respondJson2(res, 429, { text: trimmed });
+            return;
+          }
           void correctText(ctx, trimmed, lang).then((corrected) => {
             respondJson2(res, 200, { text: corrected });
-          });
+          }).catch(() => respondJson2(res, 200, { text: trimmed }));
         });
       }
     })

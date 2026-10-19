@@ -1008,9 +1008,20 @@ export function apply(ctx: Context, config: Config): void {
             respondJson(res, 200, { text })
             return
           }
-          void correctText(ctx, trimmed, lang).then((corrected) => {
-            respondJson(res, 200, { text: corrected })
-          })
+          // 限流对齐 /preview（审查 M2）：本地页面可无上限触发 LLM 调用；10 次/60s 对
+          // 「每消息一次」足够。config.enabled 门同理（关闭时插件整体不可用）。429 也带
+          // 原文回退语义（客户端 !r.ok 或用 text 均不阻断发送）。
+          if (!config.enabled || !limiter.hit('correct', 10, 60000)) {
+            respondJson(res, 429, { text: trimmed })
+            return
+          }
+          // .catch 恒 200 回原文（审查 B1）：correctText 理论上已全捕获，但路由层绝不
+          // 让异常逃逸成未处理 rejection + HTTP 永不响应（客户端会白等 12s 超时）。
+          void correctText(ctx, trimmed, lang)
+            .then((corrected) => {
+              respondJson(res, 200, { text: corrected })
+            })
+            .catch(() => respondJson(res, 200, { text: trimmed }))
         })
       },
     }),

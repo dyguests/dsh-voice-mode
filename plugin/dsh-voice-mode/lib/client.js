@@ -3235,7 +3235,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "e6cb06e";
+var BUILD_TAG = "50c452d";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4305,9 +4305,11 @@ function MicButton({
     }
     const runSubmit = (submitText) => {
       const snapshot = submitText.trim() || draftSnapshot;
-      if (snapshot !== draftSnapshot) {
+      let wroteBack = false;
+      if (snapshot !== draftSnapshot && typeof actions?.setDraft === "function") {
         try {
-          actions?.setDraft?.(snapshot);
+          actions.setDraft(snapshot);
+          wroteBack = true;
         } catch {
         }
       }
@@ -4340,7 +4342,7 @@ function MicButton({
       if (sid && shouldSteerSubmit(runningRef.current, snapshot)) {
         void bus.steerSubmit(sid, snapshot).then((delivered) => {
           if (delivered) {
-            if (draftRef.current.trim() === snapshot) {
+            if (draftRef.current.trim() === (wroteBack ? snapshot : draftSnapshot)) {
               try {
                 actions?.setDraft?.("");
               } catch {
@@ -4355,7 +4357,10 @@ function MicButton({
       submitViaQueue();
     };
     if (bootNow().llmCorrect === true && !draftSnapshot.startsWith("/")) {
-      void correctDraft(draftSnapshot).then((finalText) => runSubmit(finalText));
+      void correctDraft(draftSnapshot).then((finalText) => {
+        if (!submitInFlightRef.current || draftRef.current.trim() !== draftSnapshot) return;
+        runSubmit(finalText);
+      });
       return;
     }
     runSubmit(draftSnapshot);
@@ -5115,8 +5120,6 @@ function VoiceStatusBar({ bus, sessionId }) {
     const id = setInterval(() => setElapsedSec((s) => s + 1), 1e3);
     return () => clearInterval(id);
   }, [b.active, sessionId]);
-  const isActive = b.active === sessionId;
-  if (!isActive) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   const [transcribingSec, setTranscribingSec] = (0, import_react3.useState)(0);
   (0, import_react3.useEffect)(() => {
     if (b.ui.state !== "transcribing") {
@@ -5126,6 +5129,8 @@ function VoiceStatusBar({ bus, sessionId }) {
     const id = setInterval(() => setTranscribingSec((s) => s + 1), 1e3);
     return () => clearInterval(id);
   }, [b.ui.state]);
+  const isActive = b.active === sessionId;
+  if (!isActive) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   const stateText = b.ui.state === "loading-model" ? t("loadingModel") : b.ui.state === "transcribing" ? transcribingSec >= 2 ? t("recognizingSec").replace("{sec}", String(transcribingSec)) : t("recognizing") : b.ui.state === "wake" ? t("sayWake").replace("{wake}", b.ui.wakeWord || t("wakeWord")) : b.ui.state === "speech" ? b.ui.mode === "hold" ? t("holdDots") : t("listening") : b.ui.playing ? t("reading") : b.ui.turn === "agent-speaking" ? t("thinking") : b.ui.mode === "hold" ? t("barHold") : t("barListening");
   const bars = Array.from({ length: WAVE_BARS }, (_, i) => b.ui.levels[i] ?? 0);
   const botBars = Array.from({ length: WAVE_BARS }, (_, i) => b.ui.botLevels[i] ?? 0);

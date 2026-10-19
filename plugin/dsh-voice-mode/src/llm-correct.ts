@@ -8,22 +8,33 @@
  *
  * 调用点：host 路由 POST /voice-mode/correct（客户端发送前调一次，每消息一次 RTT）。
  * 避自 tap：本调用不传 sessionId（index.ts 的 llm/stream tap 只拦本会话无 purpose 流，
- * 无 sessionId 直放行——已实证 index.ts:803）。
+ * 无 sessionId 直放行——已实证 index.ts:836-840）。
  */
 
-/** ctx 的最小面（本模块只用 llm + agentDefaultModel；其余不依赖）。 */
+/** ctx 的最小面（本模块只用 get('llm')/get('agentDefaultModel')；其余不依赖）。
+ *  **必须走 ctx.get 可选查找，不能属性访问**：cordis 对未 inject 的服务属性访问抛错
+ *  （ReflectService get trap「cannot get property without inject」，审查 B1 用兄弟插件
+ *  实证复现）；本插件 host 半 inject=['webServer','settings','sessions']（index.ts:119），
+ *  'llm'/'agentDefaultModel' 均不在内——属性访问会把同步抛射到路由外（host 未处理
+ *  rejection + HTTP 永不响应）。同 index.ts:547/613 的 sessions/profileContext 模式。 */
 export interface CorrectCtx {
-  llm?: {
-    stream(options: {
-      provider: string
-      model: string
-      system?: string
-      messages: { role: 'user'; content: { type: 'text'; text: string }[] }[]
-    }): AsyncIterable<{ type: string; text?: string }>
-  }
-  agentDefaultModel?: {
-    currentSelection?: () => { provider: string; model: string } | undefined
-  }
+  get?: (name: string) => unknown
+}
+
+/** ctx.get('llm') 的最小面。 */
+interface LlmLike {
+  stream(options: {
+    provider: string
+    model: string
+    system?: string
+    signal?: AbortSignal
+    messages: { role: 'user'; content: { type: 'text'; text: string }[] }[]
+  }): AsyncIterable<{ type: string; text?: string }>
+}
+
+/** ctx.get('agentDefaultModel') 的最小面。 */
+interface DefaultModelLike {
+  currentSelection?: () => { provider: string; model: string } | undefined
 }
 
 /** 纠错系统提示（双语；只做最小修正，禁止改写/补充/回答）。 */
@@ -34,8 +45,8 @@ export function correctionSystem(lang: 'zh' | 'en'): string {
 }
 
 /**
- * 纠错一条文本。任何失败（无 ctx.llm / 无默认模型 / stream 抛错 / 空结果）都原样
- * 返回——纠错不可用时行为与关闭设置一致（纯附加层）。
+ * 纠错一条文本。任何失败（无 ctx.get / 无 llm 服务 / 无默认模型 / stream 抛错 /
+ * 空结果）都原样返回——纠错不可用时行为与关闭设置一致（纯附加层）。
  */
 export async function correctText(
   ctx: CorrectCtx | undefined,
@@ -44,15 +55,20 @@ export async function correctText(
 ): Promise<string> {
   const trimmed = String(text ?? '').trim()
   if (!trimmed) return text
-  const llm = ctx?.llm
-  const sel = ctx?.agentDefaultModel?.currentSelection?.()
-  if (!llm || typeof llm.stream !== 'function') return text
-  if (!sel?.provider || !sel?.model) return text
   try {
+    // ctx.get 可选查找（审查 B1：属性访问对未 inject 服务抛错）——老宿主无 get/无服务
+    // 均落 undefined → 回退原文。
+    const llm = ctx?.get?.('llm') as LlmLike | undefined
+    const sel = (ctx?.get?.('agentDefaultModel') as DefaultModelLike | undefined)?.currentSelection?.()
+    if (!llm || typeof llm.stream !== 'function') return text
+    if (!sel?.provider || !sel?.model) return text
     const stream = llm.stream({
       provider: sel.provider,
       model: sel.model,
       system: correctionSystem(lang),
+      // host 侧自弃 10s（早于客户端 12s，审查 M3）：超时后流抛错→catch→回退原文，
+      // 客户端不必等自己的 AbortSignal.timeout 才拿到响应（省 token 与等待）。
+      signal: AbortSignal.timeout(10000),
       messages: [{ role: 'user', content: [{ type: 'text', text: trimmed }] }],
     })
     let out = ''

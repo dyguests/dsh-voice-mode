@@ -1591,12 +1591,17 @@ export function MicButton({
     /** 实际提交文本（纠错后可能与 draftSnapshot 不同；队列 submit 发送宿主草稿，故先写回）。 */
     const runSubmit = (submitText: string): void => {
       const snapshot = submitText.trim() || draftSnapshot
-      if (snapshot !== draftSnapshot) {
-        // 纠错文本写回草稿（队列 submit 提交的是宿主草稿；steer 直发用 snapshot）。
+      // 纠错文本写回草稿（队列 submit 提交的是宿主草稿；steer 直发用 snapshot）。
+      // wroteBack 记录写回是否真落地（审查 I2）：老宿主/收窄槽位下 setDraft 缺失是静默
+      // no-op——守卫基线须回落 draftSnapshot，否则 steer 成功后不清草稿（已发消息与
+      // 原文草稿并存，用户重发=重复内容）。
+      let wroteBack = false
+      if (snapshot !== draftSnapshot && typeof actions?.setDraft === 'function') {
         try {
-          actions?.setDraft?.(snapshot)
+          actions.setDraft(snapshot)
+          wroteBack = true
         } catch {
-          // 写不回就按草稿现状发（submitViaQueue）或原文直发（steer）——不阻断
+          // 写回抛错：消息仍发出（不阻断），守卫基线回落 draftSnapshot
         }
       }
       // 队列路径（现状）：submit() + 500ms×3 有界重试（草稿被清/用户改写/进入提交态即停）。
@@ -1636,8 +1641,9 @@ export function MicButton({
         void bus.steerSubmit(sid, snapshot).then((delivered) => {
           if (delivered) {
             // 用户改写守卫（与队列重试循环同口径，审查 M-1）：RPC 在途期间用户改写了
-            // 草稿 → 不清（消息已直达，用户的改写留给用户）。
-            if (draftRef.current.trim() === snapshot) {
+            // 草稿 → 不清（消息已直达，用户的改写留给用户）。基线按写回是否落地取
+            // （审查 I2：写回失败时宿主草稿是原文而非纠错文）。
+            if (draftRef.current.trim() === (wroteBack ? snapshot : draftSnapshot)) {
               try {
                 actions?.setDraft?.('')
               } catch {
@@ -1655,7 +1661,12 @@ export function MicButton({
     // Issue #15 批 4：LLM 纠错预步（可选默认关）——发送前整条一次；命令草稿不纠错
     // （'/' 开头走宿主 adjudication）；纠错 RTT 期间在途标记已置（partial 不回写）。
     if (bootNow().llmCorrect === true && !draftSnapshot.startsWith('/')) {
-      void correctDraft(draftSnapshot).then((finalText) => runSubmit(finalText))
+      void correctDraft(draftSnapshot).then((finalText) => {
+        // 有效性复核（审查 I1）：纠错 RTT（最坏 12s）内用户退出/打字/抢占/改写草稿 →
+        // 放弃本次发送（文字留草稿可手动发）——不幽灵提交、不用旧 snapshot 覆盖用户文本。
+        if (!submitInFlightRef.current || draftRef.current.trim() !== draftSnapshot) return
+        runSubmit(finalText)
+      })
       return
     }
     runSubmit(draftSnapshot)
@@ -2653,12 +2664,10 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
     return () => clearInterval(id)
   }, [b.active, sessionId])
 
-  const isActive = b.active === sessionId
-  if (!isActive) return <></>
-
   // Issue #15 批 4：定稿耗时（transcribing 持续秒数）——SenseVoice 定稿在 CPU 上慢时
   // 让用户看到「仍在工作」，避免以为卡死（问题④用户感知面）。<2s 不显示（快定稿
-  // 无意义，防闪烁）。
+  // 无意义，防闪烁）。**hook 必须在早退之前**（审查 B2：dock 槽位常驻、isActive 随
+  // 激活/退出翻转，早退后加 hook = Rules of Hooks 违反，进/出语音模式即崩）。
   const [transcribingSec, setTranscribingSec] = useState(0)
   useEffect(() => {
     if (b.ui.state !== 'transcribing') {
@@ -2668,6 +2677,9 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
     const id = setInterval(() => setTranscribingSec((s) => s + 1), 1000)
     return () => clearInterval(id)
   }, [b.ui.state])
+
+  const isActive = b.active === sessionId
+  if (!isActive) return <></>
 
   const stateText =
     b.ui.state === 'loading-model'
