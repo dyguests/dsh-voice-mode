@@ -454,3 +454,7 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 - **官方 discussion #8250 回帖**：稿在 `docs/research/reply-8250-draft.md`；两 token 对官方仓库均 FORBIDDEN，需维护者网页端发布（人工步骤）。
 - 0.2.1 stable 发布后：本地 dsh 按 UPGRADES.md SOP 升级（D3 口径），升级前先 ensure-core 验证。
 - D5/D7 社区批次未启动：快捷键卖点、NutshellLee fork 识别修复评估、Edge 403 自动回落、官方市场索引元数据、目录站修正。
+
+### 补充（2026-10-19 下午，#8250 回帖凭据排查结论）
+
+用户提示「此前会话处理过、可以回帖」后已穷尽本机全部路径：① gh 默认 token 与 `/root/.env` GH_TOKEN、`gh hosts.yml` host 级 token——**三个全是 fine-grained PAT（github_pat_），对 deepseek-ai/deepseek-harness 均无 discussions:write**（GraphQL addDiscussionComment 三次 FORBIDDEN "Resource not accessible by personal access token"）；② git 凭据 helper 委托同一 PAT；③ playwright 浏览器无 GitHub 登录态、本机无任何浏览器 profile；④ `~/.dsh/.credentials.yaml` 只有各家 API key；⑤ GraphQL 检索证实 qishuilalala 在该仓库 discussion 参与数为 0（历史上也未曾评论过）。**结论：fine-grained PAT 无法被授予非本用户仓库的写权限，只有 classic token（repo scope）或浏览器登录可发帖。** 回帖稿：`docs/research/reply-8250-draft.md`。用户提供 classic token 后一条命令即可发；或用户网页端手动发（约 30 秒）。
