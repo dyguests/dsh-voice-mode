@@ -392,20 +392,20 @@
 
 ### 已落盘
 
-- **计划文档**：`docs/plan/issue-15-ux-feedback.md`（根因 + 五路只读取证互证 + 7 批次设计 + 不变量影响 + 待核清单）。五路取证代理（打断/提交/转写/设置可观测/兼容）全部回报，关键结论均与主会话一手读码核实互证。
+- **计划文档**：`docs/plan/issue-15-ux-feedback.md`（根因 + 五路只读取证互证 + **8 批次设计+收口** + 不变量影响 + 待核清单 + 三轴审查裁决记录；已 commit `1ebe8ca`）。五路取证代理（打断/提交/转写/设置可观测/兼容）全部回报，关键结论均与主会话一手读码核实互证。
 - **核心根因**（详见计划 §1/§2）：① 播放期用户语音只进 detectChunks 检测通道、不进识别段，hardBreak 后 reset+discardSegment 双清场 → 打断那句话整段丢失（asr.ts:774/828-837、client.tsx:1666/1674、index.ts:1273）；② 宿主 InputActions.submit 硬编码 queue（client.js:13481-13483）→ 语音提交恒排队，改宿主 busyEnter 也没用；解 = session.prompt(text,'steer') 直提交 + 回退；③ partial 只进状态条不进草稿（client.tsx:1856）；④ 定稿延迟链 5~23s（SenseVoice 整句重转 race 20s）；⑦ silenceMs 一键管端点+兜底+发送三事；⑧ settingsEffectiveNote 文案 actively misleading；⑩ 桌面端 rc.2 Electron 冒烟缺实证（0.7.25 已补 server 四层+声明）。
-- **对抗性新发现**：backchannel 软让位在 toggle+播放期是结构性死路径（播放期无 partial 轮询、detect 通道不回文本）——ADR-0008 Phase 1 #1 意图在该配置未达成，批 1 做最小处置。
+- **对抗性新发现**：backchannel 软让位在 toggle+播放期是结构性死路径（播放期无 partial 轮询、detect 通道不回文本）——ADR-0008 Phase 1 #1 意图在该配置未达成；**死路径本体仅 ADR 注记+backlog 不修**，批 1 只做 salvage 段弃段守卫（防「嗯/对」被当消息发出）。
 
 ### 进行中
 
-- 3 个审查代理并行审查计划文档（证据事实轴 / 方案最小性轴 / 风险不变量轴），回报后主会话裁决修订，必要时二轮复审。
-- 基线：HEAD=78200ec（v0.7.25），npm test 440 项/34 套件，17 版矩阵。本任务 src/lib 零改动（纯计划阶段）。
+- 三轴审查（R1 证据/R2 最小性/R3 风险）+ 第 2 轮复审已全部完成：R3 初判 fail 的 B2/I-1~I-7 与复审两个 Important（抑制口径改 engine 侧弃段、设置接线补 settings-form.tsx）均已修订进计划；**复审结论=有条件放行批 1，4 项条件已全部落实**。
+- 基线：HEAD=78200ec（v0.7.25），npm test 440 项/34 套件，17 版矩阵。计划阶段 src/lib 零改动。
 
 ### 恢复点
 
 1. 读 `docs/plan/issue-15-ux-feedback.md` 全文 + 本段。
-2. 审查 verdict 回收 → 修订计划 → 复审 PASS 后按 §6 顺序开工批 1（preRoll 抢救）。
-3. 每批四步门禁（执行 → 主会话事实核查 → 审查 subagent → 裁决）；批 1 需 ADR-0012（bargeInPreRollMs 默认 1200ms 的 I10 豁免）。
+2. 按计划 §9 顺序开工批 1（preRoll 抢救；asr.ts/client.tsx/index.ts 六站接线/settings-form.tsx/strings.ts/wake-flow 台架装置×4）。
+3. 每批门禁（主会话执行+四连 → 审查 subagent 审 diff → 主会话裁决）；批 1 I10 豁免见 ADR-0012（bargeInSalvage 布尔默认 true + PRE_ROLL_MS=2000 常量）。
 4. issue #15 回复稿与发版（v0.7.26 先例）在收口批，待用户拍板。
 
 ---
