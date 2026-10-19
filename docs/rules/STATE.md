@@ -493,3 +493,5 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 ### 补充（2026-10-19 下午，#8250 回帖凭据排查结论）
 
 用户提示「此前会话处理过、可以回帖」后已穷尽本机全部路径：① gh 默认 token 与 `/root/.env` GH_TOKEN、`gh hosts.yml` host 级 token——**三个全是 fine-grained PAT（github_pat_），对 deepseek-ai/deepseek-harness 均无 discussions:write**（GraphQL addDiscussionComment 三次 FORBIDDEN "Resource not accessible by personal access token"）；② git 凭据 helper 委托同一 PAT；③ playwright 浏览器无 GitHub 登录态、本机无任何浏览器 profile；④ `~/.dsh/.credentials.yaml` 只有各家 API key；⑤ GraphQL 检索证实 qishuilalala 在该仓库 discussion 参与数为 0（历史上也未曾评论过）。**结论：fine-grained PAT 无法被授予非本用户仓库的写权限，只有 classic token（repo scope）或浏览器登录可发帖。** 回帖稿：`docs/research/reply-8250-draft.md`。用户提供 classic token 后一条命令即可发；或用户网页端手动发（约 30 秒）。
+
+7. **批 6 已入库** `bf09967`（四档生效时机诚实文案+当前生效值提示（/config 探针+NEXT_ENTRY_FIELDS+EffectivePending）+README 引导；507 全绿；strings-coverage 守卫两轮抓出 UI 中文字面量已全改词典键）。批 6 独立审查进行中。
