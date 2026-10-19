@@ -431,3 +431,26 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 1. npm test 后台门禁（bash-335）结果确认 → 全绿后走 release.sh 0.7.25（兼容补丁版先例：v0.7.16）。
 2. issue #14 用 §19 实证关闭；官方 discussion #8250 回帖稿在 `docs/research/reply-8250-draft.md`（两 token 对官方仓库无写权限，需维护者网页端发布）。
 3. 本地 dsh 维持 0.2.0-rc.2（latest）；0.2.1 稳定发布且矩阵已覆盖后按 UPGRADES.md SOP 升级（D3 口径）。
+
+---
+
+## 任务：v0.7.25 发布 —— **已发布（2026-10-19）**
+
+### 结果
+
+- **git**：准备提交 `bc30bbe`（12 文件：审查报告/compat-contract §19/中英 README/CONTEXT/CHANGELOG/package.json/typecheck-dual/verify-dual/smoke-settings）→ 发布提交 `c0970c5` → TAG-only `08df2fe`；tag `v0.7.25` 已推；main 已 push。
+- **npm**：`dsh-voice-mode@0.7.25` = latest（传播约 4 分钟）；registry 实证 `engines.dsh = ">=0.1.1-rc.2 <0.3.0"`。
+- **GitHub Release**：https://github.com/qishuilalala/dsh-voice-mode/releases/tag/v0.7.25 （CHANGELOG 0.7.25 段自动提取为 body）。
+- **门禁**：双 typecheck + 440 项单测 + pnpm audit（官方 registry，无公告）+ pnpm/npm 双全新安装形态全过。
+- **issue #14**（CI 自动开的未覆盖版本单）已用 §19 实证评论后关闭。
+- 生产 dsh 无需重启：lib/index.js（host）与 0.7.24 字节级一致，仅 lib/client.js BUILD_TAG 一行差异；/voice-mode 200、NRestarts=0。
+
+### 过程中修复的 release.sh 三个潜在 bug（本地脚本，不入库）
+
+① audit 步骤显式走官方 registry（本机 npmrc 默认 npmmirror 无 audit 端点，门禁必失败）；② 门禁后 `git checkout -- lib/` 还原（npm test 的 BUILD_TAG 守卫必然重建 lib，原「工作区必须干净」检查永远不过——旧脚本被弃用的 probable 原因之一）；③ 步骤 3/5/9 的 git add 与 CHANGELOG 读取改 cwd 相对路径（原仓库根相对路径在插件目录全部静默失败或 fatal）。下次发版前建议 `--no-publish` 干跑复核。
+
+### 遗留（转后续）
+
+- **官方 discussion #8250 回帖**：稿在 `docs/research/reply-8250-draft.md`；两 token 对官方仓库均 FORBIDDEN，需维护者网页端发布（人工步骤）。
+- 0.2.1 stable 发布后：本地 dsh 按 UPGRADES.md SOP 升级（D3 口径），升级前先 ensure-core 验证。
+- D5/D7 社区批次未启动：快捷键卖点、NutshellLee fork 识别修复评估、Edge 403 自动回落、官方市场索引元数据、目录站修正。

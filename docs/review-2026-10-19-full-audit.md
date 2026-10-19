@@ -192,3 +192,10 @@
 **矩阵扩展**：verify-dual.sh 15→17 版锚点/typecheck、12→14 核心冒烟；check-dsh-version.sh --check exit 0 恢复对齐。
 
 **遗留（转 STATE.md 跟踪）**：v0.7.25 兼容补丁版发版（release.sh 全门禁）；0.2.1 stable 发布后本地升级；官方 discussion #8250 人工回帖；D5/D7 社区批次（快捷键卖点、fork 修复评估、Edge 403 自动回落、市场索引元数据）未启动。
+
+### 发布完成（2026-10-19 当日）
+
+- **v0.7.25 已发布**：npm latest（registry 实证 `engines.dsh = ">=0.1.1-rc.2 <0.3.0"`）、git tag `v0.7.25`、GitHub Release（c0970c5 发布提交 + 08df2fe TAG-only）；门禁=双 typecheck + 440 项单测 + pnpm audit（官方 registry 零公告）+ pnpm/npm 双安装形态。
+- **issue #14**（CI 自动未覆盖版本单）已用 §19 实证关闭；**官方 discussion #8250** 回帖稿已备（token 无官方仓库写权限，待维护者网页端发布）。
+- **release.sh 三个潜在 bug 修复**（本地脚本）：audit 显式官方 registry、门禁后还原 lib（BUILD_TAG 守卫必然重建）、步骤 3/5/9 路径 bug——下次发版前 `--no-publish` 干跑复核。
+- 生产 dsh 无需重启（host 产物与 0.7.24 字节级一致）。
