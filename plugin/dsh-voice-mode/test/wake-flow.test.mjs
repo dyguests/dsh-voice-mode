@@ -574,5 +574,28 @@ await t('salvage 段纯 backchannel（「嗯」）→ engine 侧弃段，不作�
   await h.engine.stop()
 })
 
+await t('salvage 标记不泄漏：抢救段后立刻按住说话，hold 段内容必须正常发出（防误抑制）', async () => {
+  let playing = true
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
+  await h.engine.start()
+  await say(ECHO_AMP, 800)
+  await say(SIL_AMP, 600)
+  await say(BC_AMP, 200) // 打断只说了「嗯」→ salvage 段（salvagedSegment=true）
+  await sleep(300)
+  playing = false
+  await h.engine.discardSegment() // 抢救段已 seed（尚未定稿）
+  // 用户紧接着按住 mic 说「嗯嗯」再松手——hold 段是全新段，不得继承 salvage 标记
+  h.engine.beginHeld()
+  await say(BC_AMP, 400)
+  h.engine.endHeld()
+  await sleep(500)
+  assert.equal(
+    h.segments.length,
+    1,
+    `hold 段内容必须正常发出（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）——salvagedSegment 标记泄漏会把 hold 段的「嗯」误抑制`,
+  )
+  await h.engine.stop()
+})
+
 rmSync(tmp, { recursive: true, force: true })
 console.log(`\nwake-flow：${passed} 项通过`)

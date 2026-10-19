@@ -714,6 +714,7 @@ function createAsrEngine(config, sessionId) {
     silenceMs = 0;
     wakeSilenceMs = 0;
     wakeConsumed = false;
+    salvagedSegment = false;
     prePad = [];
     uploadedSamples = 0;
     void resetHostStream();
@@ -972,6 +973,7 @@ function createAsrEngine(config, sessionId) {
           segmentEpoch++;
           segment = [];
           speechActive = false;
+          salvagedSegment = false;
           speechMs = 0;
           silenceMs = 0;
           segmentMs = 0;
@@ -1177,6 +1179,7 @@ function createAsrEngine(config, sessionId) {
       holdActive = true;
       segmentEpoch++;
       wakeConsumed = false;
+      salvagedSegment = false;
       utteranceEndAt = null;
       segment = [];
       segmentMs = 0;
@@ -1246,6 +1249,7 @@ function createAsrEngine(config, sessionId) {
       if (cancel) {
         segmentEpoch++;
         segment = [];
+        salvagedSegment = false;
         segmentMs = 0;
         silenceMs = 0;
         prePad = [];
@@ -3186,7 +3190,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "c136f71";
+var BUILD_TAG = "5a7ff3a";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);

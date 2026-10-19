@@ -573,6 +573,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     silenceMs = 0
     wakeSilenceMs = 0
     wakeConsumed = false
+    salvagedSegment = false // Issue #15 批 1：新段不继承抢救标记（防 backchannel 误抑制）
     prePad = []
     uploadedSamples = 0
     void resetHostStream()
@@ -937,6 +938,7 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
           segmentEpoch++ // I4：作废在途 partial 响应（防其推进 uploadedSamples 水位错乱）
           segment = []
           speechActive = false
+          salvagedSegment = false // Issue #15 批 1：弃段即弃抢救标记（防下一段误抑制）
           speechMs = 0
           silenceMs = 0
           segmentMs = 0
@@ -1189,6 +1191,7 @@ const startRecorder = async (): Promise<void> => {
       // force 统一由 endHeld 松手时置位，避免按住 >30s 被提前发送。
       segmentEpoch++ // 作废迟到的 wake/旧段 partial
       wakeConsumed = false // 新段重新起算词头消费
+      salvagedSegment = false // Issue #15 批 1：hold 新段不继承抢救标记（防误抑制）
       utteranceEndAt = null // P1-5：新按压段重新起算说完时刻
       segment = []
       segmentMs = 0
@@ -1268,6 +1271,7 @@ const startRecorder = async (): Promise<void> => {
         // 放弃本段（滑出取消 / Escape / blur 兜底）
         segmentEpoch++
         segment = []
+        salvagedSegment = false // Issue #15 批 1：取消段不遗留抢救标记
         segmentMs = 0
         silenceMs = 0
         prePad = []
