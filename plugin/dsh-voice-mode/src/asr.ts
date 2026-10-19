@@ -1215,6 +1215,7 @@ const startRecorder = async (): Promise<void> => {
       silenceMs = 0
       wakeSilenceMs = 0 // issue #10：待机静音计时不跨打断残留
       wakeConsumed = false // 弃段即作废词头消费标记
+      salvagedSegment = false // Issue #15 批 1：不变量——段已空，标记随下方条件 seed 重建
       speechActive = false
       prePad = []
       uploadedSamples = 0
