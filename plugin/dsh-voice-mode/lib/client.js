@@ -2035,6 +2035,20 @@ function errorText(body, fallback) {
   return t(isHostErrorCode(code) ? ERROR_I18N_KEY[code] : fallback);
 }
 
+// src/steer-submit.ts
+function shouldSteerSubmit(running, draft) {
+  return running === true && !draft.trim().startsWith("/");
+}
+async function trySteerSubmit(session, text) {
+  if (typeof session?.prompt !== "function") return false;
+  try {
+    const r = await session.prompt([{ type: "text", text }], "steer");
+    return r?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 // src/settings-form.tsx
 var import_react2 = require("react");
 
@@ -3198,7 +3212,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "d7f3e25";
+var BUILD_TAG = "cd0a159";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4008,6 +4022,14 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
       } catch {
       }
     },
+    steerSubmit(sessionId, text) {
+      try {
+        const session = ctx?.sessions?.binding?.(sessionId)?.session;
+        return trySteerSubmit(session, text);
+      } catch {
+        return Promise.resolve(false);
+      }
+    },
     stampTelemetry,
     resetTelemetry,
     warmAudio() {
@@ -4230,29 +4252,46 @@ function MicButton({
     if (typeof submitFn !== "function") return;
     const draftSnapshot = (expectedText ?? draftRef.current).trim();
     if (!draftSnapshot) return;
-    const doSubmit = () => {
-      try {
-        const r = submitFn();
-        if (r && typeof r.then === "function") {
-          r.catch(() => {
-            bus.setUi({ error: t("sendFailKept") });
-          });
+    const submitViaQueue = () => {
+      const doSubmit = () => {
+        try {
+          const r = submitFn();
+          if (r && typeof r.then === "function") {
+            r.catch(() => {
+              bus.setUi({ error: t("sendFailKept") });
+            });
+          }
+        } catch {
+          bus.setUi({ error: t("sendFailKept") });
         }
-      } catch {
-        bus.setUi({ error: t("sendFailKept") });
-      }
-    };
-    doSubmit();
-    let retryCount = 0;
-    submitTimerRef.current = setInterval(() => {
-      retryCount++;
-      const phase = phaseRef.current;
-      if (retryCount > 3 || phase === "submitting" || phase === "adjudicating" || draftRef.current.trim() !== draftSnapshot) {
-        cancelPendingSubmit();
-        return;
-      }
+      };
       doSubmit();
-    }, 500);
+      let retryCount = 0;
+      submitTimerRef.current = setInterval(() => {
+        retryCount++;
+        const phase = phaseRef.current;
+        if (retryCount > 3 || phase === "submitting" || phase === "adjudicating" || draftRef.current.trim() !== draftSnapshot) {
+          cancelPendingSubmit();
+          return;
+        }
+        doSubmit();
+      }, 500);
+    };
+    const sid = sidRef.current;
+    if (sid && shouldSteerSubmit(runningRef.current, draftSnapshot)) {
+      void bus.steerSubmit(sid, draftSnapshot).then((delivered) => {
+        if (delivered) {
+          try {
+            actions?.setDraft?.("");
+          } catch {
+          }
+          return;
+        }
+        submitViaQueue();
+      });
+      return;
+    }
+    submitViaQueue();
   };
   const scheduleAutoSend = () => {
     cancelAutoSend();

@@ -15,6 +15,7 @@ import { NlmsAec, estimateBulkDelay } from './aec.ts'
 import { resampleLinear } from './resample.ts'
 import { fixtureRecorder } from './fixture-recorder.ts'
 import { errorText } from './error-text.ts'
+import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
 import { activeLocale, bindLocale, t, useLang, type TKey } from './i18n.ts'
 
 /**
@@ -212,6 +213,9 @@ interface VoiceBus {
   unduckAudio(): void
   /** 取消当前回合（keepInbox 保新消息，Q2 打断第二层）。 */
   cancelTurn(sessionId: string): void
+  /** Issue #15 批 2：运行中 steer 直提交（SessionFace.prompt 一等 API）。
+   *  true=已直达（调用方清草稿+跳过 submit 防双发）；false=回退队列路径。 */
+  steerSubmit(sessionId: string, text: string): Promise<boolean>
   /** P1-5 开发埋点：ASR 引擎事件（utterance-end/endpoint-fired/submitted）入链。 */
   stampTelemetry(stage: TelemetryStage, at?: number): void
   /** P1-5 开发埋点：打断/退出/让出时清空当前链。 */
@@ -1234,6 +1238,17 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         // cancel 失败不抛到录音循环
       }
     },
+    steerSubmit(sessionId, text) {
+      // Issue #15 批 2：运行中 steer 直提交。与 cancelTurn 同源访问
+      // ctx.sessions.binding(sessionId).session；prompt(content,'steer') 直达，
+      // 失败/老宿主由 trySteerSubmit 吞掉返回 false → 调用方回退队列路径。
+      try {
+        const session = ctx?.sessions?.binding?.(sessionId)?.session as SteerSession | undefined
+        return trySteerSubmit(session, text)
+      } catch {
+        return Promise.resolve(false)
+      }
+    },
     stampTelemetry,
     resetTelemetry,
     warmAudio() {
@@ -1541,31 +1556,54 @@ export function MicButton({
     if (typeof submitFn !== 'function') return
     const draftSnapshot = (expectedText ?? draftRef.current).trim()
     if (!draftSnapshot) return
-    const doSubmit = (): void => {
-      try {
-        const r: any = submitFn()
-        // 兼容 Promise 型 submit
-        if (r && typeof r.then === 'function') {
-          r.catch(() => {
-            bus.setUi({ error: t('sendFailKept') })
-          })
+    // 队列路径（现状）：submit() + 500ms×3 有界重试（草稿被清/用户改写/进入提交态即停）。
+    const submitViaQueue = (): void => {
+      const doSubmit = (): void => {
+        try {
+          const r: any = submitFn()
+          // 兼容 Promise 型 submit
+          if (r && typeof r.then === 'function') {
+            r.catch(() => {
+              bus.setUi({ error: t('sendFailKept') })
+            })
+          }
+        } catch {
+          bus.setUi({ error: t('sendFailKept') })
         }
-      } catch {
-        bus.setUi({ error: t('sendFailKept') })
-      }
-    }
-    doSubmit()
-    let retryCount = 0
-    submitTimerRef.current = setInterval(() => {
-      retryCount++
-      const phase = phaseRef.current
-      // 已提交（草稿被清成空）/ 用户改写 / 进入提交态 → 停止重试
-      if (retryCount > 3 || phase === 'submitting' || phase === 'adjudicating' || draftRef.current.trim() !== draftSnapshot) {
-        cancelPendingSubmit()
-        return
       }
       doSubmit()
-    }, 500)
+      let retryCount = 0
+      submitTimerRef.current = setInterval(() => {
+        retryCount++
+        const phase = phaseRef.current
+        // 已提交（草稿被清成空）/ 用户改写 / 进入提交态 → 停止重试
+        if (retryCount > 3 || phase === 'submitting' || phase === 'adjudicating' || draftRef.current.trim() !== draftSnapshot) {
+          cancelPendingSubmit()
+          return
+        }
+        doSubmit()
+      }, 500)
+    }
+    // Issue #15 批 2：运行中 steer 直提交。宿主 InputActions.submit 硬编码 queue
+    // （语音提交恒排队，改宿主 busyEnter 也没用）→ 运行中且非命令草稿走
+    // session.prompt(text,'steer') 直达；仅 ok 才清草稿并跳过重试/submit（防双发），
+    // 任何失败回退队列路径（不劣于现状）。
+    const sid = sidRef.current
+    if (sid && shouldSteerSubmit(runningRef.current, draftSnapshot)) {
+      void bus.steerSubmit(sid, draftSnapshot).then((delivered) => {
+        if (delivered) {
+          try {
+            actions?.setDraft?.('')
+          } catch {
+            // 清草稿失败不阻断——消息已直达
+          }
+          return
+        }
+        submitViaQueue()
+      })
+      return
+    }
+    submitViaQueue()
   }
 
   /** 累积模式：静音到「发送阈值」（断句已等一个 silenceMs，再额外等一个）才发；
