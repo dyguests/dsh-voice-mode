@@ -398,15 +398,18 @@
 
 ### 进行中
 
-- 三轴审查（R1 证据/R2 最小性/R3 风险）+ 第 2 轮复审已全部完成：R3 初判 fail 的 B2/I-1~I-7 与复审两个 Important（抑制口径改 engine 侧弃段、设置接线补 settings-form.tsx）均已修订进计划；**复审结论=有条件放行批 1，4 项条件已全部落实**。
-- 基线：HEAD=78200ec（v0.7.25），npm test 440 项/34 套件，17 版矩阵。计划阶段 src/lib 零改动。
+- 三轴审查（R1 证据/R2 最小性/R3 风险）+ 第 2 轮复审已全部完成：R3 初判 fail 的 B2/I-1~I-7 与复审两个 Important（抑制口径改 engine 侧弃段、设置接线补 settings-form.tsx）均已修订进计划；复审结论=有条件放行批 1，4 项条件全部落实。
+- **批 1（打断语音抢救）已入库**：`7721d00` feat（asr.ts 预录环+absorbPreRoll+弃段守卫，index/client/strings/settings-form 接线，wake-flow 台架 440→445 全绿，双 tsc+build 过）+ `c136f71` docs（计划修订：种子锚点改请求体起点-250——台架 detect 延迟档实测抓红 sentAt 方案后修正）+ `0496ace` chore(lib)。**执行期修正记录**：台架 max 判频段实验抓红 D5 命令窗（相位小尾巴产字污染唤醒词文本）→ 回退 mean 判+BC 频段加宽 [0.015,0.05) 解决混合块杂字。
+- 批 1 独立审查进行中（kimi-coding 路由故障，stepfun-plan 路由重派两个窄域审查：引擎正确性/接线与测试）。
+- 基线：HEAD=78200ec（v0.7.25）→ 0496ace；npm test 445 项；17 版矩阵不变。
 
 ### 恢复点
 
 1. 读 `docs/plan/issue-15-ux-feedback.md` 全文 + 本段。
-2. 按计划 §9 顺序开工批 1（preRoll 抢救；asr.ts/client.tsx/index.ts 六站接线/settings-form.tsx/strings.ts/wake-flow 台架装置×4）。
+2. 批 1 审查 verdict 回收 → 有 Blocker/Important 则 fix-commit → 放行批 2（运行中 steer 直提交；前置 PoC：0.1.1-rc.2 与 0.2.1-rc.2 两端 session.prompt running 行为）。
 3. 每批门禁（主会话执行+四连 → 审查 subagent 审 diff → 主会话裁决）；批 1 I10 豁免见 ADR-0012（bargeInSalvage 布尔默认 true + PRE_ROLL_MS=2000 常量）。
-4. issue #15 回复稿与发版（v0.7.26 先例）在收口批，待用户拍板。
+4. 批 1 真机验收项已登记 docs/qa/must-verify-manually.md（外放/耳机 × salvage 纯度 + 纯「嗯」不发送 + 逃逸关口）。
+5. issue #15 回复稿与发版（v0.7.26 先例）在收口批，待用户拍板。
 
 ---
 
