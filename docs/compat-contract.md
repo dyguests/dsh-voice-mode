@@ -683,3 +683,11 @@ class AgentDefaultModelConfig extends Service {
 - **`engines.dsh` 口径变更（用户 2026-10-19 拍板 D1）**：`">=0.1.1-rc.2"`（无上界）→ `">=0.1.1-rc.2 <0.3.0"`。理由：alpha.4 起硬校验下，无上界意味着未来破坏性 major 仍会被放行到未测试宿主（0.1.7 settingsScope 事故事前无任何拦截）；官方 publish.zh.md 推荐带上界（示例 `">=0.2.0 <0.3.0"`），且官方 market 兼容性判定对宽范围会判全兼容（#9907）。已实测范围 0.1.1-rc.2 → 0.2.1-rc.2 全部落在界内；0.3.0 上线前需重新验证并扩范围。
 - 矩阵扩展：`verify-dual.sh` 15→17 版锚点/typecheck、12→14 核心冒烟（+0.2.1-alpha.5、+0.2.1-rc.2，端口 3147/3148）；`check-dsh-version.sh --check` 恢复对齐（exit 0）。
 - issue #14 已用本实证段关闭。
+
+## 20. Issue #15 批 1-7 变更后的 0.2.1 双核心复核（2026-10-19 夜，批 8）
+
+- 背景：Issue #15 十项反馈的批 1-7（打断抢救/steer 直提交/partial 回填/快速准确模式+LLM 纠错/发送延迟解耦/生效反馈/静默路径提示）全部入库后，按批 8 口径对 0.2.1-alpha.5 与 0.2.1-rc.2 两个 next 通道核心重跑 runtime 冒烟（隔离 DSH_HOME + 本仓库 link + headless chromium）。
+- **0.2.1-rc.2：全量通过**——host 三端点 200、mic 按钮 en/zh 渲染、console 0 error、设置卡片入口（Plugins 详情页）/旧 settings.yaml 迁移/写入生效/刷新保留/Settings→语音模式专属页/双语卡片/语言热切换/覆盖层落盘/引擎热切换/非法值 400/未知键 400/跨源 403 全断言通过（与本仓库当前构建，含批 1-7 全部改动）。
+- **0.2.1-alpha.5：设置卡片探针稳定失败（3/3），但已实证非本仓库回归**：① 同核心同脚本重跑两次均「找不到设置卡片（Plugins 详情页与 Settings→Plugins 两处均无）」；② **A/B 对照**——同一核心同一脚本跑**发布包 0.7.25**（DSHVM_SPEC=0.7.25，未经批 1-7 改动的线上代码）同样失败；③ 而 §19（同日 11:37）记录同探针在 alpha.5 上 16/16 全过。mic 按钮渲染与 console 0 error 在失败轮次中均通过——插件加载与客户端渲染正常，失败面限于设置卡片的导航可达性。判定：环境/探针侧问题（alpha.5 的 UI 导航序列或首次运行态），非插件代码回归；rc.2（0.2.1 正式版候选，更重要目标）全量通过。**遗留登记**：alpha.5 的设置卡片探针失败待用户侧（Windows 桌面端）复跑确认；若复现需按 §19 机制性变化②（Account menu → Settings → Voice Mode）扩探针路由。
+- 未跑层（如实声明缺口）：L4 真语音闭环（DSHVM_VOICE_LOIC/VOICE_CHAIN 需本机缓存 VITS/zipformer 模型，本次未启用）；**桌面端 Electron 冒烟（真 Electron + Xvfb/Windows 宿主）未跑**——本服务器无桌面环境，历史先例（v0.7.25 批 5）在 Windows 宿主执行，已登记 must-verify-manually 交用户侧补跑（0.2.1-alpha.5/rc.2 两个核心）。
+- 结论：批 1-7 变更在 0.2.1-rc.2 上全链路验证通过；alpha.5 的设置卡片探针失败为环境性问题（A/B 已排除插件回归），遗留用户侧复跑。

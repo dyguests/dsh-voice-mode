@@ -494,4 +494,7 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 
 用户提示「此前会话处理过、可以回帖」后已穷尽本机全部路径：① gh 默认 token 与 `/root/.env` GH_TOKEN、`gh hosts.yml` host 级 token——**三个全是 fine-grained PAT（github_pat_），对 deepseek-ai/deepseek-harness 均无 discussions:write**（GraphQL addDiscussionComment 三次 FORBIDDEN "Resource not accessible by personal access token"）；② git 凭据 helper 委托同一 PAT；③ playwright 浏览器无 GitHub 登录态、本机无任何浏览器 profile；④ `~/.dsh/.credentials.yaml` 只有各家 API key；⑤ GraphQL 检索证实 qishuilalala 在该仓库 discussion 参与数为 0（历史上也未曾评论过）。**结论：fine-grained PAT 无法被授予非本用户仓库的写权限，只有 classic token（repo scope）或浏览器登录可发帖。** 回帖稿：`docs/research/reply-8250-draft.md`。用户提供 classic token 后一条命令即可发；或用户网页端手动发（约 30 秒）。
 
-7. **批 6 已入库** `bf09967`（四档生效时机诚实文案+当前生效值提示（/config 探针+NEXT_ENTRY_FIELDS+EffectivePending）+README 引导；507 全绿；strings-coverage 守卫两轮抓出 UI 中文字面量已全改词典键）。批 6 独立审查进行中。
+7. **批 6 已闭环** `bf09967`+`86d0566`+`3bb0519`（四档生效文案+当前生效值提示（runtime-boot 镜像源，审查 I-1 后修）+静默路径提示/SSE 断连/诊断复制（批 7）；两路审查 fail 项全修——批 6 I-1 镜像口径/I-2 补字段、批 7 B1 补提测试文件/I1 mtime/I2 锁紧/I3 计划收窄登记）。
+8. **批 8 已入库**：0.2.1-rc.2 runtime 冒烟全量通过（含设置卡片 16 断言）；0.2.1-alpha.5 设置卡片探针稳定失败 3/3 但经发布包 0.7.25 A/B 实证非插件回归（compat-contract §20）；桌面 Electron 冒烟无桌面环境未跑（用户侧 Windows 先例，已登记真机项）。
+9. **收口完成**：CHANGELOG [Unreleased] Issue #15 条目、CONTEXT.md 设置语义刷新、`docs/issue-15-reply.md` 回复稿（待用户直发——注意本机 GitHub token 是 fine-grained PAT 无跨仓库 discussions:write 权限，需用户网页端发或提供 classic token，同 #8250 排查结论）。
+10. **待用户拍板**：发版（建议 patch 0.7.26）；issue 回帖；桌面冒烟补跑；alpha.5 探针复跑。npm test 518 全绿。
