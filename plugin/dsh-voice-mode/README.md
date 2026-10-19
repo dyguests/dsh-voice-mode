@@ -15,7 +15,7 @@ DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边�
 
 ![语音模式真实录制：流式转写 → 自动发送 → 按句朗读 + 实时字幕](https://raw.githubusercontent.com/qishuilalala/dsh-voice-mode/HEAD/plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
 
-> **运行时变更（最近：v0.7.18 ~ v0.7.24）**：① **设置面全版本打通**——dsh 0.1.7+ 上设置页与持久化修复（Settings → 语音模式 专属页、写入与重启保留）；② **国际化重做**——界面语言跟随 dsh 官方语言设置，中/英文完整一致、切换无需刷新；③ **修复 npm/pnpm 全新安装失败与 dsh ≥0.1.7 已安装形态「failed to import」**（0.7.17 及更早版本受影响，请升级到 ≥0.7.18）；④ **官方桌面端（Electron）下本地 Kokoro 修复**——需系统 PATH 上有 Node.js ≥18（或设 `DSHVM_NODE`）；⑤ **v0.7.24：恢复 Edge 云端朗读**——微软服务端自 2026-10-15 起拒绝旧版握手（v0.7.23 及更早的默认 Edge 朗读无声，本地 VITS / Kokoro 不受影响），内联的 msedge-tts 升到 2.1.0；朗读**连续失败时**会提示切换本地引擎；另有 host 加固（`/models/retry` 仅同源 POST、模型树路径校验、错误原文不下行）。兼容 dsh 至 0.2.1-alpha.3（其设置入口移入侧栏「More」菜单，本插件两处入口仍有效）。
+> **运行时变更（最近：v0.7.18 ~ v0.7.24）**：① **设置面全版本打通**——dsh 0.1.7+ 上设置页与持久化修复（Settings → 语音模式 专属页、写入与重启保留）；② **国际化重做**——界面语言跟随 dsh 官方语言设置，中/英文完整一致、切换无需刷新；③ **修复 npm/pnpm 全新安装失败与 dsh ≥0.1.7 已安装形态「failed to import」**（0.7.17 及更早版本受影响，请升级到 ≥0.7.18）；④ **官方桌面端（Electron）下本地 Kokoro 修复**——需系统 PATH 上有 Node.js ≥18（或设 `DSHVM_NODE`）；⑤ **v0.7.24：恢复 Edge 云端朗读**——微软服务端自 2026-10-15 起拒绝旧版握手（v0.7.23 及更早的默认 Edge 朗读无声，本地 VITS / Kokoro 不受影响），内联的 msedge-tts 升到 2.1.0；朗读**连续失败时**会提示切换本地引擎；另有 host 加固（`/models/retry` 仅同源 POST、模型树路径校验、错误原文不下行）。兼容 dsh 至 0.2.1-rc.2（0.2.1-alpha.4/5 起设置入口移入侧栏底部「Account menu」弹出层，本插件两处入口仍有效）。
 
 ---
 
@@ -255,7 +255,7 @@ flowchart LR
 | 打断检测 | 基础 VAD | **三档灵敏度 + 回声门控 + 让位语义** |
 | 字幕 a11y | 无 | **4 档字号 + 3 档宽度 + 主题跟随** |
 | 唤醒词 | 无 | **轻量流式匹配 + 前缀语气词白名单** |
-| 兼容 dsh | — | **0.1.1-rc.2 起全版本（含 0.2.1-alpha.3）** |
+| 兼容 dsh | — | **0.1.1-rc.2 起全版本（含 0.2.1-rc.2）** |
 
 ---
 
@@ -280,7 +280,7 @@ flowchart LR
 
 ### 兼容声明（插件市场的版本筛选依据）
 
-`package.json` 声明 `engines.dsh = ">=0.1.1-rc.2"`（插件市场据此在「按宿主版本筛选」时判定兼容）。已实测范围 **0.1.1-rc.2 → 0.2.1-alpha.3**（含官方桌面端等价的 Electron 宿主）；上限开放，由每周 CI 巡检上游新版本并复验，出现未覆盖版本会自动开 issue。`peerDependencies` 仅声明 `@deepseek-ai/cordis` 与 `react`（宿主提供）。
+`package.json` 声明 `engines.dsh = ">=0.1.1-rc.2 <0.3.0"`（插件市场据此在「按宿主版本筛选」时判定兼容；dsh 0.2.1-alpha.4 起 next/alpha 通道由 `engines.dsh` 单独硬校验，不满足即拒绝加载，故上界封在 0.3.0——未验证的新大版本会被干净拒绝而非静默破损）。已实测范围 **0.1.1-rc.2 → 0.2.1-rc.2**（含官方桌面端等价的 Electron 宿主）；由每周 CI 巡检上游新版本并复验，出现未覆盖版本会自动开 issue。`peerDependencies` 仅声明 `@deepseek-ai/cordis` 与 `react`（宿主提供）。
 
 ## 🚧 已知限制
 

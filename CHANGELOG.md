@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.7.25] - 2026-10-19
+
+**Patch**：兼容 dsh 0.2.1-alpha.5 / 0.2.1-rc.2（四层验证全绿）；`engines.dsh` 改为带上界；验证矩阵扩至 17 版 / 14 核心；冒烟脚本适配 0.2.1 设置入口迁移。
+
+### 兼容
+
+- 复核 dsh **0.2.1-alpha.5 / 0.2.1-rc.2**（next 通道；rc.2 为 0.2.1 正式版候选）：17 版锚点 9/9、17 版 host/client 双 typecheck、14 核心 runtime 冒烟（16 断言：mic 双语渲染、设置卡片/迁移/写入/刷新保留/专属页/双语卡片/语言热切换/覆盖层落盘/引擎热切换/非法值与跨源拒绝）、真 LLM + 真实语音闭环 4 帧 / 0 tts-error。实证见 `docs/compat-contract.md` §19。
+- **`engines.dsh` 改为 `">=0.1.1-rc.2 <0.3.0"`**（原无上界）：dsh 0.2.1-alpha.4 起 next/alpha 通道由 `engines.dsh` 单独硬校验兼容性（不满足即拒绝加载），无上界意味着未来破坏性大版本仍会被放行到未测试宿主；按官方推荐风格封顶 0.3.0，未验证的新大版本将被干净拒绝。已实测范围 0.1.1-rc.2 → 0.2.1-rc.2 全部落在界内。
+- 适配 0.2.1-alpha.4/5 起设置入口迁移：Settings 从侧栏「More」菜单移入底部「Account menu」弹出层（未认证时引导后弹可关登录门）。插件两处入口（设置弹窗「语音模式」专属页 + 插件详情页卡片）均仍有效，业务源码零改动；冒烟脚本新增第三条导航路径与登录门关闭（对照组线上 0.2.0-rc.2 回归 16/16，旧宿主无回归）。
+
+### 测试与工具
+
+- `scripts/typecheck-dual.sh` cordis 映射补表：`0.2.1-alpha.4/5 → 4.0.5-alpha.2`、`0.2.1-rc.2 → 4.0.5`（npm view peer 实证）。
+- `scripts/verify-dual.sh` 矩阵 15→17 版锚点/typecheck、12→14 核心冒烟；`check-dsh-version.sh` 恢复 exit 0 对齐。
+- 文档同步：根/插件中英 README 兼容声明、CONTEXT.md 宿主兼容行、`docs/RELEASE-WORKFLOW.md`（发版正典回 release.sh）。
+
 ## [Unreleased]
 
 ### 规划中

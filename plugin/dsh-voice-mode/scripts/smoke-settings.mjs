@@ -46,12 +46,23 @@ async function clickText(re, sel = 'button,[role=button],[role=tab],[role=menuit
     return false
   }, { src: re.source, sel })
 }
-// 打开 Settings 弹窗：旧宿主侧栏直接有「Settings」；0.2.1-alpha.3 起收进侧栏底部的「More」菜单（需真实点击）。
+// 打开 Settings 弹窗：旧宿主侧栏直接有「Settings」；0.2.1-alpha.3 起收进侧栏底部的「More」菜单（需真实点击）；
+// 0.2.1-alpha.4/5 起移入侧栏底部「Account menu」弹出层（未认证时先弹可关的登录门，见 dismissSignInGate）。
 async function openSettings(pg, directClick) {
   if (await directClick()) return true
   try {
     await pg.getByText(/^(More|更多)$/).first().click({ timeout: 2000 })
     await pg.waitForTimeout(600)
+    await pg.getByText(/^(Settings|设置)$/).first().click({ timeout: 2000 })
+    return true
+  } catch {}
+  // 新路径（0.2.1-alpha.4/5+）：Account menu → Settings。先 Escape 关掉可能开着的 More 菜单，再关登录门。
+  try {
+    await pg.keyboard.press('Escape').catch(() => {})
+    await pg.waitForTimeout(400)
+    await dismissSignInGate()
+    await pg.getByText(/^(Account menu|账户菜单)$/).first().click({ timeout: 2000 })
+    await pg.waitForTimeout(800)
     await pg.getByText(/^(Settings|设置)$/).first().click({ timeout: 2000 })
     return true
   } catch { return false }
@@ -61,6 +72,22 @@ async function dismissOnboarding() {
     if (!(await page.evaluate(() => !!document.querySelector('[role="dialog"]')))) break
     if (!(await clickText(/continue|later|skip|got it|ok|继续|稍后|跳过|知道了|好的|确定|开始/, '[role=dialog] button'))) break
     await page.waitForTimeout(800)
+  }
+}
+// 0.2.1-alpha.4/5 起：未认证 profile 在引导后弹出可关闭的登录门（Get started / Sign in，× 按钮 aria-label=Close）。
+// 不关掉会挡住后续 Settings 导航（Account menu 路径）。幂等：无门时零动作。
+async function dismissSignInGate() {
+  for (let i = 0; i < 3; i++) {
+    const closed = await page.evaluate(() => {
+      const d = document.querySelector('[role="dialog"]')
+      if (!d) return false
+      if (!/get started|sign in|log in|登录/i.test(d.innerText || '')) return false
+      const x = Array.from(d.querySelectorAll('button,[role=button]')).find((b) => /^(close|关闭)$/i.test((b.getAttribute('aria-label') || b.textContent || '').trim()))
+      if (x) { x.click(); return true }
+      return false
+    })
+    if (!closed) break
+    await page.waitForTimeout(600)
   }
 }
 const hasCard = () => page.evaluate(() => !!document.querySelector('[data-dshvm-settings="card"]'))
@@ -87,6 +114,7 @@ try {
   await page.goto(url, { waitUntil: 'load', timeout: 30000 })
   await page.waitForTimeout(2000)
   await dismissOnboarding()
+  await dismissSignInGate()
 
   // 1) 找到卡片：先走 0.1.7+ 入口（Plugins 页 → 已安装插件详情），再退到 ≤0.1.6 入口（Settings → Plugins）
   let route = null
@@ -101,6 +129,8 @@ try {
     await page.goto(url, { waitUntil: 'load' })
     await page.waitForTimeout(1500)
     await dismissOnboarding()
+    await dismissSignInGate()
+  await dismissSignInGate()
     if (await openSettings(page, () => clickText(/^settings$/i))) {
       await page.waitForTimeout(1200)
       await clickText(/^plugins$/i, '[role=dialog] button,[role=dialog] [role=tab],[role=dialog] a,[role=dialog] li')
@@ -138,6 +168,7 @@ try {
   // 3) 刷新页面后仍保留
   await page.reload({ waitUntil: 'load' })
   await page.waitForTimeout(1500)
+  await dismissSignInGate()
   const reloaded = (await getSettings())?.value ?? null
   if (changed.length === 1 && reloaded && JSON.stringify(reloaded[changed[0]]) === JSON.stringify(after[changed[0]])) ok('刷新后设置保留')
   else bad('刷新后设置未保留')
@@ -146,6 +177,7 @@ try {
   await page.goto(url, { waitUntil: 'load' })
   await page.waitForTimeout(1500)
   await dismissOnboarding()
+  await dismissSignInGate()
   let sectionOk = false
   if (await openSettings(page, () => clickText(/^settings$/i))) {
     await page.waitForTimeout(1200)
@@ -175,6 +207,19 @@ try {
       })
       if (!clicked) break
       await p.waitForTimeout(800)
+    }
+    // 0.2.1-alpha.4/5：引导后弹出可关的登录门（Get started / Sign in），不关会挡住 Account menu → Settings 新路径
+    for (let i = 0; i < 3; i++) {
+      const closed = await p.evaluate(() => {
+        const d = document.querySelector('[role="dialog"]')
+        if (!d) return false
+        if (!/get started|sign in|log in|登录/i.test(d.innerText || '')) return false
+        const x = Array.from(d.querySelectorAll('button,[role=button]')).find((b) => /^(close|关闭)$/i.test((b.getAttribute('aria-label') || b.textContent || '').trim()))
+        if (x) { x.click(); return true }
+        return false
+      })
+      if (!closed) break
+      await p.waitForTimeout(600)
     }
     const click = (re, sel) => p.evaluate(({ src, sel }) => {
       const rx = new RegExp(src, 'i')

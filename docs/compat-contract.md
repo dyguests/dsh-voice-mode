@@ -662,3 +662,24 @@ class AgentDefaultModelConfig extends Service {
 - 测试装置修复（与插件代码无关）：`smoke-runtime.sh` 补就绪等待——旧核心先打印 URL 后监听，curl 连接被拒会因 `set -e` 以 exit 7 误杀；原写法 `curl -w ... || echo "000"` 在失败时输出 `000000` 而永远判「已就绪」，`full-e2e.sh` 同款写法一并修正；`ensure-core.sh` 对 0.1.0-*/0.1.1-* 自动打 `DSH_TEST_SKIP_HMR_WATCH` 夹具（先 cp 出新 inode 再覆盖，不改 pnpm store 里的共享文件），`verify-dual.sh` 的 0.1.1 冒烟带上该环境变量。
 - 说明：msedge-tts 2.1.0 把 Edge TTS 端点换为 `api.msedgeservices.com`（旧版为 `speech.platform.bing.com`），夹具按两个域名都拦。
 
+
+## 19. 0.2.1-alpha.5 / 0.2.1-rc.2 复核（2026-10-19，全面梳理后 U1 四层验证）
+
+- 发现途径：周一 CI 巡检（run 39190827973，02:37 UTC）失败并自动开 issue #14「有未覆盖版本 0.2.1-alpha.5 0.2.1-rc.2」。发布时间（npm registry time）：alpha.4=10-15 13:08Z、alpha.5=10-16 12:31Z、rc.2=10-17 08:36Z（next）；rc.2 即 0.2.1 正式版候选（内容为模型适配）。另有未挂 tag 的 rc.1（10-17 03:17Z）。
+- **上游 tag diff（alpha.3→rc.2）静态结论**：host 侧 webServer/settings/sessions 源码零变更；6 个在用槽位契约零变更；9 个 client.inject 锚点包在 rc.2 全部在版；api-remotes 仅新增 plugin-market remote（纯新增）；cordis `~4.0.5-alpha.2 → ~4.0.5`（vendor 源码一致，仅版本号）；依赖集合仅新增 `@deepseek-ai/dsh-experimental-plugin-market-bundle`（官方插件市场）。静态证据支持兼容，但按铁律「typecheck 过 ≠ 运行时兼容」仍做四层真验证——**且确实抓到了两处宿主行为变化**（见下）。
+- **机制性变化①：`engines.dsh` 成为 next/alpha 通道硬校验**（0.2.1-alpha.4 起，官方 upgrade-guide `plugin-engines-dsh` + `packages/boot/app-boot/src/plugin-compatibility.ts` 实证）：声明了 `engines.dsh` 的插件由该范围**单独决定**兼容性（peer 被忽略），不满足即拒绝加载（安装前失败、不导入模块、`disabled: true`/`skippedBundles`），豁免需用户 `dsh plugin allow-version --accept-risk` 逐精确版本确认；latest 通道（0.2.0-rc.2）仍忽略 engines.dsh 只看 peer。判定用 `semver.satisfies(..., { includePrerelease: true })`。
+- **机制性变化②：设置弹窗入口第三次迁移**（0.2.1-alpha.4/5 起）：侧栏底部「More」菜单内**不再有 Settings**；Settings 移入侧栏底部「Account menu」弹出层（Account menu → Settings → Voice Mode 专属页完整可用）。同时未认证 profile 在引导后弹出**可关闭的登录门**（Get started / Sign in，× 按钮 aria-label=Close）。插件两处入口（`settings.section` 专属页 + `plugins.bundle.config` 卡片）均仍有效，卡片入口完全不受影响。
+
+### 四层验证结果（2026-10-19，对当前源码构建）
+
+| 层 | 0.2.1-alpha.5 | 0.2.1-rc.2 |
+|---|---|---|
+| L1 锚点（9 个 client.inject 包） | ✅ 9/9 | ✅ 9/9 |
+| L2 双 typecheck（cordis 映射已补：alpha.4/5→4.0.5-alpha.2、rc.2→4.0.5） | ✅ host + client | ✅ host + client |
+| L3 runtime 冒烟（boot + 三端点 + mic 渲染 en/zh + console 0 error + 设置卡片/迁移/写入/刷新保留/专属页/双语卡片/语言热切换/覆盖层落盘/引擎热切换/非法值 400/未知键 400/跨源 403，共 16 断言） | ✅ 16/16 | ✅ 16/16 |
+| L4 真 LLM + 真实语音闭环（DSHVM_VOICE_LOOP=1） | ✅ 4 帧 SSE 音频 / 0 tts-error；识别命中「天气」「识别」、朗读帧到达客户端 | ✅ 4 帧 SSE 音频 / 0 tts-error；同上 |
+
+- **冒烟脚本适配（测试装置变更，插件 src/lib 零改动）**：`scripts/smoke-settings.mjs` ① `openSettings()` 增加第三条路径——More 菜单找不到 Settings 时走「Account menu → Settings」（0.2.1-alpha.4/5+），旧路径（直接按钮 / More 菜单）保持不变，老宿主无回归；② 新增 `dismissSignInGate()`：引导后出现登录门时点 × 关闭（幂等，无门零动作），在三个 `dismissOnboarding()` 调用点、刷新后、`openVoiceSection` 内联引导循环后均接入；③ `openVoiceSection` 的内联引导循环后补门关闭（中文上下文此前被门挡住导致「中文界面卡片」断言失败）。适配后两版 16/16 全绿；对照组（线上 0.2.0-rc.2）同脚本 16/16 通过，证实适配无旧宿主回归。
+- **`engines.dsh` 口径变更（用户 2026-10-19 拍板 D1）**：`">=0.1.1-rc.2"`（无上界）→ `">=0.1.1-rc.2 <0.3.0"`。理由：alpha.4 起硬校验下，无上界意味着未来破坏性 major 仍会被放行到未测试宿主（0.1.7 settingsScope 事故事前无任何拦截）；官方 publish.zh.md 推荐带上界（示例 `">=0.2.0 <0.3.0"`），且官方 market 兼容性判定对宽范围会判全兼容（#9907）。已实测范围 0.1.1-rc.2 → 0.2.1-rc.2 全部落在界内；0.3.0 上线前需重新验证并扩范围。
+- 矩阵扩展：`verify-dual.sh` 15→17 版锚点/typecheck、12→14 核心冒烟（+0.2.1-alpha.5、+0.2.1-rc.2，端口 3147/3148）；`check-dsh-version.sh --check` 恢复对齐（exit 0）。
+- issue #14 已用本实证段关闭。

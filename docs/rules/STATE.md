@@ -381,3 +381,53 @@
 
 - 引擎层静态审计登记项（stop/start 竞态、hold 取消丢头、回声地板棘轮、NLMS NaN、切分器边界）与 host 侧待核对项（DNS rebinding、反代限流键、SSE 归属）见 CONTEXT.md「已知待办」；需真机/宿主前置防护确认后再改。
 - 本机维护者文档（`docs/RELEASE-WORKFLOW.md`、`scripts/release.sh`、`scripts/check-dsh-version.sh`）按 publication-policy 不入库。
+
+---
+
+## 任务：全面梳理与对抗性审查（兼容口径 / 本地 dsh / 功能 / GitHub 维护） —— **审查完成，待用户拍板（2026-10-19）**
+
+### 用户指令
+
+> 当前工作目录是 dsh 的一个插件，插件需要支持全版本的 dsh，然后本地 dsh 需要保持在最新版本，本插件功能要保持完善，github 上也要进行维护和跟进，需要时允许发版，全面梳理下，不做预设，官方和社区的最新文档和反馈为准，第一性原理深挖，对抗性审查周全的考虑。
+
+### 交付物
+
+- **审查报告**：`docs/review-2026-10-19-full-audit.md`（结论先行 / 四条战线盘点 / 官方与社区取证 / 第一性原理 / 固定桶发现 / 决策清单 D1–D7 / 原子单元 U1–U5）。
+- **取证报告**（只读子代理，主会话核对）：`docs/research/upstream-dsh-021-versions-20261019.md`、`docs/research/official-plugin-compat-policy-20261019.md`、`docs/research/community-feedback-20261019.md`。
+
+### 核心结论（实测证据均在报告内）
+
+1. 本地 dsh = 0.2.0-rc.2 = npm latest（达标）；next=0.2.1-rc.2 / alpha=0.2.1-alpha.5 为**未覆盖版本**（`check-dsh-version.sh --check` 实证）。
+2. **机制性变化**：官方自 0.2.1-alpha.4 起 next/alpha 通道 `engines.dsh` 硬校验（单独决定、忽略 peer）；latest 通道忽略 engines.dsh。本插件 `>=0.1.1-rc.2` 无上界，实测对全部已发布版本（含假设 1.0.0）满足 → 永不拒装也永不保护；官方推荐带上界（`>=0.2.0 <0.3.0` 示例）。
+3. 0.2.1-rc.2 静态兼容（三路证据互证：registry diff / 官方文档源码 / 上游 tag diff），但按矩阵纪律需真机四层验证后方可扩矩阵；cordis `~4.0.5` 稳定化需扩 typecheck-dual 映射一行。
+4. 发版路径断链：`.scratch/release-minimal-commit.sh` 不存在（release.sh「已弃用」指引），RELEASE-WORKFLOW.md 未同步。
+5. 社区线：官方仓库 issues 关闭、讨论迁 Discussions；#8250（0.7.15 failed to import 同 issue #12 根因）0 评论未回复；月下载 6,089 居第三方语音插件首位；全双工是稀缺位；桌面端 0.2 有外部分支自行适配。
+
+### 恢复点（用户拍板后从这里续）
+
+1. D1–D7 决策（见报告 §七）→ U1（0.2.1-rc.2/alpha.5 四层验证，依赖 D2）优先；U2 发版工具链修复（依赖 D4）可并行；#8250 回帖不依赖任何决策。
+2. 今日（10-19 周一 02:17 UTC）CI 巡检截至 02:31Z 未触发（09-28 先例迟 27 分钟）；若触发将自动开「未覆盖版本」issue，与 U1 合并处理。
+3. 本任务段为纯审查：src/ lib/ 零改动，未发版，未升级生产 dsh。
+
+---
+
+## 任务：U1 四层兼容验证（0.2.1-alpha.5 / 0.2.1-rc.2）+ engines.dsh 带上界 + 冒烟入口适配 —— **验证全绿，待发版（2026-10-19）**
+
+### 结果（全部当日实测）
+
+- **四层验证双版本全过**：L1 锚点 9/9 ×2；L2 双 typecheck ×2（cordis 映射补表 alpha.4/5→4.0.5-alpha.2、rc.2→4.0.5，npm view peer 实证）；L3 runtime 冒烟 16/16 ×2；L4 真 LLM + 真实语音闭环 4 帧 / 0 tts-error ×2（DSHVM_VOICE_LOOP=1，识别命中、朗读帧到达）。实证段：`docs/compat-contract.md §19`。
+- **抓到两处宿主行为变化（静态 diff 未覆盖、只有真跑才发现）**：① 0.2.1-alpha.4 起 next/alpha 通道 `engines.dsh` 单独硬校验（官方 upgrade-guide + plugin-compatibility.ts 实证）；② 0.2.1-alpha.4/5 起 Settings 入口从「More」菜单移入侧栏底部「Account menu」弹出层，且未认证 profile 引导后弹可关登录门。插件两处设置入口均仍有效（卡片入口完全不受影响）。
+- **冒烟脚本适配（测试装置，src/lib 零改动）**：`smoke-settings.mjs` openSettings 增第三条路径（Account menu → Settings）+ dismissSignInGate（× 关登录门，幂等）+ openVoiceSection 内联循环后补门关闭。适配后两版 16/16；对照组线上 0.2.0-rc.2 同脚本 16/16（无旧宿主回归）。
+- **D1 落地**：`engines.dsh` `">=0.1.1-rc.2"` → `">=0.1.1-rc.2 <0.3.0"`（package.json + 根/插件中英 README + CONTEXT 同步；理由见 compat-contract §19）。
+- **矩阵扩展**：`verify-dual.sh` 15→17 版锚点/typecheck、12→14 核心冒烟；`check-dsh-version.sh --check` exit 0 恢复对齐。
+- **D4 落地**：`check-dsh-version.sh` 弃用指引改回 release.sh（唯一发版正典）；`docs/RELEASE-WORKFLOW.md` §7 记录反转。
+
+### 变更文件白名单（发版 commit 用）
+
+plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice-mode/scripts/typecheck-dual.sh（cordis 映射）、plugin/dsh-voice-mode/scripts/verify-dual.sh（矩阵）、plugin/dsh-voice-mode/scripts/smoke-settings.mjs（入口适配）、plugin/dsh-voice-mode/scripts/check-dsh-version.sh（D4）、docs/compat-contract.md（§19）、docs/RELEASE-WORKFLOW.md（§7）、CONTEXT.md、README.md、plugin/dsh-voice-mode/README.md、plugin/dsh-voice-mode/README.en.md、CHANGELOG.md（0.7.25 段待写）
+
+### 恢复点
+
+1. npm test 后台门禁（bash-335）结果确认 → 全绿后走 release.sh 0.7.25（兼容补丁版先例：v0.7.16）。
+2. issue #14 用 §19 实证关闭；官方 discussion #8250 回帖稿在 `docs/research/reply-8250-draft.md`（两 token 对官方仓库无写权限，需维护者网页端发布）。
+3. 本地 dsh 维持 0.2.0-rc.2（latest）；0.2.1 稳定发布且矩阵已覆盖后按 UPGRADES.md SOP 升级（D3 口径）。

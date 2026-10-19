@@ -16,7 +16,7 @@ interrupts playback and the running turn. No API key.
 
 ![Real recording: streaming transcription → auto-send → sentence-by-sentence read-aloud with live captions](https://raw.githubusercontent.com/qishuilalala/dsh-voice-mode/HEAD/plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
 
-> **Runtime changes (latest: v0.7.18 – v0.7.24)**: (1) **Settings work on every dsh version** — fixed the settings page and persistence on dsh 0.1.7+ (Settings → Voice Mode page, writes survive restarts); (2) **i18n rebuilt** — the UI follows dsh's official language setting, zh/en fully consistent, switching needs no refresh; (3) **fixed fresh npm/pnpm installs and the dsh ≥0.1.7 installed-form "failed to import"** (0.7.17 and earlier are affected — upgrade to ≥0.7.18); (4) **local Kokoro fixed under the official desktop (Electron) app** — needs Node.js ≥18 on PATH (or set `DSHVM_NODE`); (5) **v0.7.24: Edge cloud read-aloud restored** — since 2026-10-15 Microsoft's service rejects the old handshake (v0.7.23 and earlier are silent on the default Edge engine; local VITS / Kokoro are unaffected), so the inlined msedge-tts is bumped to 2.1.0; when read-aloud **fails several sentences in a row** the plugin now suggests switching to a local engine; plus host hardening (`/models/retry` is same-origin POST only, model-tree path checks, raw error strings no longer sent downstream). Compatible with dsh up to 0.2.1-alpha.3 (its Settings entry moved into the sidebar "More" menu; both of this plugin's entry points still work).
+> **Runtime changes (latest: v0.7.18 – v0.7.24)**: (1) **Settings work on every dsh version** — fixed the settings page and persistence on dsh 0.1.7+ (Settings → Voice Mode page, writes survive restarts); (2) **i18n rebuilt** — the UI follows dsh's official language setting, zh/en fully consistent, switching needs no refresh; (3) **fixed fresh npm/pnpm installs and the dsh ≥0.1.7 installed-form "failed to import"** (0.7.17 and earlier are affected — upgrade to ≥0.7.18); (4) **local Kokoro fixed under the official desktop (Electron) app** — needs Node.js ≥18 on PATH (or set `DSHVM_NODE`); (5) **v0.7.24: Edge cloud read-aloud restored** — since 2026-10-15 Microsoft's service rejects the old handshake (v0.7.23 and earlier are silent on the default Edge engine; local VITS / Kokoro are unaffected), so the inlined msedge-tts is bumped to 2.1.0; when read-aloud **fails several sentences in a row** the plugin now suggests switching to a local engine; plus host hardening (`/models/retry` is same-origin POST only, model-tree path checks, raw error strings no longer sent downstream). Compatible with dsh up to 0.2.1-rc.2 (from 0.2.1-alpha.4/5 the Settings entry moved into the "Account menu" popover at the bottom of the sidebar; both of this plugin's entry points still work).
 
 ---
 
@@ -279,7 +279,7 @@ flowchart LR
 | Barge-in detection | Basic VAD | **3 sensitivity levels + echo gate + yield semantics** |
 | Caption a11y | None | **4 font tiers + 3 width tiers + theme-following** |
 | Wake word | None | **Lightweight streaming match + prefix filler whitelist** |
-| dsh compatibility | — | **full range since 0.1.1-rc.2 (incl. 0.2.1-alpha.3)** |
+| dsh compatibility | — | **full range since 0.1.1-rc.2 (incl. 0.2.1-rc.2)** |
 
 ---
 
@@ -304,7 +304,7 @@ Also: the on-device recording fixture used for debugging is **off by default**; 
 
 ### Compatibility declaration (what the plugin market's version filter reads)
 
-`package.json` declares `engines.dsh = ">=0.1.1-rc.2"` (the market uses it for "filter by host version"). Verified range: **0.1.1-rc.2 → 0.2.1-alpha.3** (including an Electron host equivalent to the official desktop app). The upper bound is open; a weekly CI check watches upstream releases and opens an issue for any uncovered version. `peerDependencies` only lists `@deepseek-ai/cordis` and `react` (provided by the host).
+`package.json` declares `engines.dsh = ">=0.1.1-rc.2 <0.3.0"` (the market uses it for "filter by host version"; from dsh 0.2.1-alpha.4 the next/alpha channels enforce `engines.dsh` alone as a hard check and refuse to load a plugin outside the range, so the upper bound is capped at 0.3.0 — an unverified new major is cleanly refused instead of silently broken). Verified range: **0.1.1-rc.2 → 0.2.1-rc.2** (including an Electron host equivalent to the official desktop app). A weekly CI check watches upstream releases and opens an issue for any uncovered version. `peerDependencies` only lists `@deepseek-ai/cordis` and `react` (provided by the host).
 
 ## 🚧 Known limitations
 
