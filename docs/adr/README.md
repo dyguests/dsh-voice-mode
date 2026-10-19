@@ -17,6 +17,7 @@
 | [0009](0009-plugin-settings-self-persistence.md) | 插件设置自持久化（≥0.1.7 覆盖层文件 + HTTP 端点） | 已接受 |
 | [0010](0010-i18n-official-locale.md) | 国际化绑定官方 locale，词典 zh/en，host 只发错误码 | 已接受 |
 | [0011](0011-bundle-msedge-tts-inline.md) | msedge-tts 连同依赖内联为独立 CJS（修 npm 安装与 dsh ≥0.1.7 加载） | 已接受 |
+| [0012](0012-barge-in-salvage.md) | 打断语音抢救（bargeInSalvage 默认开的 I10 豁免） | 已接受 |
 
 ## 格式
 
