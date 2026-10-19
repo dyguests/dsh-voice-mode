@@ -85,19 +85,19 @@ t('守卫：`/` 开头命令草稿不走 steer（须走宿主 adjudication）', 
 const clientSrc = readFileSync(join(root, 'src', 'client.tsx'), 'utf8')
 
 t('wiring：submitDraftNow 有 steer 分流分支（running && 非命令 → bus.steerSubmit）', () => {
-  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, draftSnapshot)')
+  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   assert.ok(idx >= 0, 'submitDraftNow 缺 steer 分流条件')
   assert.ok(clientSrc.slice(idx, idx + 700).includes('bus.steerSubmit('), '分流块未调 bus.steerSubmit')
 })
 
 t('wiring 条件：delivered 条件字面量必须为 if (delivered)（反转/中和变异 → 红，审查复审 Important-1）', () => {
-  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, draftSnapshot)')
+  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   assert.ok(win.includes('if (delivered)'), 'delivered 条件被反转/中和——双发或丢消息的两条防线同时失效')
 })
 
 t('wiring 顺序①：清草稿后到下一个 return 之间不得有 submitViaQueue（删 return/条件变异 → 红）', () => {
-  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, draftSnapshot)')
+  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   const setDraftIdx = win.indexOf("setDraft?.('')")
   assert.ok(setDraftIdx >= 0, 'delivered 分支未清草稿')
@@ -108,7 +108,7 @@ t('wiring 顺序①：清草稿后到下一个 return 之间不得有 submitViaQ
 })
 
 t('wiring 顺序②：失败回退在 .then 内（delivered return 之后、.catch 与外层 return 之前）', () => {
-  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, draftSnapshot)')
+  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
   const setDraftIdx = win.indexOf("setDraft?.('')")
   const deliveredReturn = win.indexOf('return', setDraftIdx)
@@ -136,9 +136,9 @@ t('wiring：VoiceBus 接口声明 steerSubmit（类型闭合）', () => {
 })
 
 t('wiring：用户改写守卫（RPC 在途改写不清草稿，审查 M-1）', () => {
-  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, draftSnapshot)')
+  const idx = clientSrc.indexOf('shouldSteerSubmit(runningRef.current, snapshot)')
   const win = clientSrc.slice(idx, idx + 900)
-  assert.ok(win.includes('draftRef.current.trim() === draftSnapshot'), 'delivered 分支缺用户改写守卫')
+  assert.ok(win.includes('draftRef.current.trim() === snapshot'), 'delivered 分支缺用户改写守卫')
 })
 
 console.log(`\nsteer-submit：${passed} 项通过`)

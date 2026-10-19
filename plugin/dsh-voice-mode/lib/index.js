@@ -2054,6 +2054,7 @@ var en = {
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage.
   bargeInSalvage: "Barge-in speech salvage",
   descBargeInSalvage: "When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)",
+  descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; reuses the host configured model). On = about one extra second per message; falls back to the original text if correction fails",
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: "Yield window",
   descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires)",
@@ -2114,6 +2115,7 @@ var en = {
   backchannelYieldLabel: "Short-reply yielding",
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (*Label mirror key).
   bargeInSalvageLabel: "Barge-in speech salvage",
+  llmCorrectLabel: "LLM correction",
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: "Yield window",
   // 批 G 任务 2：空闲预警 + 退出提示文案。
@@ -2181,6 +2183,35 @@ var en = {
   voiceHintChineseVoice: "Note: this is a Chinese voice. For English replies, pick an English voice (en-\u2026) from the list.",
   voiceHintEnglishVoice: "Note: this is an English voice and reads Chinese replies poorly. For Chinese conversations, pick a Chinese voice (zh-\u2026)."
 };
+
+// src/llm-correct.ts
+function correctionSystem(lang) {
+  return lang === "en" ? "You are a speech-recognition corrector. The user text comes from ASR and may contain homophone errors, typos, or missing/wrong punctuation. Make only minimal fixes: correct typos/homophones and fix punctuation, preserving the original meaning and colloquial style. Do not rewrite sentences, do not add content, do not answer questions, and do not alter numbers or proper nouns. Output only the corrected text, with no explanation. If the input has no obvious errors, return it unchanged." : "\u4F60\u662F\u4E2D\u6587\u8BED\u97F3\u8BC6\u522B\u7EA0\u9519\u5668\u3002\u7528\u6237\u7684\u8BDD\u6765\u81EA\u8BED\u97F3\u8BC6\u522B\uFF08ASR\uFF09\uFF0C\u53EF\u80FD\u6709\u540C\u97F3\u5B57\u3001\u9519\u522B\u5B57\u3001\u6807\u70B9\u7F3A\u5931\u6216\u9519\u8BEF\u3002\u8BF7\u53EA\u505A\u6700\u5C0F\u4FEE\u6B63\uFF1A\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57\u3001\u8865\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\u4E0E\u53E3\u8BED\u98CE\u683C\uFF1B\u4E0D\u8981\u6539\u5199\u53E5\u5B50\u3001\u4E0D\u8981\u8865\u5145\u5185\u5BB9\u3001\u4E0D\u8981\u56DE\u7B54\u95EE\u9898\u3001\u4E0D\u8981\u6539\u53D8\u6570\u5B57\u548C\u4E13\u4E1A\u672F\u8BED\u3002\u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u6587\u672C\uFF0C\u4E0D\u8981\u4EFB\u4F55\u89E3\u91CA\u3002\u5982\u679C\u539F\u6587\u6CA1\u6709\u660E\u663E\u9519\u8BEF\uFF0C\u539F\u6837\u8FD4\u56DE\u3002";
+}
+async function correctText(ctx, text, lang) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return text;
+  const llm = ctx?.llm;
+  const sel = ctx?.agentDefaultModel?.currentSelection?.();
+  if (!llm || typeof llm.stream !== "function") return text;
+  if (!sel?.provider || !sel?.model) return text;
+  try {
+    const stream = llm.stream({
+      provider: sel.provider,
+      model: sel.model,
+      system: correctionSystem(lang),
+      messages: [{ role: "user", content: [{ type: "text", text: trimmed }] }]
+    });
+    let out = "";
+    for await (const chunk of stream) {
+      if (chunk && chunk.type === "text-delta" && typeof chunk.text === "string") out += chunk.text;
+    }
+    const corrected = out.trim();
+    return corrected || text;
+  } catch {
+    return text;
+  }
+}
 
 // src/prompts.ts
 var ZH = "\u3010\u8BED\u97F3\u6A21\u5F0F\u3011\u5F53\u524D\u56DE\u590D\u4F1A\u88AB\u8BED\u97F3\u6717\u8BFB\uFF0C\u8BF7\u59CB\u7EC8\u7528\u7528\u6237\u6240\u7528\u8BED\u8A00\u3001\u4EE5\u53E3\u8BED\u5316\u7684\u77ED\u53E5\u76F4\u63A5\u56DE\u7B54\uFF0C\u50CF\u9762\u5BF9\u9762\u804A\u5929\u4E00\u6837\u81EA\u7136\uFF0C\u907F\u514D\u4E66\u9762\u8BED\u548C\u957F\u96BE\u53E5\u3002\u4E0D\u8981\u4F7F\u7528\u4EFB\u4F55 Markdown \u6216\u6392\u7248\u7B26\u53F7\uFF08\u661F\u53F7\u3001\u4E0B\u5212\u7EBF\u3001\u53CD\u5F15\u53F7\u3001\u4E95\u53F7\u3001\u5217\u8868\u4E0E\u8868\u683C\u6807\u8BB0\u3001\u4EE3\u7801\u5757\u7B49\uFF09\u3002\u9700\u8981\u5206\u70B9\u8BF4\u660E\u65F6\u7528\u300C\u7B2C\u4E00\u3001\u7B2C\u4E8C\u300D\u6216\u8FDE\u8D2F\u7684\u77ED\u53E5\u8868\u8FBE\uFF1B\u9664\u975E\u7528\u6237\u660E\u786E\u8981\u6C42\uFF0C\u4E0D\u8981\u8F93\u51FA\u4EE3\u7801\u7247\u6BB5\u3001\u5B8C\u6574 URL \u6216\u5197\u957F\u5B9A\u4E49\uFF0C\u7528\u4E00\u4E24\u53E5\u8BDD\u6982\u62EC\u542B\u4E49\u5373\u53EF\u3002\u56DE\u7B54\u7B80\u6D01\u76F4\u63A5\uFF0C\u4E0D\u8981\u91CD\u590D\u548C\u5BD2\u6684\u3002\u5982\u679C\u7528\u6237\u5728\u4F60\u6717\u8BFB\u65F6\u63D2\u8BDD\uFF08\u54EA\u6015\u53EA\u662F\u300C\u55EF/\u5BF9\u300D\u8FD9\u6837\u7684\u77ED\u5E94\u7B54\uFF09\uFF0C\u7ACB\u5373\u505C\u6B62\u5F53\u524D\u53E5\uFF0C\u628A\u8BDD\u8F6E\u8BA9\u7ED9\u7528\u6237\uFF1B\u56DE\u7B54\u540E\u7559\u51FA\u505C\u987F\uFF0C\u4E0D\u8981\u8FDE\u95EE\u4E24\u4E2A\u95EE\u9898\uFF1B\u7528\u6237\u6C89\u9ED8\u65F6\u4E0D\u8981\u4E3B\u52A8\u627E\u65B0\u8BDD\u9898\u3002";
@@ -2362,6 +2393,8 @@ var VOICE_SETTINGS_DEFAULTS = {
   backchannelYield: true,
   // Issue #15 批 1 / ADR-0012：打断抢救默认开（I10 有意豁免：默认体验破损=本 issue 存在原因）。
   bargeInSalvage: true,
+  // Issue #15 批 4：LLM 纠错默认关（默认开=未申报的 I10 豁免+每条多一次 RTT/token）。
+  llmCorrect: false,
   // 批 G 任务 3：让位窗口默认 1500ms（与改造前批 5 行为字节等价；用户可调 500-3000ms）。
   yieldMs: 1500
 };
@@ -2389,6 +2422,7 @@ var DESC = {
   captionMaxWidth: en.descCaptionMaxWidth,
   backchannelYield: en.descBackchannelYield,
   bargeInSalvage: en.descBargeInSalvage,
+  llmCorrect: en.descLlmCorrect,
   yieldMs: en.descYieldMs
 };
 function createVoiceSettingsSchema(defs) {
@@ -2437,6 +2471,10 @@ function createVoiceSettingsSchema(defs) {
     bargeInSalvage: z.boolean().default(d.bargeInSalvage).description(
       DESC.bargeInSalvage
     ),
+    // Issue #15 批 4：LLM 纠错（默认 false）。
+    llmCorrect: z.boolean().default(d.llmCorrect).description(
+      DESC.llmCorrect
+    ),
     yieldMs: z.number().min(500).max(3e3).default(d.yieldMs).description(
       DESC.yieldMs
     )
@@ -2476,6 +2514,8 @@ var Config = z.object({
   captionFontSize: z.union([z.const(0), z.const(1), z.const(2), z.const(3)]).default(0),
   captionMaxWidth: z.union([z.const(0), z.const(1), z.const(2)]).default(1),
   backchannelYield: z.boolean().default(true),
+  // Issue #15 批 4：LLM 纠错默认关。
+  llmCorrect: z.boolean().default(false),
   // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
   bargeInSalvage: z.boolean().default(true),
   yieldMs: z.number().default(1500)
@@ -2505,7 +2545,8 @@ function voiceSettingsFromConfig(config) {
     captionMaxWidth,
     backchannelYield,
     yieldMs,
-    bargeInSalvage
+    bargeInSalvage,
+    llmCorrect
   } = config;
   return {
     ttsEngine,
@@ -2531,7 +2572,8 @@ function voiceSettingsFromConfig(config) {
     captionMaxWidth,
     backchannelYield,
     yieldMs,
-    bargeInSalvage
+    bargeInSalvage,
+    llmCorrect
   };
 }
 function apply(ctx, config) {
@@ -2814,6 +2856,7 @@ function apply(ctx, config) {
           captionMaxWidth: vset.captionMaxWidth,
           backchannelYield: vset.backchannelYield,
           bargeInSalvage: vset.bargeInSalvage,
+          llmCorrect: vset.llmCorrect,
           yieldMs: vset.yieldMs,
           senseITN: vset.senseITN,
           cacheDir: config.cacheDir,
@@ -2878,6 +2921,34 @@ function apply(ctx, config) {
           }
           res.writeHead(200, { "content-type": queue.mime, "cache-control": "no-store" });
           res.end(buf);
+        });
+      }
+    })
+  );
+  ctx.effect(
+    () => ctx.webServer.register({
+      kind: "exact",
+      path: `${base}/correct`,
+      handler: (req, res) => {
+        if (denyNonLoopback(req, res)) return;
+        if (denyCrossOrigin(req, res)) return;
+        collectBody(req, res, MAX_JSON_BODY, (body) => {
+          let text = "";
+          let lang = "zh";
+          try {
+            const parsed = JSON.parse(body || "{}");
+            text = typeof parsed.text === "string" ? parsed.text : "";
+            lang = parsed.lang === "en" ? "en" : "zh";
+          } catch {
+          }
+          const trimmed = text.trim();
+          if (!trimmed) {
+            respondJson2(res, 200, { text });
+            return;
+          }
+          void correctText(ctx, trimmed, lang).then((corrected) => {
+            respondJson2(res, 200, { text: corrected });
+          });
         });
       }
     })

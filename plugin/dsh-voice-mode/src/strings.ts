@@ -115,6 +115,7 @@ export const zh = {
   // Issue #15 批 1 / ADR-0012：打断语音抢救。
   bargeInSalvage: '打断语音抢救',
   descBargeInSalvage: 'AI 朗读时你开口打断：自动保留从开口到打断生效之间你说的话，并入识别继续发送（修「打断吃句」；关 = 丢弃打断前语音——仅外放且无回声消除的环境建议关）',
+  descLlmCorrect: '发送前用大模型对整条语音文本做一次纠错（只改错别字/同音字/标点，保持原意；复用宿主已配置模型。开 = 每条消息多一次约 1 秒的纠错等待；纠错失败自动用原文）',
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: '让位窗口',
   descYieldMs: '让位语义触发后等待时长（毫秒，500-3000，默认 1500；窗口内用户真要说则原 hardBreak 接管，窗口到点自动恢复播放）',
@@ -181,6 +182,7 @@ export const zh = {
   backchannelYieldLabel: '短应答让位',
   // Issue #15 批 1 / ADR-0012：打断语音抢救（*Label 镜像键）。
   bargeInSalvageLabel: '打断语音抢救',
+  llmCorrectLabel: 'LLM 纠错',
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: '让位窗口',
   // 批 G 任务 2：空闲预警 + 退出提示文案。
@@ -356,6 +358,7 @@ export const en: Record<keyof typeof zh, string> = {
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage.
   bargeInSalvage: 'Barge-in speech salvage',
   descBargeInSalvage: 'When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)',
+  descLlmCorrect: 'Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; reuses the host configured model). On = about one extra second per message; falls back to the original text if correction fails',
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: 'Yield window',
   descYieldMs: 'How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires)',
@@ -416,6 +419,7 @@ export const en: Record<keyof typeof zh, string> = {
   backchannelYieldLabel: 'Short-reply yielding',
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (*Label mirror key).
   bargeInSalvageLabel: 'Barge-in speech salvage',
+  llmCorrectLabel: 'LLM correction',
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: 'Yield window',
   // 批 G 任务 2：空闲预警 + 退出提示文案。

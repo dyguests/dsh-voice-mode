@@ -68,6 +68,7 @@ const CONFIG_FIELDS = [
   { key: 'captionFontSize',    type: 'number' },
   { key: 'captionMaxWidth',    type: 'number' },
   { key: 'backchannelYield',   type: 'boolean' },
+  { key: 'llmCorrect',         type: 'boolean' },  // Issue #15 批 4
 ];
 
 function parseArgs() {

@@ -33,6 +33,7 @@ import { HOST_PRIMARY, validateModelHost } from './models.ts'
 import { isLoopbackRequest, sameOriginRequest, RateLimiter } from './security.ts'
 import type { HostErrorCode } from './errors.ts'
 import { en } from './strings.ts'
+import { correctText } from './llm-correct.ts'
 import { normalizePromptLang, previewSample, spokenPrompt, type PromptLang } from './prompts.ts'
 import { pickKnownKeys, readLegacyVoiceSettings, readOverrides, settingsFilePath, unknownKeys, writeOverrides } from './settings-store.ts'
 
@@ -186,6 +187,10 @@ export interface VoiceSettingsValue {
    *  「语音起始-250ms」起的音频并入新识别段，修「打断吃句」）。关 = 回退丢句现状
    *  （外放+无原生 AEC 等回声劣化环境的逃生口）。I10 有意豁免见 ADR-0012。 */
   bargeInSalvage: boolean
+  /** Issue #15 批 4：LLM 纠错（默认 false = 关）。开 = 发送前对整条草稿做一次
+   *  「只改错别字/同音字/标点，保持原意」的纠错（复用宿主已配置模型，不引入新凭据）；
+   *  失败/无模型/空结果一律回退原文。默认关 = 未申报的 I10 豁免+每条多一次 RTT/token。 */
+  llmCorrect: boolean
   /** 批 G 任务 3：让位窗口时长（ms，500-3000，默认 1500）。
    *  onBackchannel 命中后 TTS 丢帧持续时间；hold 期内用户真要说则原 hardBreak 接管。 */
   yieldMs: number
@@ -222,6 +227,8 @@ const VOICE_SETTINGS_DEFAULTS: VoiceSettingsValue = {
   backchannelYield: true,
   // Issue #15 批 1 / ADR-0012：打断抢救默认开（I10 有意豁免：默认体验破损=本 issue 存在原因）。
   bargeInSalvage: true,
+  // Issue #15 批 4：LLM 纠错默认关（默认开=未申报的 I10 豁免+每条多一次 RTT/token）。
+  llmCorrect: false,
   // 批 G 任务 3：让位窗口默认 1500ms（与改造前批 5 行为字节等价；用户可调 500-3000ms）。
   yieldMs: 1500,
 }
@@ -254,6 +261,7 @@ const DESC = {
   captionMaxWidth: en.descCaptionMaxWidth,
   backchannelYield: en.descBackchannelYield,
   bargeInSalvage: en.descBargeInSalvage,
+  llmCorrect: en.descLlmCorrect,
   yieldMs: en.descYieldMs,
 } as const
 
@@ -354,6 +362,13 @@ export function createVoiceSettingsSchema(defs?: Partial<VoiceSettingsValue>): z
       .description(
         DESC.bargeInSalvage,
       ),
+    // Issue #15 批 4：LLM 纠错（默认 false）。
+    llmCorrect: z
+      .boolean()
+      .default(d.llmCorrect)
+      .description(
+        DESC.llmCorrect,
+      ),
     yieldMs: z
       .number()
       .min(500)
@@ -426,6 +441,8 @@ export interface Config {
   backchannelYield: boolean
   /** Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true；透传 asr.ts AsrConfig.bargeInSalvage）。 */
   bargeInSalvage: boolean
+  /** Issue #15 批 4：LLM 纠错（默认 false = 关；透传 client.tsx 发送前纠错预步）。 */
+  llmCorrect: boolean
   /** 批 G：让位窗口时长（ms，500-3000，默认 1500）。 */
   yieldMs: number
 }
@@ -463,6 +480,8 @@ export const Config: z<Config> = z.object({
   captionFontSize: z.union([z.const(0), z.const(1), z.const(2), z.const(3)]).default(0),
   captionMaxWidth: z.union([z.const(0), z.const(1), z.const(2)]).default(1),
   backchannelYield: z.boolean().default(true),
+  // Issue #15 批 4：LLM 纠错默认关。
+  llmCorrect: z.boolean().default(false),
   // Issue #15 批 1 / ADR-0012：打断语音抢救（默认 true，I10 有意豁免）。
   bargeInSalvage: z.boolean().default(true),
   yieldMs: z.number().default(1500),
@@ -477,13 +496,13 @@ function voiceSettingsFromConfig(config: Config): VoiceSettingsValue {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
     idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, bargeInMode,
     echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
-    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage,
+    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage, llmCorrect,
   } = config
   return {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
     idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, bargeInMode,
     echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
-    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage,
+    senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage, llmCorrect,
   }
 }
 
@@ -883,6 +902,7 @@ export function apply(ctx: Context, config: Config): void {
             captionMaxWidth: vset.captionMaxWidth,
             backchannelYield: vset.backchannelYield,
             bargeInSalvage: vset.bargeInSalvage,
+            llmCorrect: vset.llmCorrect,
             yieldMs: vset.yieldMs,
             senseITN: vset.senseITN,
             cacheDir: config.cacheDir,
@@ -958,6 +978,39 @@ export function apply(ctx: Context, config: Config): void {
           }
           res.writeHead(200, { 'content-type': queue.mime, 'cache-control': 'no-store' })
           res.end(buf)
+        })
+      },
+    }),
+  )
+
+  // Issue #15 批 4：LLM 纠错路由（可选，llmCorrect 设置默认关）。客户端发送前对整条草稿
+  // 调一次；失败/无模型一律回退原文（respondJson 200 { text: original }——纠错是纯附加层，
+  // 客户端见 ok 即用结果，不因纠错失败阻断发送）。
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `${base}/correct`,
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        if (denyNonLoopback(req, res)) return
+        if (denyCrossOrigin(req, res)) return
+        collectBody(req, res, MAX_JSON_BODY, (body) => {
+          let text = ''
+          let lang: 'zh' | 'en' = 'zh'
+          try {
+            const parsed = JSON.parse(body || '{}') as { text?: unknown; lang?: unknown }
+            text = typeof parsed.text === 'string' ? parsed.text : ''
+            lang = parsed.lang === 'en' ? 'en' : 'zh'
+          } catch {
+            // ignore malformed body——按空文本处理（下面原样回）
+          }
+          const trimmed = text.trim()
+          if (!trimmed) {
+            respondJson(res, 200, { text })
+            return
+          }
+          void correctText(ctx, trimmed, lang).then((corrected) => {
+            respondJson(res, 200, { text: corrected })
+          })
         })
       },
     }),

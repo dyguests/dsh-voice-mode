@@ -633,6 +633,7 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     backchannelYield: true,
     // Issue #15 批 1 / ADR-0012：打断语音抢救默认 true（与 VOICE_SETTINGS_DEFAULTS 对齐）。
     bargeInSalvage: true,
+    llmCorrect: false,
     yieldMs: 1500,
     // 批 B：5 ASR 字段默认值，与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐（plan §12 批 B 周全修复）。
     senseITN: true,
@@ -1293,6 +1294,7 @@ interface VoiceBootConfig {
   backchannelYield: boolean
   /** Issue #15 批 1 / ADR-0012：打断语音抢救开关（默认 true = hardBreak 时并入播放期预录，修「打断吃句」）。 */
   bargeInSalvage: boolean
+  llmCorrect: boolean
   /** 批 G 任务 3：让位窗口时长（ms，500-3000，默认 1500）。onBackchannel 命中后 TTS 丢帧持续时间。 */
   yieldMs: number
   /** 批 B：ITN（逆文本规范化：口语数字 → 书面数字；默认 true）。 */
@@ -1386,6 +1388,7 @@ export function MicButton({
       backchannelYield: true,
       // Issue #15 批 1 / ADR-0012：打断语音抢救默认 true。
       bargeInSalvage: true,
+      llmCorrect: false,
       yieldMs: 1500,
       // 批 B：5 ASR 字段默认值，与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐（plan §12 批 B 周全修复）。
       senseITN: true,
@@ -1439,6 +1442,7 @@ export function MicButton({
         backchannelYield: c.backchannelYield !== false,
         // Issue #15 批 1 / ADR-0012：打断语音抢救透传（同 backchannelYield 模式）。
         bargeInSalvage: c.bargeInSalvage !== false,
+        llmCorrect: c.llmCorrect === true,
         // 批 G 任务 3：让位窗口时长（500-3000ms）；类型校验严格 + 默认值兜底。
         yieldMs: typeof c.yieldMs === 'number' && c.yieldMs >= 500 && c.yieldMs <= 3000 ? c.yieldMs : 1500,
         // 批 B：5 ASR 字段透传（host /config handler 在 c2120d9 已透传 4 字段，本批补 senseVoice + 客户端白名单对齐）。
@@ -1548,6 +1552,25 @@ export function MicButton({
     }
   }
 
+  /** Issue #15 批 4：LLM 纠错（可选，llmCorrect 设置默认关）——发送前对整条草稿纠错一次。
+   *  失败/超时/空结果一律回退原文（纠错是纯附加层，不阻断发送）。 */
+  const correctDraft = async (text: string): Promise<string> => {
+    try {
+      const r = await fetch(`${location.origin}${BASE_PATH}/correct`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text, lang: activeLocale() === 'en' ? 'en' : 'zh' }),
+        signal: AbortSignal.timeout(12000), // 上限 12s——超时按原文发，不等纠错
+      })
+      if (!r.ok) return text
+      const out = (await r.json()) as { text?: unknown }
+      const corrected = typeof out.text === 'string' ? out.text.trim() : ''
+      return corrected || text
+    } catch {
+      return text
+    }
+  }
+
   /** 提交当前草稿（带 3 次有界重试；提交成功草稿被清、或用户改写则停止重试）。
    *  expectedText：调用方已知的草稿文本。force 路径在 setDraft 后立即调用，draftRef 尚未
    *  re-render 更新（读旧值会误判空草稿而漏发），故由调用方显式传入；定时器路径省略则读 draftRef。 */
@@ -1556,61 +1579,86 @@ export function MicButton({
     submitInFlightRef.current = true // Issue #15 批 3（审查 I-2）：提交在途窗口起
     const actions = actionsRef.current
     const submitFn = actions?.submit
-    if (typeof submitFn !== 'function') return
-    const draftSnapshot = (expectedText ?? draftRef.current).trim()
-    if (!draftSnapshot) return
-    // 队列路径（现状）：submit() + 500ms×3 有界重试（草稿被清/用户改写/进入提交态即停）。
-    const submitViaQueue = (): void => {
-      const doSubmit = (): void => {
-        try {
-          const r: any = submitFn()
-          // 兼容 Promise 型 submit
-          if (r && typeof r.then === 'function') {
-            r.catch(() => {
-              bus.setUi({ error: t('sendFailKept') })
-            })
-          }
-        } catch {
-          bus.setUi({ error: t('sendFailKept') })
-        }
-      }
-      doSubmit()
-      let retryCount = 0
-      submitTimerRef.current = setInterval(() => {
-        retryCount++
-        const phase = phaseRef.current
-        // 已提交（草稿被清成空）/ 用户改写 / 进入提交态 → 停止重试
-        if (retryCount > 3 || phase === 'submitting' || phase === 'adjudicating' || draftRef.current.trim() !== draftSnapshot) {
-          cancelPendingSubmit()
-          return
-        }
-        doSubmit()
-      }, 500)
-    }
-    // Issue #15 批 2：运行中 steer 直提交。宿主 InputActions.submit 硬编码 queue
-    // （语音提交恒排队，改宿主 busyEnter 也没用）→ 运行中且非命令草稿走
-    // session.prompt(text,'steer') 直达；未显式失败（保守口径）才清草稿并跳过重试/submit（防双发），
-    // 任何失败回退队列路径（不劣于现状）。
-    const sid = sidRef.current
-    if (sid && shouldSteerSubmit(runningRef.current, draftSnapshot)) {
-      void bus.steerSubmit(sid, draftSnapshot).then((delivered) => {
-        if (delivered) {
-          // 用户改写守卫（与队列重试循环同口径，审查 M-1）：RPC 在途期间用户改写了
-          // 草稿 → 不清（消息已直达，用户的改写留给用户）。
-          if (draftRef.current.trim() === draftSnapshot) {
-            try {
-              actions?.setDraft?.('')
-            } catch {
-              // 清草稿失败不阻断——消息已直达
-            }
-          }
-          return
-        }
-        submitViaQueue()
-      }).catch(() => submitViaQueue()) // 审查 M-2：兜底 promise rejection（理论不可达）
+    if (typeof submitFn !== 'function') {
+      submitInFlightRef.current = false
       return
     }
-    submitViaQueue()
+    const draftSnapshot = (expectedText ?? draftRef.current).trim()
+    if (!draftSnapshot) {
+      submitInFlightRef.current = false
+      return
+    }
+    /** 实际提交文本（纠错后可能与 draftSnapshot 不同；队列 submit 发送宿主草稿，故先写回）。 */
+    const runSubmit = (submitText: string): void => {
+      const snapshot = submitText.trim() || draftSnapshot
+      if (snapshot !== draftSnapshot) {
+        // 纠错文本写回草稿（队列 submit 提交的是宿主草稿；steer 直发用 snapshot）。
+        try {
+          actions?.setDraft?.(snapshot)
+        } catch {
+          // 写不回就按草稿现状发（submitViaQueue）或原文直发（steer）——不阻断
+        }
+      }
+      // 队列路径（现状）：submit() + 500ms×3 有界重试（草稿被清/用户改写/进入提交态即停）。
+      const submitViaQueue = (): void => {
+        const doSubmit = (): void => {
+          try {
+            const r: any = submitFn()
+            // 兼容 Promise 型 submit
+            if (r && typeof r.then === 'function') {
+              r.catch(() => {
+                bus.setUi({ error: t('sendFailKept') })
+              })
+            }
+          } catch {
+            bus.setUi({ error: t('sendFailKept') })
+          }
+        }
+        doSubmit()
+        let retryCount = 0
+        submitTimerRef.current = setInterval(() => {
+          retryCount++
+          const phase = phaseRef.current
+          // 已提交（草稿被清成空）/ 用户改写 / 进入提交态 → 停止重试
+          if (retryCount > 3 || phase === 'submitting' || phase === 'adjudicating' || draftRef.current.trim() !== snapshot) {
+            cancelPendingSubmit()
+            return
+          }
+          doSubmit()
+        }, 500)
+      }
+      // Issue #15 批 2：运行中 steer 直提交。宿主 InputActions.submit 硬编码 queue
+      // （语音提交恒排队，改宿主 busyEnter 也没用）→ 运行中且非命令草稿走
+      // session.prompt(text,'steer') 直达；未显式失败（保守口径）才清草稿并跳过重试/submit（防双发），
+      // 任何失败回退队列路径（不劣于现状）。
+      const sid = sidRef.current
+      if (sid && shouldSteerSubmit(runningRef.current, snapshot)) {
+        void bus.steerSubmit(sid, snapshot).then((delivered) => {
+          if (delivered) {
+            // 用户改写守卫（与队列重试循环同口径，审查 M-1）：RPC 在途期间用户改写了
+            // 草稿 → 不清（消息已直达，用户的改写留给用户）。
+            if (draftRef.current.trim() === snapshot) {
+              try {
+                actions?.setDraft?.('')
+              } catch {
+                // 清草稿失败不阻断——消息已直达
+              }
+            }
+            return
+          }
+          submitViaQueue()
+        }).catch(() => submitViaQueue()) // 审查 M-2：兜底 promise rejection（理论不可达）
+        return
+      }
+      submitViaQueue()
+    }
+    // Issue #15 批 4：LLM 纠错预步（可选默认关）——发送前整条一次；命令草稿不纠错
+    // （'/' 开头走宿主 adjudication）；纠错 RTT 期间在途标记已置（partial 不回写）。
+    if (bootNow().llmCorrect === true && !draftSnapshot.startsWith('/')) {
+      void correctDraft(draftSnapshot).then((finalText) => runSubmit(finalText))
+      return
+    }
+    runSubmit(draftSnapshot)
   }
 
   /** 累积模式：静音到「发送阈值」（断句已等一个 silenceMs，再额外等一个）才发；

@@ -1589,6 +1589,7 @@ var zh = {
   // Issue #15 批 1 / ADR-0012：打断语音抢救。
   bargeInSalvage: "\u6253\u65AD\u8BED\u97F3\u62A2\u6551",
   descBargeInSalvage: "AI \u6717\u8BFB\u65F6\u4F60\u5F00\u53E3\u6253\u65AD\uFF1A\u81EA\u52A8\u4FDD\u7559\u4ECE\u5F00\u53E3\u5230\u6253\u65AD\u751F\u6548\u4E4B\u95F4\u4F60\u8BF4\u7684\u8BDD\uFF0C\u5E76\u5165\u8BC6\u522B\u7EE7\u7EED\u53D1\u9001\uFF08\u4FEE\u300C\u6253\u65AD\u5403\u53E5\u300D\uFF1B\u5173 = \u4E22\u5F03\u6253\u65AD\u524D\u8BED\u97F3\u2014\u2014\u4EC5\u5916\u653E\u4E14\u65E0\u56DE\u58F0\u6D88\u9664\u7684\u73AF\u5883\u5EFA\u8BAE\u5173\uFF09",
+  descLlmCorrect: "\u53D1\u9001\u524D\u7528\u5927\u6A21\u578B\u5BF9\u6574\u6761\u8BED\u97F3\u6587\u672C\u505A\u4E00\u6B21\u7EA0\u9519\uFF08\u53EA\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57/\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\uFF1B\u590D\u7528\u5BBF\u4E3B\u5DF2\u914D\u7F6E\u6A21\u578B\u3002\u5F00 = \u6BCF\u6761\u6D88\u606F\u591A\u4E00\u6B21\u7EA6 1 \u79D2\u7684\u7EA0\u9519\u7B49\u5F85\uFF1B\u7EA0\u9519\u5931\u8D25\u81EA\u52A8\u7528\u539F\u6587\uFF09",
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: "\u8BA9\u4F4D\u7A97\u53E3",
   descYieldMs: "\u8BA9\u4F4D\u8BED\u4E49\u89E6\u53D1\u540E\u7B49\u5F85\u65F6\u957F\uFF08\u6BEB\u79D2\uFF0C500-3000\uFF0C\u9ED8\u8BA4 1500\uFF1B\u7A97\u53E3\u5185\u7528\u6237\u771F\u8981\u8BF4\u5219\u539F hardBreak \u63A5\u7BA1\uFF0C\u7A97\u53E3\u5230\u70B9\u81EA\u52A8\u6062\u590D\u64AD\u653E\uFF09",
@@ -1655,6 +1656,7 @@ var zh = {
   backchannelYieldLabel: "\u77ED\u5E94\u7B54\u8BA9\u4F4D",
   // Issue #15 批 1 / ADR-0012：打断语音抢救（*Label 镜像键）。
   bargeInSalvageLabel: "\u6253\u65AD\u8BED\u97F3\u62A2\u6551",
+  llmCorrectLabel: "LLM \u7EA0\u9519",
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: "\u8BA9\u4F4D\u7A97\u53E3",
   // 批 G 任务 2：空闲预警 + 退出提示文案。
@@ -1829,6 +1831,7 @@ var en = {
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage.
   bargeInSalvage: "Barge-in speech salvage",
   descBargeInSalvage: "When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)",
+  descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; reuses the host configured model). On = about one extra second per message; falls back to the original text if correction fails",
   // 批 G 任务 3：让位窗口时长（500-3000ms，默认 1500）。
   yieldMs: "Yield window",
   descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires)",
@@ -1889,6 +1892,7 @@ var en = {
   backchannelYieldLabel: "Short-reply yielding",
   // Issue #15 batch 1 / ADR-0012: barge-in speech salvage (*Label mirror key).
   bargeInSalvageLabel: "Barge-in speech salvage",
+  llmCorrectLabel: "LLM correction",
   // 批 G 任务 3：让位窗口（FIELD_LABELS.yieldMs 镜像键，*Label 后缀）。
   yieldMsLabel: "Yield window",
   // 批 G 任务 2：空闲预警 + 退出提示文案。
@@ -3145,6 +3149,7 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
         ) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "backchannelYield", desc: t("descBackchannelYield"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.backchannelYield !== false, onChange: (e) => void scope.set("backchannelYield", e.target.checked) }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "bargeInSalvage", desc: t("descBargeInSalvage"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.bargeInSalvage !== false, onChange: (e) => void scope.set("bargeInSalvage", e.target.checked) }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "llmCorrect", desc: t("descLlmCorrect"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.llmCorrect === true, onChange: (e) => void scope.set("llmCorrect", e.target.checked) }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "yieldMs", desc: t("descYieldMs"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, { score: scope, field: "yieldMs", value: value.yieldMs ?? 1500, min: 500, max: 3e3, step: 100 }) })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, { title: t("secRecognition"), children: [
@@ -3230,7 +3235,7 @@ var TELEMETRY_VIEW = [
   { stage: "first-tts-chunk", key: "telFirstChunk" },
   { stage: "first-audio-played", key: "telFirstPlayed" }
 ];
-var BUILD_TAG = "4d720c3";
+var BUILD_TAG = "e6cb06e";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3562,6 +3567,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     backchannelYield: true,
     // Issue #15 批 1 / ADR-0012：打断语音抢救默认 true（与 VOICE_SETTINGS_DEFAULTS 对齐）。
     bargeInSalvage: true,
+    llmCorrect: false,
     yieldMs: 1500,
     // 批 B：5 ASR 字段默认值，与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐（plan §12 批 B 周全修复）。
     senseITN: true,
@@ -4126,6 +4132,7 @@ function MicButton({
     backchannelYield: true,
     // Issue #15 批 1 / ADR-0012：打断语音抢救默认 true。
     bargeInSalvage: true,
+    llmCorrect: false,
     yieldMs: 1500,
     // 批 B：5 ASR 字段默认值，与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐（plan §12 批 B 周全修复）。
     senseITN: true,
@@ -4169,6 +4176,7 @@ function MicButton({
         backchannelYield: c.backchannelYield !== false,
         // Issue #15 批 1 / ADR-0012：打断语音抢救透传（同 backchannelYield 模式）。
         bargeInSalvage: c.bargeInSalvage !== false,
+        llmCorrect: c.llmCorrect === true,
         // 批 G 任务 3：让位窗口时长（500-3000ms）；类型校验严格 + 默认值兜底。
         yieldMs: typeof c.yieldMs === "number" && c.yieldMs >= 500 && c.yieldMs <= 3e3 ? c.yieldMs : 1500,
         // 批 B：5 ASR 字段透传（host /config handler 在 c2120d9 已透传 4 字段，本批补 senseVoice + 客户端白名单对齐）。
@@ -4264,56 +4272,93 @@ function MicButton({
       autoSendTimerRef.current = null;
     }
   };
+  const correctDraft = async (text) => {
+    try {
+      const r = await fetch(`${location.origin}${BASE_PATH2}/correct`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, lang: activeLocale() === "en" ? "en" : "zh" }),
+        signal: AbortSignal.timeout(12e3)
+        // 上限 12s——超时按原文发，不等纠错
+      });
+      if (!r.ok) return text;
+      const out = await r.json();
+      const corrected = typeof out.text === "string" ? out.text.trim() : "";
+      return corrected || text;
+    } catch {
+      return text;
+    }
+  };
   const submitDraftNow = (expectedText) => {
     cancelPendingSubmit();
     submitInFlightRef.current = true;
     const actions = actionsRef.current;
     const submitFn = actions?.submit;
-    if (typeof submitFn !== "function") return;
-    const draftSnapshot = (expectedText ?? draftRef.current).trim();
-    if (!draftSnapshot) return;
-    const submitViaQueue = () => {
-      const doSubmit = () => {
-        try {
-          const r = submitFn();
-          if (r && typeof r.then === "function") {
-            r.catch(() => {
-              bus.setUi({ error: t("sendFailKept") });
-            });
-          }
-        } catch {
-          bus.setUi({ error: t("sendFailKept") });
-        }
-      };
-      doSubmit();
-      let retryCount = 0;
-      submitTimerRef.current = setInterval(() => {
-        retryCount++;
-        const phase = phaseRef.current;
-        if (retryCount > 3 || phase === "submitting" || phase === "adjudicating" || draftRef.current.trim() !== draftSnapshot) {
-          cancelPendingSubmit();
-          return;
-        }
-        doSubmit();
-      }, 500);
-    };
-    const sid = sidRef.current;
-    if (sid && shouldSteerSubmit(runningRef.current, draftSnapshot)) {
-      void bus.steerSubmit(sid, draftSnapshot).then((delivered) => {
-        if (delivered) {
-          if (draftRef.current.trim() === draftSnapshot) {
-            try {
-              actions?.setDraft?.("");
-            } catch {
-            }
-          }
-          return;
-        }
-        submitViaQueue();
-      }).catch(() => submitViaQueue());
+    if (typeof submitFn !== "function") {
+      submitInFlightRef.current = false;
       return;
     }
-    submitViaQueue();
+    const draftSnapshot = (expectedText ?? draftRef.current).trim();
+    if (!draftSnapshot) {
+      submitInFlightRef.current = false;
+      return;
+    }
+    const runSubmit = (submitText) => {
+      const snapshot = submitText.trim() || draftSnapshot;
+      if (snapshot !== draftSnapshot) {
+        try {
+          actions?.setDraft?.(snapshot);
+        } catch {
+        }
+      }
+      const submitViaQueue = () => {
+        const doSubmit = () => {
+          try {
+            const r = submitFn();
+            if (r && typeof r.then === "function") {
+              r.catch(() => {
+                bus.setUi({ error: t("sendFailKept") });
+              });
+            }
+          } catch {
+            bus.setUi({ error: t("sendFailKept") });
+          }
+        };
+        doSubmit();
+        let retryCount = 0;
+        submitTimerRef.current = setInterval(() => {
+          retryCount++;
+          const phase = phaseRef.current;
+          if (retryCount > 3 || phase === "submitting" || phase === "adjudicating" || draftRef.current.trim() !== snapshot) {
+            cancelPendingSubmit();
+            return;
+          }
+          doSubmit();
+        }, 500);
+      };
+      const sid = sidRef.current;
+      if (sid && shouldSteerSubmit(runningRef.current, snapshot)) {
+        void bus.steerSubmit(sid, snapshot).then((delivered) => {
+          if (delivered) {
+            if (draftRef.current.trim() === snapshot) {
+              try {
+                actions?.setDraft?.("");
+              } catch {
+              }
+            }
+            return;
+          }
+          submitViaQueue();
+        }).catch(() => submitViaQueue());
+        return;
+      }
+      submitViaQueue();
+    };
+    if (bootNow().llmCorrect === true && !draftSnapshot.startsWith("/")) {
+      void correctDraft(draftSnapshot).then((finalText) => runSubmit(finalText));
+      return;
+    }
+    runSubmit(draftSnapshot);
   };
   const scheduleAutoSend = () => {
     cancelAutoSend();
