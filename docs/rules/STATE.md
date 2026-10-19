@@ -400,8 +400,9 @@
 
 - 三轴审查（R1 证据/R2 最小性/R3 风险）+ 第 2 轮复审已全部完成：R3 初判 fail 的 B2/I-1~I-7 与复审两个 Important（抑制口径改 engine 侧弃段、设置接线补 settings-form.tsx）均已修订进计划；复审结论=有条件放行批 1，4 项条件全部落实。
 - **批 1（打断语音抢救）已入库**：`7721d00` feat（asr.ts 预录环+absorbPreRoll+弃段守卫，index/client/strings/settings-form 接线，wake-flow 台架 440→445 全绿，双 tsc+build 过）+ `c136f71` docs（计划修订：种子锚点改请求体起点-250——台架 detect 延迟档实测抓红 sentAt 方案后修正）+ `0496ace` chore(lib)。**执行期修正记录**：台架 max 判频段实验抓红 D5 命令窗（相位小尾巴产字污染唤醒词文本）→ 回退 mean 判+BC 频段加宽 [0.015,0.05) 解决混合块杂字。
-- 批 1 独立审查进行中（kimi-coding 路由故障，stepfun-plan 路由重派两个窄域审查：引擎正确性/接线与测试）。
-- 基线：HEAD=78200ec（v0.7.25）→ 0496ace；npm test 445 项；17 版矩阵不变。
+- **批 1 审查前置自检自查两处真 bug 并修复**（均先写复现测试拿红）：① `8cc2e7b` salvage 标记泄漏——beginHeld/endHeld(cancel)/短噪声弃段/clearWakeSegment 四个段重置路径不清 salvagedSegment，抢救段未定稿前用户立刻按住说话会把 hold 段「对/嗯」误抑制；② `316ea2f` 同不变量第三条路径——discardSegment 清空段与条件 seed 之间不清标记（未 seed 时 stale 保留）。修复后 446 全绿。教训：**布尔段标记必须与「段生命周期」所有重置点对齐**，已在台架补「标记不泄漏」用例。
+- 批 1 独立审查进行中（kimi-coding 路由故障，stepfun-plan 路由重派两个窄域审查：引擎正确性/接线与测试；审查对象为 7721d00 原始 diff，两处修复需在裁决时对照当前码）。
+- 基线：HEAD=78200ec（v0.7.25）→ 316ea2f；npm test 446 项；17 版矩阵不变。
 
 ### 恢复点
 
