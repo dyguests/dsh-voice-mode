@@ -52,6 +52,13 @@ t('端点语义不变：引擎侧 silenceMs 引用仍在（asr.ts）', () => {
   assert.ok(n >= 3, `asr.ts silenceMs 引用应保持（实际 ${n} 处）——端点判定不动`)
 })
 
+t('端点权威在 host VAD：asr-host.ts 的 seg.vad 仍用 silenceMs()/1000（审查 Minor-3 补锁）', () => {
+  const hostSrc = read('src/asr-host.ts')
+  assert.ok(hostSrc.includes('silenceMs() / 1000'), 'host VAD 端点阈值被改成常量——端点语义被破坏')
+  // 检测 VAD（打断）仍与断句解耦（0.5 固定 + detect 短阈值）
+  assert.ok(/newVad\(vadPath, 0\.5, silenceMs\(\) \/ 1000\)/.test(hostSrc), 'seg.vad 构造形态被改')
+})
+
 t('其余 bootNow().silenceMs 消费点未动（设置面板/其它路径不受影响）', () => {
   // scheduleAutoSend 之外若仍有 silenceMs 读取属既有语义；本批只解耦自动发送计时。
   const idx = clientSrc.indexOf('const scheduleAutoSend =')

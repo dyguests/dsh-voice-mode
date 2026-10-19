@@ -2009,7 +2009,7 @@ export function MicButton({
       })
       engine.onSegment((text, meta) => {
         // 定稿进草稿（可编辑 Q13）。发送语义：累积模式——连续多段拼成一条消息，
-        // 静音到「发送阈值」（断句后再额外静音一个 silenceMs）或按住 Ctrl / hold 松手才发，
+        // 静音到「发送阈值」（断句后额外等固定 AUTO_SEND_EXTRA_MS=1200ms，批 5 与 silenceMs 解耦）或按住 Ctrl / hold 松手才发，
         // 不再每段定稿立即发送（长句碎片化/丢字的根因）。
         resetIdle()
         submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：新段=新提交周期

@@ -412,7 +412,7 @@
 3. 批 2 审查 verdict 回收 → 放行批 3（partial 实时回填草稿：committed/live 分离+wake 门控+onSegment 替换尾部）。
 4. **批 3（partial 实时回填）已入库且门禁闭环** `91f940a`+`3d106f9`（+复审 Minor 修补进行中）：初审 fail（I-1 wake 续段 autoSend 定时器不取消→半成品外发+命令重复；I-2 提交在途窗口回写已提交文本；I-3 测试口径）→ 全修（cancelAutoSend+submitInFlightRef 三处置/检/清+锁）；**复审 pass-with-minor**（无 Blocker/Important，六突变内存重放全抓红）→ Minor 修补：抢占路径同口径清标记（真 bug）、空 partial 早退防闪烁、锁加强（放行判据+跳过分支同在窗口）；473→477 全绿（批 4a 已先行入库 4d720c3）。
 5. **批 4 已入库且门禁闭环** `4d720c3`（4a）+ `9488613`（4b）+ `45d5b92`（真机项）+ 审查 fail 修复提交（进行中）。**批 4 独立审查 fail（2 Blocker）→ 全修**：B1 `ctx.llm` 属性访问在真实宿主必抛（cordis 非 inject 服务 get trap，审查代理实证复现）→ 改 `ctx.get` 可选查找+try 内+路由 .catch 恒 200+proxy 形态回归测试；B2 VoiceStatusBar hook 在早退 return 之后（Rules of Hooks 违反，进/出语音模式即崩）→ hook 前移；I1 纠错 then 内有效性复核（防幽灵提交）；I2 wroteBack 守卫基线；I4 纠错分支 return 顺序锁；M2/M3/M5/M6 限流/host 10s 自弃/capture 文案/新鲜度清单。**I3 提交态 npm test 红（mtime 漂移）→ 重建闭环 496 全绿**。**OQ 登记**：ctx.get 端到端（provider/凭据/17 版本）真机覆盖；宿主 setDraft 同步性真机观察。
-6. 批 5（autoSend 延迟解耦：scheduleAutoSend 计时从 silenceMs 改客户端常量 1200ms，silenceMs 端点语义不变）——批 4 verdict 回收后开工。
+6. **批 5 已入库且门禁闭环** `6103c9b`：AUTO_SEND_EXTRA_MS=1200 固定附加窗（scheduleAutoSend 计时与 silenceMs 解耦——问题⑦根治：用户调低 silenceMs 不再连带压缩发送窗）；端点语义不变（host VAD 仍 silenceMs()/1000）。**审查 pass-with-minor**（默认链路 3000→2700ms 已按计划 §3 I10「近似守恒」裁定，ADR-0012:20 有审计）；Minor 已修（陈旧注释+host 端点锁）；真机项已登记（silenceMs 调低后长句不碎+默认 ~2.7s 手感）。命名口径：计划笔误 SEND_DELAY_MS，实现为 AUTO_SEND_EXTRA_MS（语义更精确）。
 3. 每批门禁（主会话执行+四连 → 审查 subagent 审 diff → 主会话裁决）；批 1 I10 豁免见 ADR-0012（bargeInSalvage 布尔默认 true + PRE_ROLL_MS=2000 常量）。
 4. 批 1 真机验收项已登记 docs/qa/must-verify-manually.md（外放/耳机 × salvage 纯度 + 纯「嗯」不发送 + 逃逸关口）。
 5. issue #15 回复稿与发版（v0.7.26 先例）在收口批，待用户拍板。
