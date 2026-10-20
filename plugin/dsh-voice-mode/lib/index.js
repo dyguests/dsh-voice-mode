@@ -2021,6 +2021,7 @@ var en = {
   descReadAloud: "When replies are read aloud: voice = only inside voice mode (default); always = every reply in the focused session, including typed ones; off = never read aloud",
   descUiLayout: "Voice UI layout: compact = everything inside the mic button; bar = status bar above the composer",
   descShowCaptions: "Show the floating caption while reading aloud",
+  descShowStatusBar: "Show the original voice status bar above the composer (waveform, transcript, timer, exit)",
   engineVits: "Local VITS",
   engineKokoro: "Local Kokoro",
   engineEdge: "Edge cloud",
@@ -2357,6 +2358,7 @@ var VOICE_SETTINGS_DEFAULTS = {
   readAloud: "voice",
   uiLayout: "compact",
   showCaptions: false,
+  showStatusBar: false,
   mode: "toggle",
   // 批 7O（ADR-0006）：bargeInMode 默认 'auto' → 'detect'（I10 豁免：ADR-0006 已 accepted 拍板，
   // 老用户显式 auto 不受影响，新用户/未调过的用户开箱即对）。
@@ -2425,6 +2427,7 @@ function createVoiceSettingsSchema(defs) {
     readAloud: z.union([z.const("voice"), z.const("always"), z.const("off")]).default(d.readAloud).description(DESC.readAloud),
     uiLayout: z.union([z.const("compact"), z.const("bar")]).default(d.uiLayout).description(DESC.uiLayout),
     showCaptions: z.boolean().default(d.showCaptions).description(DESC.showCaptions),
+    showStatusBar: z.boolean().default(d.showStatusBar).description(DESC.showStatusBar),
     // 批 7N 重做 5/5：与 strings.ts descAutoResume 同步——明确「下次进入语音会话即生效」。
     autoResume: z.boolean().default(d.autoResume).description(DESC.autoResume),
     mode: z.union([z.const("toggle"), z.const("hold"), z.const("once")]).default(d.mode).description(DESC.mode),
@@ -2477,6 +2480,7 @@ var Config = z.object({
   readAloud: z.union([z.const("voice"), z.const("always"), z.const("off")]).default("voice"),
   uiLayout: z.union([z.const("compact"), z.const("bar")]).default("compact"),
   showCaptions: z.boolean().default(false),
+  showStatusBar: z.boolean().default(false),
   mode: z.union([z.const("toggle"), z.const("hold"), z.const("once")]).default("toggle"),
   bargeInMode: z.union([z.const("auto"), z.const("manual"), z.const("detect")]).default("detect"),
   echoGateDb: z.number().default(6),
@@ -2822,6 +2826,7 @@ function apply(ctx, config) {
           readAloud: vset.readAloud,
           uiLayout: vset.uiLayout,
           showCaptions: vset.showCaptions,
+          showStatusBar: vset.showStatusBar,
           mode: vset.mode,
           bargeInMode: vset.bargeInMode,
           echoGateDb: vset.echoGateDb,

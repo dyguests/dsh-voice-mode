@@ -1595,6 +1595,10 @@ var zh = {
   uiBar: "\u9876\u90E8\u72B6\u6001\u6761",
   descUiLayout: "\u6536\u8FDB\u6309\u94AE=\u6240\u6709\u72B6\u6001\u90FD\u5728\u9EA6\u514B\u98CE\u6309\u94AE\u4E0A\uFF1B\u9876\u90E8\u72B6\u6001\u6761=\u5728\u8F93\u5165\u6846\u4E0A\u65B9\u5355\u72EC\u663E\u793A\u4E00\u6761",
   captionsLabel: "\u5B57\u5E55\u6D6E\u5C42",
+  statusBarLabel: "\u72B6\u6001\u6761",
+  showCaptionsLabel: "\u5B57\u5E55\u6D6E\u5C42",
+  showStatusBarLabel: "\u72B6\u6001\u6761",
+  descShowStatusBar: "\u5728\u8F93\u5165\u6846\u4E0A\u65B9\u663E\u793A\u539F\u6765\u7684\u8BED\u97F3\u72B6\u6001\u6761\uFF08\u6CE2\u5F62\u3001\u8BC6\u522B\u6587\u5B57\u3001\u8BA1\u65F6\u3001\u9000\u51FA\uFF09",
   descShowCaptions: "\u6717\u8BFB\u65F6\u5728\u53F3\u4E0B\u89D2\u663E\u793A\u5F53\u524D\u53E5\u5B50\u7684\u5B57\u5E55\u6D6E\u5C42",
   readAloudVoice: "\u8BED\u97F3\u6A21\u5F0F",
   readAloudAlways: "\u603B\u662F",
@@ -1836,6 +1840,10 @@ var en = {
   uiBar: "Status bar",
   descUiLayout: "In the button = all state lives on the mic button; Status bar = a separate bar above the composer",
   captionsLabel: "Caption overlay",
+  statusBarLabel: "Status bar",
+  showCaptionsLabel: "Caption overlay",
+  showStatusBarLabel: "Status bar",
+  descShowStatusBar: "Show the original voice status bar above the composer (waveform, transcript, timer, exit)",
   descShowCaptions: "Show a floating caption while reading aloud",
   readAloudVoice: "Voice mode",
   readAloudAlways: "Always",
@@ -3036,6 +3044,7 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
           }
         ) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "showCaptions", desc: t("descShowCaptions"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.showCaptions === true, onChange: (e) => { void scope.set("showCaptions", e.target.checked); try { window.dispatchEvent(new Event("dshvm-settings-changed")); } catch {} } }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "showStatusBar", desc: t("descShowStatusBar"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.showStatusBar === true, onChange: (e) => { void scope.set("showStatusBar", e.target.checked); try { window.dispatchEvent(new Event("dshvm-settings-changed")); } catch {} } }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "autoResume", desc: t("descAutoResume"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.autoResume), onChange: (e) => void scope.set("autoResume", e.target.checked) }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "captionFontSize", desc: t("descCaptionFontSize"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
           SegGroup,
@@ -3252,6 +3261,19 @@ function apply(ctx) {
         inject: () => ({ bus })
       },
       MicButton
+    )
+  );
+  // 可选：原来的状态条（输入框上方，默认关）。
+  ctx.slots.inject(
+    "conversation.input.dock",
+    () => ctx.slots.register(
+      {
+        name: "conversation.input.dock",
+        id: "voice-mode-status",
+        order: 10,
+        inject: () => ({ bus })
+      },
+      VoiceStatusBar
     )
   );
   // 可选：朗读时的字幕浮层。
@@ -3489,6 +3511,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     autoResume: false,
     readAloud: "voice",
     showCaptions: false,
+    showStatusBar: false,
     mode: "toggle",
     // 批 7O（ADR-0006）：默认 detect（与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐）。
     bargeInMode: "detect",
@@ -4054,11 +4077,11 @@ html.dshvm-holding, html.dshvm-holding * {
    状态条：\u4E2D\u6027\u80F6\u56CA\uFF08\u9760\u8FD1\u5E95\u90E8\u8F93\u5165\u6846\u7684\u89C6\u89C9\u8BED\u8A00\uFF09\u3002
    \u7EFF\u8272\u53EA\u7559\u7ED9\u5B9E\u65F6\u6CE2\u5F62\u4E0E\u9EA6\u514B\u98CE\u6309\u94AE\uFF0C\u4E0D\u518D\u7ED9\u6574\u6761\u6A2A\u5E45\u94FA\u6D45\u7EFF\u5E95\u3002
    \u989C\u8272\u5168\u90E8\u8D70 dsw \u4E3B\u9898\u53D8\u91CF\uFF0C\u6D45/\u6DF1\u8272\u4E3B\u9898\u81EA\u52A8\u9002\u914D\u3002 */
-.dshvm-status { display: flex; flex-direction: column; align-items: center; gap: 3px; max-width: 100%; min-width: 0; }
+.dshvm-status { display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: var(--dsh-composer-card-max-width, 952px); max-width: calc(100% - 32px); margin: 0 auto; min-width: 0; }
 .dshvm-status-bar {
   box-sizing: border-box; display: flex; align-items: center; gap: 8px;
-  max-width: 100%; min-width: 0; padding: 5px 6px 5px 12px;
-  border-radius: 999px; font-size: 12px; line-height: 18px;
+  width: 100%; max-width: 100%; min-width: 0; padding: 5px 6px 5px 12px;
+  border-radius: 12px; font-size: 12px; line-height: 18px;
   font-family: inherit; color: var(--dsw-alias-label-secondary);
   background: var(--dsw-specific-tip);
   border: 1px solid var(--dsw-alias-border-l3);
@@ -4229,6 +4252,7 @@ function MicButton({
     autoResume: false,
     readAloud: "voice",
     showCaptions: false,
+    showStatusBar: false,
     mode: "toggle",
     // 批 7O（ADR-0006）：bootNow 兜底默认与 VOICE_SETTINGS_DEFAULTS 对齐为 detect。
     bargeInMode: "detect",
@@ -4271,6 +4295,7 @@ function MicButton({
         autoResume: c.autoResume === true,
         readAloud: c.readAloud === "always" ? "always" : c.readAloud === "off" ? "off" : "voice",
         showCaptions: c.showCaptions === true,
+        showStatusBar: c.showStatusBar === true,
         mode: c.mode === "hold" ? "hold" : c.mode === "once" ? "once" : "toggle",
         bargeInMode: c.bargeInMode === "manual" ? "manual" : c.bargeInMode === "detect" ? "detect" : "auto",
         echoGateDb: typeof c.echoGateDb === "number" ? Math.min(12, Math.max(3, c.echoGateDb)) : cur.echoGateDb,
@@ -4458,6 +4483,24 @@ function MicButton({
       if (localRef.current !== "on") return;
       if (bus.activeSessionId !== sid) {
         setLocalMode("off");
+        setRecording(false);
+        setAwaitingReply(false);
+        setOncePending(false);
+        setEndingNow(false);
+        oncePendingRef.current = false;
+        onceSeenReplyRef.current = false;
+        if (onceExitTimerRef.current) {
+          clearTimeout(onceExitTimerRef.current);
+          onceExitTimerRef.current = null;
+        }
+        if (onceEndingTimerRef.current) {
+          clearTimeout(onceEndingTimerRef.current);
+          onceEndingTimerRef.current = null;
+        }
+        if (onceWaitAudioTimerRef.current) {
+          clearTimeout(onceWaitAudioTimerRef.current);
+          onceWaitAudioTimerRef.current = null;
+        }
         clearIdle();
         cancelPendingSubmit();
         cancelAutoSend();
@@ -5371,7 +5414,7 @@ function MicButton({
   const compactUi = true;
   // 实时音量：取最新一帧并做衷减，避免钻环抖动；没有声音时自然回落。
   // 等待回复期间不应显示「录入中」：已发送、或正在生成回复时用中性状态。
-  const waitingForReply = !bus.ui.playing && (oncePending || awaitingReply || bus.ui.turn === "agent-speaking" || livePhase === "submitting" || livePhase === "adjudicating");
+  const waitingForReply = local === "on" && !bus.ui.playing && (oncePending || awaitingReply || bus.ui.turn === "agent-speaking" || livePhase === "submitting" || livePhase === "adjudicating");
   // 「朗读中」：回复开始流式生成或音频在播，都显示得到喇叭。
   const readingState = bus.ui.playing || bus.ui.turn === "agent-speaking";
   // 一次性模式：回复读完、退出倒计时已启动时才显示「结束中」。
@@ -5522,6 +5565,19 @@ function MicButton({
             ]
           }
         ),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+          "button",
+          {
+            role: "menuitemcheckbox",
+            "aria-checked": boot.showStatusBar === true,
+            className: "dshvm-menu-item",
+            onClick: () => void patchSettings({ showStatusBar: boot.showStatusBar !== true }),
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: t("statusBarLabel") }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-menu-check", children: boot.showStatusBar === true ? check : "" })
+            ]
+          }
+        ),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshvm-menu-sep" }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
           "button",
@@ -5543,8 +5599,6 @@ function MicButton({
 }
 function VoiceStatusBar({ bus, sessionId }) {
   useLang();
-  // 默认「收进按钮」时不渲染状态条。
-  if ((bus.ui.boot?.uiLayout ?? "compact") !== "bar") return (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   // \u72B6\u6001\u6761\u6837\u5F0F\u4E0E\u9EA6\u514B\u98CE\u6309\u94AE\u540C\u5C5E\u4E00\u4EFD\u6CE8\u5165\u7684 CSS\uFF08\u5E42\u7B49\uFF0C\u53EA\u6CE8\u5165\u4E00\u6B21\uFF09\u3002
   useVoiceCss();
   const [b, setB] = (0, import_react3.useState)(() => ({ active: bus.activeSessionId, ui: bus.ui }));
@@ -5561,6 +5615,8 @@ function VoiceStatusBar({ bus, sessionId }) {
     return () => clearInterval(id);
   }, [b.active, sessionId]);
   const isActive = b.active === sessionId;
+  // 开关须在所有 hooks 之后判断：hooks 顺序不能因为开关变化而变。
+  if (bus.ui.boot?.showStatusBar !== true) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   if (!isActive) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   const stateText = b.ui.state === "loading-model" ? t("loadingModel") : b.ui.state === "transcribing" ? t("recognizing") : b.ui.state === "wake" ? t("sayWake").replace("{wake}", b.ui.wakeWord || t("wakeWord")) : b.ui.state === "speech" ? b.ui.mode === "hold" ? t("holdDots") : t("listening") : b.ui.playing ? t("reading") : b.ui.turn === "agent-speaking" ? t("thinking") : b.ui.mode === "hold" ? t("barHold") : t("barListening");
   const bars = Array.from({ length: WAVE_BARS }, (_, i) => b.ui.levels[i] ?? 0);
