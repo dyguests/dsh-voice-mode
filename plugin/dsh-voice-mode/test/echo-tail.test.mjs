@@ -333,5 +333,59 @@ await t('源码锁：setUi 实现含 playing 降沿记录（playingEndAt = Date.
   )
 })
 
+// --------------------------------------------------------------------------
+// PR #16 移植：readAloud=always 只在 host 认定的焦点标签页播放；停止朗读拒本回合余句
+// --------------------------------------------------------------------------
+{
+  await bus.exit(SID)
+  globalThis.document.visibilityState = 'visible'
+  const focusBodies = []
+  const fetch0 = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/focus')) focusBodies.push(JSON.parse(init.body))
+    return fetch0(url, init)
+  }
+  const RS = 'sess-read-1'
+  bus.setUi({ boot: { ...bus.ui.boot, readAloud: 'always' } })
+  bus.setFocusedSession(RS)
+  const myTab = focusBodies.at(-1)?.tabId
+  let seq = 100
+  const playOne = async () => {
+    const n = globalThis.__stubSrcs.length
+    const id = seq++
+    fire('audio', { sessionId: RS, sentenceId: id, chunkId: 0, final: false, audio: wav.toString('base64') })
+    fire('audio', { sessionId: RS, sentenceId: id, chunkId: 1, final: true, text: '读', audio: '', mime: 'audio/wav' })
+    await flush()
+    await flush()
+    const played = globalThis.__stubSrcs.length > n
+    if (played) globalThis.__stubSrcs.at(-1).onended()
+    return played
+  }
+
+  await t('always：上报焦点时带本标签页 tabId', () => {
+    assert.equal(focusBodies.at(-1)?.sessionId, RS)
+    assert.ok(typeof myTab === 'string' && myTab.length > 0)
+  })
+  await t('always：焦点在别的标签页（同会话多开）→ 本页不播', async () => {
+    fire('focus', { sessionId: RS, tabId: 'some-other-tab' })
+    assert.equal(await playOne(), false, '非焦点标签页也播了——多标签页叠播')
+  })
+  await t('always：焦点是本标签页 → 不在语音模式也播', async () => {
+    fire('focus', { sessionId: RS, tabId: myTab })
+    assert.equal(await playOne(), true)
+  })
+  await t('stopReading：本回合余句不再播；下一轮 agent-speaking 自动解除', async () => {
+    bus.stopReading()
+    assert.equal(await playOne(), false, '停止朗读后同回合句子仍在播')
+    fire('turn', { sessionId: RS, state: 'agent-speaking' })
+    assert.equal(await playOne(), true, '新一轮回复没恢复朗读')
+  })
+  await t('readAloud=off：焦点会话也不播', async () => {
+    bus.setUi({ boot: { ...bus.ui.boot, readAloud: 'off' } })
+    assert.equal(await playOne(), false)
+  })
+  globalThis.fetch = fetch0
+}
+
 rmSync(tmp, { recursive: true, force: true })
 console.log('\necho-tail：' + passed + ' 项通过')

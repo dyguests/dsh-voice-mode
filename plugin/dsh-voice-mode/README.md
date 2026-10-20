@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases)](https://github.com/qishuilalala/dsh-voice-mode/releases)
 [![npm version](https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange)](https://www.npmjs.com/package/dsh-voice-mode)
-[![Tests: 624 passing](https://img.shields.io/badge/tests-624%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
+[![Tests: 647 passing](https://img.shields.io/badge/tests-647%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
 
 DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边出字的流式识别 → 停顿自动发送 → 最终答复按句流式朗读 + 实时字幕，开口即可打断（真 barge-in）。无需 API Key，识别模型在本地宿主端推理。
 
@@ -15,20 +15,18 @@ DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边�
 
 ![语音模式真实录制：流式转写 → 自动发送 → 按句朗读 + 实时字幕](https://raw.githubusercontent.com/qishuilalala/dsh-voice-mode/HEAD/plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
 
-### 收拢到麦克风按钮的语音 UI（更新于 2026-10-20）
+### 麦克风按钮即状态面板（PR #16，[@dyguests](https://github.com/dyguests) 贡献）
 
-![真实录制：语音输入全部收拢到右下角麦克风按钮](https://raw.githubusercontent.com/dyguests/dsh-voice-mode/custom/voice-ui/plugin/dsh-voice-mode/assets/demo-compact-ui.gif)
+![真实录制：语音输入全部收拢到右下角麦克风按钮](https://raw.githubusercontent.com/qishuilalala/dsh-voice-mode/HEAD/plugin/dsh-voice-mode/assets/demo-compact-ui.gif)
 
-本分支把原本输入框上方的状态条与右下角字幕浮层全部收进麦克风按钮，输入区不再被遮挡。上面这段是真实链路录制：说话时识别文字实时写进输入框，状态全部在按钮上——
+dsh ≥0.1.7 上按钮挂在发送键左侧（`conversation.input.activity`），更早的版本仍在输入框右侧。状态全部画在按钮上：
 
-- **聆听**：绿色三根迷你竖条，随麦克风实时音量跳动；计时显示在按钮下方，不改变热区
-- **等待回复**：转圈；**朗读中**：蓝色五根竖条，随播放音量跳动；**结束中**：对勾
-- **VAD 检测**：右上角橙点；**出错**：左上角红点（悬停看原因）
-- **点击语义**：朗读中点一下＝停止朗读并退出；平时点一下＝进入/退出；快捷键与点击防抖 250ms
-- **右键菜单**：交互模式（持续聆听 / 按住说话 / 说完就关）、朗读回复（语音模式 / 总是 / 关闭）、字幕浮层、状态条、自动发送
-- 需要经典布局时，可在右键菜单或设置里打开「状态条」，恢复输入框上方的原状态条；字幕浮层默认关闭
-
-> 更新时间：2026-10-20。当前实现落在 0.7.25 的运行产物（`lib/`）上，`src/` 仍是上游新版源码，未同步；从源码重建会覆盖这些改动。
+- **聆听**：绿色三根竖条，随麦克风音量跳动；**朗读中**：蓝色五根竖条，随播放音量跳动；**按住说话**：红色
+- **说完就关**（`mode: once`）：发出后关麦、转圈等回复，读完显示对勾并自动退出
+- **检测到说话**：右上角橙点；**出错**：左上角红点（悬停看原因）
+- **点击**：平时进入/退出；不在语音模式但正在朗读（`readAloud: always`）时点一下 = 停止朗读
+- **右键菜单**（鼠标右键或键盘菜单键；触屏长按仍是按住说话）：交互模式、朗读回复范围、字幕浮层、状态条、自动发送
+- 状态条与字幕默认开启；两项都关掉即上图的「全部收进按钮」形态，此时录音计时显示在按钮下方、提示文字显示在按钮旁
 
 
 > **运行时变更（最近：v0.7.18 ~ v0.7.24）**：① **设置面全版本打通**——dsh 0.1.7+ 上设置页与持久化修复（Settings → 语音模式 专属页、写入与重启保留）；② **国际化重做**——界面语言跟随 dsh 官方语言设置，中/英文完整一致、切换无需刷新；③ **修复 npm/pnpm 全新安装失败与 dsh ≥0.1.7 已安装形态「failed to import」**（0.7.17 及更早版本受影响，请升级到 ≥0.7.18）；④ **官方桌面端（Electron）下本地 Kokoro 修复**——需系统 PATH 上有 Node.js ≥18（或设 `DSHVM_NODE`）；⑤ **v0.7.24：恢复 Edge 云端朗读**——微软服务端自 2026-10-15 起拒绝旧版握手（v0.7.23 及更早的默认 Edge 朗读无声，本地 VITS / Kokoro 不受影响），内联的 msedge-tts 升到 2.1.0；朗读**连续失败时**会提示切换本地引擎；另有 host 加固（`/models/retry` 仅同源 POST、模型树路径校验、错误原文不下行）。兼容 dsh 至 0.2.1-rc.2（0.2.1-alpha.4/5 起设置入口移入侧栏底部「Account menu」弹出层，本插件两处入口仍有效）。
@@ -57,9 +55,11 @@ DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边�
 ## ✨ 功能
 
 - **语音模式**：输入框工具排麦克风按钮或全局快捷键 `Ctrl+Shift+V` 进入/退出；全局单活（同一时刻仅一个会话处于语音模式，切换会话自动让出）
-- **两种交互模式（输入框旁按钮或设置可切换，切换即持久化）**：
+- **三种交互模式（右键麦克风或设置可切换，切换即持久化）**：
   - `toggle`（默认）持续聆听：RMS VAD 分段 → zipformer2 流式识别（边说边出字，实时字幕预览）→ 静音约 1500 毫秒断句进草稿，连续多段拼成一条消息，再静音约 1.2 秒（合计约 2.7 秒）自动发送；按住 `Ctrl` 强制立即发送
   - `hold` 按住说话：短按进入/退出，**按住麦克风按钮说话、松手即发**（滑出取消、`Esc`/失焦放弃本段）；按住期间停顿不断句（上限 10 分钟）；`Ctrl` 按住即录、松开即发
+  - `once` 说完就关：像 `toggle` 一样说一段，发出后关麦，等回复朗读完自动退出语音模式（关闭自动发送时：说完这一段即退出，文字留在草稿）
+- **朗读范围**（`readAloud`）：`voice`（默认）只朗读语音模式下的回复；`always` 当前可见会话的所有回复都朗读（含打字发的；同一会话开多个标签页只在最后看的那个上播）；`off` 从不朗读
 - **唤醒词（可选，默认关）**：设置 `wakeWord` 后进入待机态，说出唤醒词才开始识别（如「你好小D」）。**可直接与命令连说**（「你好小D，帮我查天气」）——唤醒词会在定稿/字幕里自动剥掉、不进消息；匹配带容错（同音字替换「小莫→小墨」、首字错、前置语气词「呃/喂/我说」），建议 3-4 字；待机态状态条实时显示「说『x』开始 · 它听到的转写」，唤醒成败可自查。边界（重要）：**仅 `toggle` 模式生效**（`hold` / 手动打断下唤醒词静默失效）；**说完整一句后回到待机态需重说唤醒词**（只喊唤醒词、还没说命令时保持聆听，可停顿想好再说）；**朗读期说唤醒词不触发**（打断由 VAD 开口即触发，与唤醒词无关）
 - **字幕档位**：`captionFontSize` 4 档（0=12px / 1=14px / 2=18px / 3=24px）+ `captionMaxWidth` 3 档（0=50vw / 1=70vw / 2=90vw），窄屏自适应
 - **让位语义**（ADR-0008）：`backchannelYield` 默认开—— 朗读期用户插话「嗯/对」自动让位 1.5s，真要说走硬打断；让 LLM 主动让出话轮（人格层让位）；关掉恢复改造前行为
@@ -127,7 +127,10 @@ bundle 插件安装后需重启 dsh 生效（Linux：`systemctl restart dsh`；�
 | `modelHost` | 默认源 | 模型下载源（国内网络填 `https://hf-mirror.com`） |
 | `autoSend` | `true` | 静音到点自动发送（连续多段拼成一条消息）；关闭则只进草稿（按住 `Ctrl` / hold 松手仍会发送） |
 | `autoResume` | `false` | 切回上次语音会话时自动恢复语音模式（默认关）。开启后：下次进入语音会话即自动进入语音模式 + 恢复上次会话；关闭则需手动按 `Ctrl+Shift+V` 重新进入 |
-| `mode` | `toggle` | 交互模式：`toggle` 持续聆听 + 1500ms 静音断句；`hold` 按住说话、松手发送（短按退出） |
+| `mode` | `toggle` | 交互模式：`toggle` 持续聆听 + 1500ms 静音断句；`hold` 按住说话、松手发送（短按退出）；`once` 说一段、回复读完自动退出 |
+| `readAloud` | `voice` | 朗读范围：`voice` 仅语音模式下的回复；`always` 当前可见会话的所有回复（含打字发送）；`off` 从不朗读 |
+| `showStatusBar` | `true` | 输入框上方的语音状态条；关闭后状态只显示在麦克风按钮上（计时在按钮下方、提示在按钮旁） |
+| `showCaptions` | `true` | 朗读时的字幕浮层 |
 | `shortcut` | `Ctrl+Shift+V` | 进入 / 退出语音模式的快捷键（修饰键 Ctrl/Shift/Alt/Meta + 一个字母键）；**留空 = 禁用快捷键**，改用麦克风按钮 |
 | `wakeWord` | 空（关） | 唤醒词（如「你好小D」）：进入后先说唤醒词激活，避免误触；空 = 关闭。**可与命令连说**，词头自动剥掉不进消息；匹配带容错（编辑距离 ≤1 + 前 3 字符前导窗口，吸收同音字/语气词）；**建议 3-4 字**——单字词无容错、2 字词的容错会连带吸收所有同首字的 2 字词（如「小莫」也会唤醒「小张」），介意误唤醒用 3 字以上；每句断句或打断后回待机需重说；**仅 toggle 模式生效**（hold / 手动打断下不生效）；朗读期说唤醒词不触发 |
 | `toolBeep` | `false` | 工具调用提示音（默认关）：开启后 AI 调用工具时「滴」一声；关闭则全程静默 |
@@ -141,7 +144,7 @@ bundle 插件安装后需重启 dsh 生效（Linux：`systemctl restart dsh`；�
 | `llmCorrect` | `false` | LLM 纠错（Issue #15 批 4，默认关）：发送前用大模型对整条语音文本做一次纠错（只改错别字/同音字/标点，保持原意；复用宿主已配置模型。开 = 每条消息多一次约 1 秒的纠错等待；纠错失败自动用原文） |
 | `yieldMs` | `1500` | 让位窗口时长（ms，500-3000）：`backchannelYield` 命中后 TTS 丢帧持续时长；窗口内用户真要说则由原 `hardBreak` 接管，窗口到点自动恢复播放 |
 
-生效时机分四档：① 即时——朗读引擎 / 音色 / 语速 / 口语化提示词（对后续回复生效）/ 模型镜像（下次下载尝试即生效）；② 下次识别时——定稿重译（SenseVoice）/ 逆文本归一化；③ 下一段话——静音判定时长（断句端点；发送等待固定 1.2 秒不受影响）；④ 下次进入语音模式——打断灵敏度 / 打断方式 / 回声门控 / 快捷键 / 自动发送 / 自动恢复 / 交互模式 / 唤醒词 / 工具提示音 / 字幕字号 / 字幕宽度 / 短应答让位 / 让位窗口 / 打断语音抢救 / LLM 纠错 / 空闲时长。已保存但未生效的项会列在设置卡片顶部（含当前生效值）。设置项默认值由插件配置（`base` 层）提供。
+生效时机分四档：① 即时——朗读引擎 / 音色 / 语速 / 口语化提示词（对后续回复生效）/ 朗读范围 / 状态条 / 字幕浮层 / 模型镜像（下次下载尝试即生效）；② 下次识别时——定稿重译（SenseVoice）/ 逆文本归一化；③ 下一段话——静音判定时长（断句端点；发送等待固定 1.2 秒不受影响）；④ 下次进入语音模式——打断灵敏度 / 打断方式 / 回声门控 / 快捷键 / 自动发送 / 自动恢复 / 交互模式 / 唤醒词 / 工具提示音 / 字幕字号 / 字幕宽度 / 短应答让位 / 让位窗口 / 打断语音抢救 / LLM 纠错 / 空闲时长。已保存但未生效的项会列在设置卡片顶部（含当前生效值）。设置项默认值由插件配置（`base` 层）提供。
 
 ### 本地音色（VITS / Kokoro）
 
@@ -361,7 +364,7 @@ flowchart LR
 
 ```sh
 pnpm install && pnpm build    # esbuild：lib/index.js（host）+ lib/client.js（browser）
-pnpm test                     # 51 个测试文件串联：单测 + 台架（假浏览器驱动真引擎）+ 结构守卫 + 发布前自检（无需网络）
+pnpm test                     # 52 个测试文件串联：单测 + 台架（假浏览器驱动真引擎）+ 结构守卫 + 发布前自检（无需网络）
 systemctl restart dsh         # 本机加载新 host 代码；其他平台重启 dsh 进程
 ```
 

@@ -21,6 +21,8 @@ const url = process.argv[2]
 const loop = process.argv.includes('--loop')
 // --tts-down：负面路径——云端朗读整体不可用（配合 scripts/fixtures/block-edge-tts.cjs）时，用户必须看到可行动的提示
 const ttsDown = process.argv.includes('--tts-down')
+// --once（配合 --loop）：交互模式设为 once——说完一句、回复读完后应自动退出语音模式（0.1.7+ 插件设置端点）
+const once = process.argv.includes('--once')
 if (!url) { console.error('用法: node scripts/smoke-voice-chain.mjs <宿主启动 URL>'); process.exit(2) }
 const here = dirname(fileURLToPath(import.meta.url))
 const cache = process.env.DSHVM_MODEL_CACHE || join(homedir(), '.cache', 'dsh-voice-mode', 'models')
@@ -117,6 +119,10 @@ if (!mic) { bad('mic 按钮未渲染'); await closer(); process.exit(1) }
 ok('mic 按钮渲染（当前会话已选中）')
 
 // 4) 点 mic 进入语音模式 → 等待真实语音被识别
+if (once) {
+  const st = await page.evaluate(async () => (await fetch('/voice-mode/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'once' }) })).status)
+  st === 200 ? ok('交互模式已设为 once') : bad(`设置 once 失败（HTTP ${st}）`)
+}
 await mic.click()
 let state = ''
 for (let i = 0; i < 30; i++) {
@@ -152,6 +158,18 @@ if (ttsDown && heard) {
   for (let i = 0; i < 90 && vc.audio < 1; i++) { await page.waitForTimeout(1000); vc = await page.evaluate(() => window.__vc) }
   vc.audio >= 1 ? ok(`LLM 回复的朗读音频帧到达客户端（${vc.audio} 帧）——说话→识别→发送→回复→朗读 闭环成立`) : bad('90s 内客户端未收到朗读音频帧（自动发送/LLM/TTS 链路中断）')
   vc.ttsError === 0 ? ok('tts-error 0') : bad(`出现 tts-error ×${vc.ttsError}`)
+  if (once && vc.audio >= 1) {
+    // once：回复读完（回合结束 + host tts-idle + 本地播完 + 1.2s 稳定窗）后自动退出，按钮回到未激活
+    let exited = false
+    for (let i = 0; i < 180 && !exited; i++) {
+      await page.waitForTimeout(1000)
+      exited = await page.evaluate(async () => {
+        const j = await (await fetch('/voice-mode')).json()
+        return !j.active && document.querySelector('[data-dshvm="mic"]')?.getAttribute('aria-pressed') === 'false'
+      })
+    }
+    exited ? ok('once：回复读完后自动退出语音模式（按钮复位）') : bad('once：180s 内没有自动退出语音模式')
+  }
 }
 await page.evaluate(async (id) => { await fetch('/voice-mode/toggle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: id, on: false }) }) }, sid).catch(() => {})
 await closer()

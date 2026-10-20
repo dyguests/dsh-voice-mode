@@ -226,6 +226,9 @@ export class TtsQueue {
   private readonly onError?: (sessionId: string) => void
   /** 单句合成重试耗尽被跳过通知（每句一次；此前是静默丢句——真机「回复偶尔不朗读」根因之一）。 */
   private readonly onSkip?: (sessionId: string, text: string, streak: number) => void
+  /** 某会话队列跑空（无在途、无积压）：「说完就关」据此判定朗读真正结束——客户端只能看到
+   *  句间的播放空档，分不清「后面还有句子在合成」与「已全部读完」。 */
+  private readonly onIdle?: (sessionId: string) => void
   /**
    * M7②（Issue #15 R11）：退避重启计时器句柄集。
    *
@@ -269,10 +272,18 @@ export class TtsQueue {
     engine: TtsEngine
     onError?: (sessionId: string) => void
     onSkip?: (sessionId: string, text: string, streak: number) => void
+    onIdle?: (sessionId: string) => void
   }) {
     this.engine = options.engine
     this.onError = options.onError
     this.onSkip = options.onSkip
+    this.onIdle = options.onIdle
+  }
+
+  /** 该会话当前无在途合成、无积压（未建队列也算空闲）。 */
+  isIdle(sessionId: string): boolean {
+    const q = this.queues.get(sessionId)
+    return !q || (!q.busy && q.pending.length === 0)
   }
 
   /** 当前引擎音频 MIME（/preview 的 Content-Type 也用它）。 */
@@ -507,7 +518,13 @@ export class TtsQueue {
       // I-1：关闭后不重排——即时重启与 backoff timer 都不排（close 的 clear 之后
       // 不得再有新 timer 入集，否则又是同一条泄漏链）。
       if (this.closed) return
-      if (q.pending.length > 0) {
+      if (q.pending.length === 0) {
+        try {
+          this.onIdle?.(sessionId)
+        } catch {
+          // 回调错误不影响队列
+        }
+      } else {
         // 失败退避：1s 指数递增至多 8s；成功/无错误即时。
         const delay = q.errorNotified ? q.backoff : 0
         q.backoff = Math.min(8000, delay + 1000)

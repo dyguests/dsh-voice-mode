@@ -14,6 +14,7 @@
  */
 import { chromium } from 'playwright-core'
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 const url = process.argv[2]
 if (!url) {
@@ -135,6 +136,11 @@ try {
     await page.waitForSelector('[data-dshvm="mic"]', { timeout: 30000 })
     console.log('  ✓ mic 按钮 [data-dshvm="mic"] 渲染')
     micOk = true
+    // activity（≥0.1.7）与 right（旧版回退）两处都注册：同一时刻只能有一个按钮
+    await page.waitForTimeout(500)
+    const micCount = await page.evaluate(() => document.querySelectorAll('[data-dshvm="mic"]').length)
+    if (micCount === 1) console.log('  ✓ 恰好一个 mic 按钮（无 activity/right 双渲染）')
+    else { console.error(`  ✗ mic 按钮数量 ${micCount}（应为 1）`); failed = true }
     // 国际化：mic 的 title / aria-label 必须与界面语言一致（词典驱动，不得硬编码）
     const micText = await page.evaluate(() => {
       const el = document.querySelector('[data-dshvm="mic"]')
@@ -144,8 +150,23 @@ try {
     const wantZh = /^zh/i.test(browserLocale)
     if (micText.trim() && hasCjk === wantZh) console.log(`  ✓ mic 文案语言与界面一致（${browserLocale}）`)
     else { console.error(`  ✗ mic 文案语言与界面不一致（${browserLocale}）：${JSON.stringify(micText.slice(0, 60))}`); failed = true }
-  } catch {
-    micOk = false
+    // 右键快捷设置菜单：鼠标右键打开、Escape 关闭（触屏长按不开，属于按住说话手势）
+    // 新建会话后可能再弹一次预览公告：先关掉，否则遮罩挡住点击
+    // 宿主的预览公告遮罩（role=presentation）可能盖住输入区——直接向按钮派发 contextmenu（等同鼠标右键）
+    await page.$eval('[data-dshvm="mic"]', (el) => el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 })))
+    const menuItems = await page.waitForSelector('.dshvm-menu', { timeout: 3000 }).then(() => page.$$eval('.dshvm-menu [role^="menuitem"]', (els) => els.length)).catch(() => 0)
+    if (menuItems === 9) console.log('  ✓ 右键快捷设置菜单（9 项）')
+    else { console.error(`  ✗ 右键菜单未出现或项数不对（${menuItems}）`); failed = true }
+    if (process.env.DSHVM_SHOT) {
+      await page.screenshot({ path: join(process.env.DSHVM_SHOT, `mic-menu-${browserLocale}.png`) })
+    }
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(200)
+    if (!(await page.$('.dshvm-menu'))) console.log('  ✓ Escape 关闭菜单')
+    else { console.error('  ✗ Escape 未关闭菜单'); failed = true }
+  } catch (e) {
+    if (micOk) { console.error('  ✗ mic 交互检查异常: ' + String(e?.message ?? e).split('\n')[0]); failed = true }
+    else micOk = false
   }
 
   if (!micOk) {

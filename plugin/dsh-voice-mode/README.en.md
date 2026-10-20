@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue)](./LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases)](https://github.com/qishuilalala/dsh-voice-mode/releases)
 [![npm version](https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange)](https://www.npmjs.com/package/dsh-voice-mode)
-[![Tests: 624 passing](https://img.shields.io/badge/tests-624%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
+[![Tests: 647 passing](https://img.shields.io/badge/tests-647%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
 
 Full-duplex voice conversation mode for DeepSeek Harness (dsh): speak, get a
 spoken answer. Streamed zipformer2 ASR → editable draft → auto send → the
@@ -36,9 +36,12 @@ interrupts playback and the running turn. No API key.
 ## ✨ Features
 
 - **Voice mode**: toggle with the microphone button in the input toolbar or the global shortcut `Ctrl+Shift+V`; globally single-active (only one session is in voice mode at a time; switching sessions yields automatically)
-- **Two interaction modes (switchable in settings, plus a mode-switch button beside the mic)**:
+- **Three interaction modes (switchable in settings or by right-clicking the mic)**:
   - `toggle` (default) continuous listening: RMS VAD segmentation → streaming zipformer2 ASR (words appear as you speak, live caption preview) → automatic sentence split after 1500 ms of silence into the draft, consecutive segments joined into one message, then auto-sent after ~1.2 s more of silence (≈2.7 s total); hold `Ctrl` to force an immediate send
   - `hold` push-to-talk: short tap to enter/exit, **hold the mic button to talk, release to send** (swipe up to cancel, `Esc`/blur abandons the segment; pauses do not split while held, up to 10 min); hold `Ctrl` to record-by-keyboard, release to send
+  - `once` one-shot: talk like `toggle`; after sending, the mic turns off and voice mode exits once the reply has been read aloud (with auto-send off: exits after the utterance, text stays in the draft)
+- **Read-aloud scope** (`readAloud`): `voice` (default) only replies in voice mode; `always` every reply in the visible session, typed ones included (with the session open in several tabs, only the last-viewed tab plays); `off` never
+- **The mic button is the status panel** (PR #16 by [@dyguests](https://github.com/dyguests)): green bars follow your voice while listening, blue bars follow playback while reading, a spinner while `once` waits for the reply, a check mark before it exits; orange dot = speech detected, red dot = error (hover for details). Right-click (or the keyboard menu key) for quick settings; touch long-press stays push-to-talk. Turn off the status bar and captions to keep all voice UI on the button
 - **Wake word (optional, off by default)**: after setting `wakeWord`, entering voice mode starts in standby, and recognition only begins once the wake word is spoken (e.g. `你好小D`). **You may say it together with your command** ("wake word, check the weather") — the wake word is stripped from the transcript/caption and never sent; matching is fault-tolerant (homophone substitutions, a wrong first char, leading fillers); 3-4 characters recommended; in standby the status bar live-shows "say '<word>' · what it heard". Boundaries (important): **toggle mode only** (inactive with `hold` / manual barge-in); **it must be repeated after each completed utterance or barge-in** (if you only said the wake word, the engine keeps listening so you may pause before the command); **saying it while the agent is reading does not trigger** (barge-in is VAD-based and unrelated to the wake word)
 - **Caption tiers (batch 3)**: `captionFontSize` 4 levels (0=12px / 1=14px / 2=18px / 3=24px) + `captionMaxWidth` 3 levels (0=50vw / 1=70vw / 2=90vw); adapts to narrow viewports
 - **Yield semantics (ADR-0008)**: `backchannelYield` on by default — saying `嗯 / 对 / right` while the AI is reading auto-pauses for 1.5 s; genuine speech still triggers hard barge-in; lets the LLM yield the turn
@@ -135,7 +138,10 @@ If a wake word is configured, you land in standby first (the status bar prompts 
 | `idleTimeoutMinutes` | `5` | Minutes of inactivity before auto-exiting voice mode (reading counts as activity; batch J 10→5) |
 | `modelHost` | default | Model download host (use `https://hf-mirror.com` on mainland networks) |
 | `autoSend` | `true` | Auto-send once quiet (consecutive segments join into one message); when off, text only goes to the draft (hold `Ctrl` / release in hold mode still sends) |
-| `mode` | `toggle` | Interaction mode: `toggle` continuous listening + 1500 ms silence split; `hold` push-to-talk, release to send (short tap exits) |
+| `mode` | `toggle` | Interaction mode: `toggle` continuous listening + 1500 ms silence split; `hold` push-to-talk, release to send (short tap exits); `once` one utterance, then exit after the reply is read aloud |
+| `readAloud` | `voice` | What gets read aloud: `voice` only replies in voice mode; `always` every reply in the visible session, typed ones included; `off` never |
+| `showStatusBar` | `true` | Voice status bar above the composer; when off, status lives on the mic button (timer below it, notices beside it) |
+| `showCaptions` | `true` | Floating caption while reading aloud |
 | `autoResume` | `false` | Auto-restore voice mode when switching back to your last voice session (off by default). When on: the next time you enter that session it auto-enters voice mode and restores it; when off, press `Ctrl+Shift+V` manually |
 | `shortcut` | `Ctrl+Shift+V` | Shortcut to enter / exit voice mode (modifiers Ctrl/Shift/Alt/Meta + one letter key); **empty = disabled**, use the mic button instead |
 | `wakeWord` | empty (off) | Wake word (e.g. `你好小D`): speak it after entering to activate; empty = off. **May be said together with your command** — the wake word is stripped and never sent; fault-tolerant matching (edit distance ≤1 + a 3-char leading window absorbs homophones/fillers); **3-4 characters recommended** (single-char words get no tolerance; a 2-char word also absorbs any same-first-char 2-char word); must be repeated after each utterance split or barge-in; **toggle mode only**; not triggered while the agent is reading |
@@ -376,7 +382,7 @@ After changing dependencies run `npm pack --dry-run`, `npm test` and `bash scrip
 
 ```sh
 pnpm install && pnpm build    # esbuild: lib/index.js (host) + lib/client.js (browser) + lib/msedge-tts.cjs
-pnpm test                     # 51 test files chained: unit tests + harnesses (fake browser driving the real engine) + structure guards + pre-release self-check (no network)
+pnpm test                     # 52 test files chained: unit tests + harnesses (fake browser driving the real engine) + structure guards + pre-release self-check (no network)
 bash scripts/smoke-runtime.sh <dsh-core-bin.js> <port>   # boot an isolated dsh core: endpoints, mic button, settings page, i18n
 bash scripts/full-e2e.sh <dsh-core-bin.js> <port>        # real-LLM end to end: create → toggle → prompt → SSE audio frames
 systemctl restart dsh         # Linux; restart the dsh process on other platforms

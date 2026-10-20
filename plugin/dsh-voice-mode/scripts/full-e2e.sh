@@ -140,6 +140,7 @@ EOF
 # 且无 `--no-open`，此时传 BOOT_ARGS="--profile web --port $PORT --host 127.0.0.1"）。
 echo "== boot dsh 核心（port $PORT）=="
 # shellcheck disable=SC2086
+# DSHVM_VC_ONCE=1：语音闭环改用 once 模式，额外验证回复读完后自动退出。
 # DSHVM_TTS_DOWN=1：负面路径——预加载夹具让 Edge TTS 域名一律连接失败，验证「云端朗读整体不可用」时用户能看到可行动提示
 #（此模式下不要求朗读帧；只要求语音闭环里的失败提示断言通过）。
 if [ -n "${DSHVM_TTS_DOWN:-}" ]; then
@@ -241,7 +242,7 @@ RPC_TTS_ERR="${RPC_TTS_ERR:-0}"
 # DSHVM_VOICE_LOOP=1：语音完整闭环（真实语音→识别→自动发送→真 LLM 回复→朗读帧到达客户端；需本机已缓存 VITS/zipformer 模型）
 if [ -n "${DSHVM_VOICE_LOOP:-}" ]; then
   echo "== 语音完整闭环（真 LLM）=="
-  node "$(dirname "$0")/smoke-voice-chain.mjs" "$URL" --loop ${DSHVM_TTS_DOWN:+--tts-down} || fail=1
+  node "$(dirname "$0")/smoke-voice-chain.mjs" "$URL" --loop ${DSHVM_TTS_DOWN:+--tts-down} ${DSHVM_VC_ONCE:+--once} || fail=1
 fi
 
 if [ -n "${DSHVM_TTS_DOWN:-}" ]; then

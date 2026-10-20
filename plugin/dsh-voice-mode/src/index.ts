@@ -154,8 +154,14 @@ export interface VoiceSettingsValue {
   autoSend: boolean
   /** 切换回上次语音会话时自动恢复语音模式（默认关；省去每次切换会话后重新点麦克风）。 */
   autoResume: boolean
-  /** 交互模式：toggle 持续聆听+自动端点断句；hold 按住说话、松手发送。 */
-  mode: 'toggle' | 'hold'
+  /** 交互模式：toggle 持续聆听+自动端点断句；hold 按住说话、松手发送；once 说完一段、回复读完后自动退出。 */
+  mode: 'toggle' | 'hold' | 'once'
+  /** 朗读回复：voice 仅语音模式（默认）；always 当前可见会话的每条回复（含打字发送）；off 从不朗读。 */
+  readAloud: 'voice' | 'always' | 'off'
+  /** 字幕浮层（朗读时右下角显示当前句；默认开）。 */
+  showCaptions: boolean
+  /** 输入框上方状态条（默认开；关 = 状态全部收进麦克风按钮）。 */
+  showStatusBar: boolean
   /** 打断方式：detect 自动探测本机回声消除状态（默认，未生效时切为长按打断）；auto 强制自动打断；manual 手动打断（外放推荐）。 */
   bargeInMode: 'auto' | 'manual' | 'detect'
   /** 回声门控阈值（dB）：自动打断要求残差高于回声地板此值（外放回声误打断调大、难打断调小）。 */
@@ -209,6 +215,9 @@ const VOICE_SETTINGS_DEFAULTS: VoiceSettingsValue = {
   autoSend: true,
   autoResume: false,
   mode: 'toggle',
+  readAloud: 'voice',
+  showCaptions: true,
+  showStatusBar: true,
   // 批 7O（ADR-0006）：bargeInMode 默认 'auto' → 'detect'（I10 豁免：ADR-0006 已 accepted 拍板，
   // 老用户显式 auto 不受影响，新用户/未调过的用户开箱即对）。
   bargeInMode: 'detect',
@@ -249,6 +258,9 @@ const DESC = {
   autoSend: en.descAutoSend,
   autoResume: en.descAutoResume,
   mode: en.descMode,
+  readAloud: en.descReadAloud,
+  showCaptions: en.descShowCaptions,
+  showStatusBar: en.descShowStatusBar,
   bargeInMode: en.descBargeIn,
   echoGateDb: en.descEchoGate,
   shortcut: en.descShortcut,
@@ -301,9 +313,15 @@ export function createVoiceSettingsSchema(defs?: Partial<VoiceSettingsValue>): z
     // 批 7N 重做 5/5：与 strings.ts descAutoResume 同步——明确「下次进入语音会话即生效」。
     autoResume: z.boolean().default(d.autoResume).description(DESC.autoResume),
     mode: z
-      .union([z.const('toggle'), z.const('hold')])
+      .union([z.const('toggle'), z.const('hold'), z.const('once')])
       .default(d.mode)
       .description(DESC.mode),
+    readAloud: z
+      .union([z.const('voice'), z.const('always'), z.const('off')])
+      .default(d.readAloud)
+      .description(DESC.readAloud),
+    showCaptions: z.boolean().default(d.showCaptions).description(DESC.showCaptions),
+    showStatusBar: z.boolean().default(d.showStatusBar).description(DESC.showStatusBar),
     bargeInMode: z
       .union([z.const('auto'), z.const('manual'), z.const('detect')])
       .default(d.bargeInMode)
@@ -415,8 +433,14 @@ export interface Config {
   autoSend: boolean
   /** 切换回上次语音会话时自动恢复语音模式（默认关）。 */
   autoResume: boolean
-  /** 交互模式：toggle 持续聆听+自动端点断句；hold 按住说话、松手发送。 */
-  mode: 'toggle' | 'hold'
+  /** 交互模式：toggle 持续聆听+自动端点断句；hold 按住说话、松手发送；once 说完一段、回复读完后自动退出。 */
+  mode: 'toggle' | 'hold' | 'once'
+  /** 朗读回复：voice 仅语音模式（默认）；always 当前可见会话的每条回复（含打字发送）；off 从不朗读。 */
+  readAloud: 'voice' | 'always' | 'off'
+  /** 字幕浮层（朗读时右下角显示当前句；默认开）。 */
+  showCaptions: boolean
+  /** 输入框上方状态条（默认开；关 = 状态全部收进麦克风按钮）。 */
+  showStatusBar: boolean
   /** 打断方式：detect 自动探测本机回声消除状态（默认）/ auto 强制自动 / manual 手动（外放推荐）。 */
   bargeInMode: 'auto' | 'manual' | 'detect'
   /** 回声门控阈值（dB）：自动打断要求残差高于回声地板此值。 */
@@ -472,7 +496,10 @@ export const Config: z<Config> = z.object({
   // 本插件自带 settings-form 设置面板 + /voice-mode/config，不受影响）。
   autoSend: z.boolean().default(true),
   autoResume: z.boolean().default(false),
-  mode: z.union([z.const('toggle'), z.const('hold')]).default('toggle'),
+  mode: z.union([z.const('toggle'), z.const('hold'), z.const('once')]).default('toggle'),
+  readAloud: z.union([z.const('voice'), z.const('always'), z.const('off')]).default('voice'),
+  showCaptions: z.boolean().default(true),
+  showStatusBar: z.boolean().default(true),
   bargeInMode: z.union([z.const('auto'), z.const('manual'), z.const('detect')]).default('detect'),
   // I3 + M7（zod 界）：echoGateDb / yieldMs 与 settings schema 同界（3-12 dB / 500-3000ms）。
   // client 与 NumberField 虽会 clamp，但那只是 UI 兜底——Config 层无界时 YAML 手滑
@@ -502,13 +529,13 @@ export const Config: z<Config> = z.object({
 function voiceSettingsFromConfig(config: Config): VoiceSettingsValue {
   const {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
-    idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, bargeInMode,
+    idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, readAloud, showCaptions, showStatusBar, bargeInMode,
     echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
     senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage, llmCorrect,
   } = config
   return {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
-    idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, bargeInMode,
+    idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, readAloud, showCaptions, showStatusBar, bargeInMode,
     echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
     senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage, llmCorrect,
   }
@@ -530,6 +557,10 @@ type LegacySettingsRegister = (ns: unknown, schema: unknown, opts?: unknown) => 
 export function apply(ctx: Context, config: Config): void {
   // --- 全局单活指针（Q9）：会话级状态，非全局默认、非独立会话类型（Q1）。 ---
   let activeVoiceSession: string | null = null
+  /** 客户端上报的当前可见会话（POST /focus）：readAloud=always 只朗读它的回复。
+   *  focusedTabId：上报它的标签页——同一会话开在多个标签页时只有这一个播放，防多声部叠播。 */
+  let focusedSessionId: string | null = null
+  let focusedTabId: string | null = null
   /** B2：owner tab 标识 + 存活探活（关 tab 后自动让出，防 activeVoiceSession 悬挂）。 */
   let activeTabId: string | null = null
   /** 活跃语音会话的界面语言（决定口语化提示词版本；由客户端 /toggle 上报，缺省中文以兼容旧客户端）。 */
@@ -628,7 +659,7 @@ export function apply(ctx: Context, config: Config): void {
   // --- SSE 客户端表：audio 帧 + mode 状态广播共用一条下行通道。 ---
   type SseSink = (event: string, payload: unknown) => void
   /** B2：客户端带 tabId 连接，供 owner 探活（关 tab 检测让出）。 */
-  type SseClient = { tabId: string | null; send: SseSink }
+  type SseClient = { tabId: string | null; send: SseSink; end: () => void }
   const sseClients = new Set<SseClient>()
   /** M5：每 tab 最新连接——重连时旧连接的迟到 close 不得武装让出计时（防健康 owner 被误让出）。 */
   const latestConnByTab = new Map<string, SseClient>()
@@ -806,6 +837,7 @@ export function apply(ctx: Context, config: Config): void {
     // 单句重试耗尽被跳过：显式下行（客户端提示 + 诊断），不再静默丢句。
     // streak = 连续被跳过的句数：客户端据此区分偶发抖动与「云端整体不可用」（如服务端拒绝握手）。
     onSkip: (sessionId, text, streak) => broadcast('tts-skip', { sessionId, text: text.slice(0, 80), streak }),
+    onIdle: (sessionId) => broadcast('tts-idle', { sessionId }),
   })
   // fork 修复：启动时把当前设置的音色/语速应用到引擎——
   // 此前引擎默认硬编码为素映雪，朗读直到"设置变化"才更新（重启后朗读一直女声的根因）。
@@ -912,7 +944,10 @@ export function apply(ctx: Context, config: Config): void {
     // 运行时是普通字符串，与 activeVoiceSession（来自 /toggle 的 sessionId）同源可比较，
     // 仅需消除品牌在 map 键/比较上的类型约束。
     const sessionId: string = rawSessionId as string
-    if (activeVoiceSession !== sessionId) return next()
+    // readAloud=always：客户端经 /focus 上报的当前可见会话，非语音模式的回复（含打字发送）也朗读；
+    // 只认可见会话，后台子任务/其他会话的流不读。off：语音模式里也不朗读，但回合状态照常广播。
+    const alwaysRead = vset.readAloud === 'always' && focusedSessionId === sessionId
+    if (activeVoiceSession !== sessionId && !alwaysRead) return next()
     const gen = (turnGen.get(sessionId) ?? 0) + 1
     turnGen.set(sessionId, gen)
     return tapActiveStream(
@@ -921,8 +956,13 @@ export function apply(ctx: Context, config: Config): void {
       queue,
       broadcast,
       (state) => {
-        if ((turnGen.get(sessionId) ?? 0) === gen) setTurn(sessionId, state)
+        if ((turnGen.get(sessionId) ?? 0) !== gen) return
+        setTurn(sessionId, state)
+        // 回合结束时队列本就空（没有可读文本 / readAloud=off）就不会再有跑空回调——补发一次，
+        // 让等待朗读结束的一方（「说完就关」）总能收到结束信号。
+        if (state === 'listening' && queue.isIdle(sessionId)) broadcast('tts-idle', { sessionId })
       },
+      vset.readAloud !== 'off',
     )
   })
 
@@ -963,6 +1003,9 @@ export function apply(ctx: Context, config: Config): void {
             autoSend: vset.autoSend,
             autoResume: vset.autoResume,
             mode: vset.mode,
+            readAloud: vset.readAloud,
+            showCaptions: vset.showCaptions,
+            showStatusBar: vset.showStatusBar,
             bargeInMode: vset.bargeInMode,
             echoGateDb: vset.echoGateDb,
             shortcut: vset.shortcut,
@@ -1453,7 +1496,8 @@ export function apply(ctx: Context, config: Config): void {
           } catch {
             // ignore malformed body
           }
-          if (sessionId && sessionId === activeVoiceSession) {
+          // readAloud=always 的可见会话不在语音模式，也允许「停止朗读」只停它的 TTS。
+          if (sessionId && (sessionId === activeVoiceSession || sessionId === focusedSessionId)) {
             // fork 加固：打断限流（每会话 2 次/秒）。
             if (!limiter.hit(`cancel:${sessionId}`, 2, 1000)) {
               respondJson(res, 429, { code: 'rate_limited', error: 'rate limited' })
@@ -1463,7 +1507,7 @@ export function apply(ctx: Context, config: Config): void {
             // ASR 段（按住说的前半句已上行，松手定稿以同一 epoch 增量续传，
             // 若 reset 会把 host 流清空导致定稿缺前半句——对抗审查第三轮 Blocker）。
             queue.cancel(sessionId)
-            if (!keepAsr) asr.reset(sessionId)
+            if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId)
           }
           respondJson(res, 200, { ok: true })
         })
@@ -1535,15 +1579,15 @@ export function apply(ctx: Context, config: Config): void {
         if (denyNonLoopback(req, res)) return
         if (denyCrossOrigin(req, res)) return
         collectBody(req, res, MAX_JSON_BODY, (body) => {
-          let mode: 'toggle' | 'hold' | undefined
+          let mode: 'toggle' | 'hold' | 'once' | undefined
           try {
             const parsed = JSON.parse(body || '{}') as { mode?: unknown }
-            mode = parsed.mode === 'toggle' || parsed.mode === 'hold' ? parsed.mode : undefined
+            mode = parsed.mode === 'toggle' || parsed.mode === 'hold' || parsed.mode === 'once' ? parsed.mode : undefined
           } catch {
             // malformed body → 400 below
           }
           if (!mode) {
-            respondJson(res, 400, { code: 'bad_request', error: 'mode must be toggle or hold' })
+            respondJson(res, 400, { code: 'bad_request', error: 'mode must be toggle, hold or once' })
             return
           }
           // 输入框旁的模式切换按钮：写用户层设置（持久化）。
@@ -1565,6 +1609,43 @@ export function apply(ctx: Context, config: Config): void {
     }),
   )
 
+  // 当前可见会话上报（readAloud=always 只朗读它）：{sessionId, tabId}；sessionId=null 表示该标签页离开会话
+  // （只有当前焦点标签页的清空才生效，别的标签页卸载不影响）。结果广播给所有标签页，各自判断自己是否焦点。
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `${base}/focus`,
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        if (denyNonLoopback(req, res)) return
+        if (denyCrossOrigin(req, res)) return
+        collectBody(req, res, MAX_JSON_BODY, (body) => {
+          let parsed: { sessionId?: unknown; tabId?: unknown } = {}
+          try {
+            parsed = JSON.parse(body || '{}') as typeof parsed
+          } catch {
+            // malformed body → 400 below
+          }
+          const { sessionId, tabId } = parsed
+          const validTab = typeof tabId === 'string' && tabId.length > 0 && tabId.length <= 64
+          const validSid = typeof sessionId === 'string' && sessionId.length > 0 && sessionId.length <= 128
+          if (!validTab || !(validSid || sessionId === null)) {
+            respondJson(res, 400, { code: 'bad_request', error: 'expected {sessionId: string|null, tabId: string}' })
+            return
+          }
+          if (validSid) {
+            focusedSessionId = sessionId
+            focusedTabId = tabId
+          } else if (tabId === focusedTabId) {
+            focusedSessionId = null
+            focusedTabId = null
+          }
+          broadcast('focus', { sessionId: focusedSessionId, tabId: focusedTabId })
+          respondJson(res, 200, { ok: true, sessionId: focusedSessionId, tabId: focusedTabId })
+        })
+      },
+    }),
+  )
+
   ctx.effect(() =>
     ctx.webServer.register({
       kind: 'exact',
@@ -1573,13 +1654,8 @@ export function apply(ctx: Context, config: Config): void {
         if (denyNonLoopback(req, res)) return
         // M11（Issue #15 审查 Minor）：补跨源校验。EventSource 无法自定义请求头，
         // 因此是浏览器侧唯一「免预检就能建立长连接」的端点——缺校验时任意站点可用
-        // <event-source src> 把本机 SSE 连接占到 4 个上限，把真正的客户端挤出去。
+        // <event-source src> 把本机 SSE 连接占到上限，把真正的客户端挤出去。
         if (denyCrossOrigin(req, res)) return
-        // fork 加固：SSE 连接上限（防连接耗尽）。
-        if (sseClients.size >= 4) {
-          respondJson(res, 429, { code: 'too_many_streams', error: 'too many streams' })
-          return
-        }
         // B2：从查询串取 tabId（owner 探活归属）。
         let tabId: string | null = null
         try {
@@ -1590,6 +1666,27 @@ export function apply(ctx: Context, config: Config): void {
         }
         // M2：与 /toggle 一致的长度上限（异常长 tabId 不入表，退化为无探活）。
         if (tabId !== null && tabId.length > 64) tabId = null
+        // 同一标签页只留最新一条：页面重载/插件热更新时旧 EventSource 可能没关，
+        // 堆满上限后新页面被 429 拒，表现为「能说话但回复不朗读」。旧连接的 close 晚于
+        // 下面登记新连接，cleanup 看到 latestConnByTab 已换人，不会误武装让出。
+        if (tabId !== null) {
+          for (const old of sseClients) {
+            if (old.tabId !== tabId) continue
+            sseClients.delete(old)
+            // 先告知被顶替：EventSource 断线会自动重连，不说明的话旧实例 3s 后重连又把新连接顶掉，来回抢
+            try {
+              old.send('replaced', {})
+            } catch {
+              // dead socket
+            }
+            old.end()
+          }
+        }
+        // fork 加固：SSE 连接上限（防连接耗尽）。
+        if (sseClients.size >= 8) {
+          respondJson(res, 429, { code: 'too_many_streams', error: 'too many streams' })
+          return
+        }
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-cache, no-transform',
@@ -1599,7 +1696,14 @@ export function apply(ctx: Context, config: Config): void {
         const send: SseSink = (event, payload) => {
           res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`)
         }
-        const client: SseClient = { tabId, send }
+        const end = (): void => {
+          try {
+            res.end()
+          } catch {
+            // already destroyed
+          }
+        }
+        const client: SseClient = { tabId, send, end }
         sseClients.add(client)
         if (tabId !== null) latestConnByTab.set(tabId, client)
         // B2：owner tab 重连成功 → 取消待执行的让出计时。
@@ -1609,11 +1713,13 @@ export function apply(ctx: Context, config: Config): void {
         }
         // 上线即告知当前模式归属（纠正多标签页/多会话漂移）。
         send('mode', { active: activeVoiceSession, ownerTabId: activeTabId })
+        send('focus', { sessionId: focusedSessionId, tabId: focusedTabId })
         const heartbeat = setInterval(() => {
           try {
             res.write(': hb\n')
           } catch {
-            // socket 已销毁的边缘窗口：忽略（cleanup 会清定时器）
+            // socket 已销毁但 close 事件没来：立即清理，不让死连接继续占上限
+            cleanup()
           }
         }, 25000)
         let cleaned = false
@@ -1702,6 +1808,7 @@ async function* tapActiveStream(
   queue: TtsQueue,
   broadcast: (event: string, payload: unknown) => void,
   onTurn: (state: 'listening' | 'agent-speaking') => void,
+  speak = true,
 ): AsyncIterable<StreamChunk> {
   const segmenter = new SentenceSegmenter()
   // P1-5 延迟埋点链：每回合至多广播一次 host 侧里程碑（首 token / 首句成型）。
@@ -1713,7 +1820,7 @@ async function* tapActiveStream(
     if (flushed) return
     flushed = true
     for (const s of segmenter.flush()) {
-      queue.enqueue(sessionId, s)
+      if (speak) queue.enqueue(sessionId, s)
     }
   }
   try {
@@ -1732,7 +1839,7 @@ async function* tapActiveStream(
             firstSentenceBroadcast = true
             broadcast('latency', { sessionId, stage: 'first-sentence-text' })
           }
-          queue.enqueue(sessionId, s)
+          if (speak) queue.enqueue(sessionId, s)
         }
       }
       // 工具调用事件：提示音（toolBeep 设置项控制播放；默认关）。

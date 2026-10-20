@@ -17,6 +17,7 @@ import { fixtureRecorder } from './fixture-recorder.ts'
 import { errorText } from './error-text.ts'
 import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
 import { composeDraft, shouldWritePartial } from './draft-compose.ts'
+import { isEditingShortcut, onceFinished, takeToggleSlot } from './mic-gesture.ts'
 import { setRuntimeBoot } from './runtime-boot.ts'
 import { activeLocale, bindLocale, t, useLang, type TKey } from './i18n.ts'
 
@@ -60,9 +61,11 @@ interface VoiceUiState {
   /** 本会话激活时读取的引导参数（bus 单例，跨组件重挂载稳定）。 */
   boot: VoiceBootConfig
   /** 便捷速记：交互模式（状态条与手势读取）。 */
-  mode: 'toggle' | 'hold'
+  mode: 'toggle' | 'hold' | 'once'
   /** P2-4 host 回合状态（SSE 'turn'；状态条展示思考中/朗读中）。 */
   turn: 'idle' | 'listening' | 'finalizing' | 'agent-speaking'
+  /** host 朗读队列已跑空（SSE 'tts-idle'；新帧/新一轮作答即复位）。「说完就关」据此判定读完。 */
+  ttsDrained?: boolean
   /** 打断根治阶段一：服务端 Silero VAD 帧级语音检测（partial 响应下行；可读存储，供下一阶段接入打断；undefined=无 VAD 信息）。 */
   isSpeech?: boolean
   /** 打断确认耗时（ms）：VAD 首次判真 → 确认帧数达标触发 hardBreak；真机标定 C-3 用。 */
@@ -253,12 +256,20 @@ interface VoiceBus {
   resetTelemetry(): void
   /** P1-2：手势栈内预热播放 AudioContext（Safari 非手势栈新建会 suspended）。 */
   warmAudio(): void
+  /** 当前播放电平 0..1（麦克风按钮「朗读中」动画）。 */
+  playbackLevel(): number
+  /** 当前可见会话（readAloud=always 时接收它的朗读帧，不依赖语音模式）。 */
+  setFocusedSession(sessionId: string | null): void
+  /** 停止朗读：停当前句 + 清 host 队列 + 本回合剩余句不再播（下一次 agent-speaking 自动解除）。 */
+  stopReading(): void
   /** isPlaying 尾音截止墙钟：playing 或回声尾音宽限期内均视为「AI 正在朗读」。 */
   playingTailUntil(): number
 }
 
 export interface VoiceSlotActions {
   bus: VoiceBus
+  /** 设置读写面（与设置卡片同一个 scope；麦克风右键菜单用）。 */
+  scope?: MenuScope
 }
 
 /** P3-2：回声参考采样率（16k mono，与采集一致）。 */
@@ -288,26 +299,58 @@ const HOLD_CLEAR_FRAMES = 2
 const WAVE_BARS = 14
 /** 插件 HTTP 命名空间（与 host 侧 BASE_PATH 常量一致，固定不可配置）。 */
 const BASE_PATH = '/voice-mode'
+/** 右键菜单读写设置所需的 scope 子集（与设置卡片同源）。 */
+interface MenuScope {
+  getSnapshot(): { value?: Record<string, unknown> }
+  subscribe(fn: () => void): () => void
+  set(field: string, value: unknown): unknown
+}
+/** 设置卡片/右键菜单写入成功后广播：即时生效的显示类设置据此刷新。 */
+const SETTINGS_CHANGED_EVENT = 'dshvm-settings-changed'
+/** 即时生效的显示类设置（朗读范围/字幕浮层/状态条）：不走「下次进入生效」的 fetchConfig 快照。 */
+function displaySettings(c: Partial<VoiceBootConfig>): Pick<VoiceBootConfig, 'readAloud' | 'showCaptions' | 'showStatusBar'> {
+  return {
+    readAloud: c.readAloud === 'always' || c.readAloud === 'off' ? c.readAloud : 'voice',
+    showCaptions: c.showCaptions !== false,
+    showStatusBar: c.showStatusBar !== false,
+  }
+}
+/** 设置 scope 包一层：写入成功后广播 SETTINGS_CHANGED_EVENT（Object.create 保留原型方法与 this）。 */
+function withChangeEvent<S extends { set(field: string, value: unknown): Promise<unknown> }>(scope: S): S {
+  const wrapped = Object.create(scope) as S
+  wrapped.set = async (field, value) => {
+    const r = await scope.set(field, value)
+    window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT))
+    return r
+  }
+  return wrapped
+}
+/** 「停止朗读」的拒绝线：本回合剩余句全部不播，下一次 agent-speaking 解除。 */
+const STOP_READING_LINE = Number.MAX_SAFE_INTEGER
 
-/** B2：每 tab 稳定唯一 ID（sessionStorage 跨刷新保持、关 tab 清除；host 据此探活 owner）。 */
-function getTabId(): string {
+/** B2：每 tab 稳定唯一 ID（sessionStorage 跨刷新保持、关 tab 清除；host 据此探活 owner）。
+ *  fresh=true：强制换新（「复制标签页」会连 sessionStorage 一起复制，两个标签页撞同一 id）。 */
+function getTabId(fresh = false): string {
+  const KEY = 'dshvm-tabId'
+  const make = (): string =>
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36)
   try {
-    const KEY = 'dshvm-tabId'
-    let id = sessionStorage.getItem(KEY)
+    let id = fresh ? null : sessionStorage.getItem(KEY)
     if (!id) {
-      id =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-          ? crypto.randomUUID()
-          : Math.random().toString(36).slice(2) + Date.now().toString(36)
+      id = make()
       sessionStorage.setItem(KEY, id)
     }
     return id
   } catch {
-    return Math.random().toString(36).slice(2) + Date.now().toString(36)
+    return make()
   }
 }
-/** 本 tab 的稳定标识（模块加载时生成一次）。 */
-const TAB_ID = getTabId()
+/** 本 tab 的稳定标识（模块加载时生成；只在撞 id 时由 SSE 'replaced' 换新）。 */
+let TAB_ID = getTabId()
+/** 本页面内 bus 实例代数：插件热更新会在同一页面再建一个 bus，旧实例据此识别自己已过期。 */
+const BUS_GEN_KEY = '__dshvmBusGen'
 
 /** 解析快捷键字符串（如 Ctrl+Shift+V）→ 修饰键 + 主键；非法返回 null。 */
 function parseShortcut(s: string): { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean; key: string } | null {
@@ -363,15 +406,35 @@ export function apply(ctx: any): void {
     document.addEventListener('keydown', resumeAudio, { passive: true })
   }
 
+  // 麦克风按钮：dsh ≥0.1.7 挂 conversation.input.activity（模型选择器之后、发送键之前，与发送键同排）；
+  // 更早的版本没有该槽位，退回 conversation.input.right。activity 是 single 槽位（dsh 自带的实验性
+  // 语音输入 bundle 也用它，二者同开时后注册者遮住前者）。两处都注册，但 right 里的只在 activity
+  // 从未声明时才渲染——同一页面只出现一个麦克风（各持一套录音引擎与快捷键监听，不能并存）。
+  let activitySlot = false
+  ctx.slots.inject('conversation.input.activity', () => {
+    activitySlot = true
+    const dispose = ctx.slots.register(
+      {
+        name: 'conversation.input.activity',
+        id: 'voice-mode',
+        inject: (): VoiceSlotActions => ({ bus, scope }),
+      },
+      MicButton,
+    )
+    return () => {
+      activitySlot = false
+      dispose?.()
+    }
+  })
   ctx.slots.inject('conversation.input.right', () =>
     ctx.slots.register(
       {
         name: 'conversation.input.right',
         id: 'voice-mode',
         order: 80,
-        inject: (): VoiceSlotActions => ({ bus }),
+        inject: (): VoiceSlotActions => ({ bus, scope }),
       },
-      MicButton,
+      (props: MicProps) => (activitySlot ? null : React.createElement(MicButton, props)),
     ),
   )
 
@@ -405,7 +468,20 @@ export function apply(ctx: any): void {
   //  - 数据面：有 settingsScope（≤0.1.6）走官方设置存储；0.1.7+ 无该服务、官方存储拒写本插件条目
   //    （settings/rejected），走插件自己的 /voice-mode/settings。
   const settingsScope = (ctx as any).get?.('settingsScope')
-  const scope = settingsScope ? settingsScope.bind({ namespace: 'voice-mode' }) : createHttpScope()
+  const scope = withChangeEvent(settingsScope ? settingsScope.bind({ namespace: 'voice-mode' }) : createHttpScope())
+  // 显示类设置即时生效：页面加载时取一次，之后每次设置写入成功再取（不碰其余「下次进入生效」的字段）。
+  const refreshDisplay = (): void => {
+    void fetch(`${location.origin}${BASE_PATH}/config`)
+      .then((r) => (r.ok ? (r.json() as Promise<Partial<VoiceBootConfig>>) : null))
+      .then((c) => {
+        if (c) bus.setUi({ boot: { ...bus.ui.boot, ...displaySettings(c) } })
+      })
+      .catch(() => {})
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    refreshDisplay()
+    window.addEventListener(SETTINGS_CHANGED_EVENT, refreshDisplay)
+  }
   ctx.slots.inject('settings.plugin.item', () =>
     ctx.slots.register(
       {
@@ -458,6 +534,8 @@ function createAudioEngine(
   warm(): void
   /** P3-3：恢复 TTS 增益（≥30ms 斜坡，无爆音；打断后调用）。 */
   unduck(): void
+  /** 当前播放电平 0..1（输出侧 AnalyserNode 的 RMS；麦克风按钮「朗读中」动画用）。 */
+  level(): number
 } {
   // --- 待播放：串行解码，decode 完成即调度（句序天然保持）。 ---
   const pending: PlayFrame[] = []
@@ -466,6 +544,8 @@ function createAudioEngine(
   let fallback = false
   let ctx: AudioContext | null = null
   let duckGain: GainNode | null = null
+  let analyser: AnalyserNode | null = null
+  let levelBuf: Float32Array<ArrayBuffer> | null = null
   /** 上一句的调度结束时刻（context.currentTime 对齐；无缝衔接基准）。 */
   let nextEndAt = 0
   /** 当前已 start 的源（skip 时全部 stop）。 */
@@ -485,7 +565,16 @@ function createAudioEngine(
       ctx = new AC()
       duckGain = ctx.createGain()
       duckGain.gain.value = 1 // P3 ducking 挂点：打断时降增益、恢复斜坡
-      duckGain.connect(ctx.destination)
+      // 电平分析是纯装饰（按钮光圈）：建不出来就直连输出，绝不拖垮播放。
+      try {
+        analyser = ctx.createAnalyser()
+        analyser.fftSize = 256
+        duckGain.connect(analyser)
+        analyser.connect(ctx.destination)
+      } catch {
+        analyser = null
+        duckGain.connect(ctx.destination)
+      }
       void ctx.resume?.()
     } catch {
       ctx = null // warm 失败：后续整段走 <audio> 降级
@@ -650,11 +739,32 @@ function createAudioEngine(
       duckGain.gain.cancelScheduledValues(now)
       duckGain.gain.setTargetAtTime(1, now, 0.035) // ≥30ms 斜坡恢复，无爆音
     },
+    level() {
+      if (!analyser) return 0
+      if (!levelBuf || levelBuf.length !== analyser.fftSize) levelBuf = new Float32Array(analyser.fftSize)
+      analyser.getFloatTimeDomainData(levelBuf)
+      let sum = 0
+      for (const v of levelBuf) sum += v * v
+      return Math.min(1, Math.sqrt(sum / levelBuf.length) / 0.2)
+    },
   }
 }
 
 function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   let activeSessionId: string | null = null
+  /** 本标签页正在看的会话（MicButton 上报）。 */
+  let focusedSessionId: string | null = null
+  /** host 认定的「焦点标签页」：readAloud=always 只在它上面播，同一会话开多个标签页也不叠播。 */
+  let focusOwnerTab: string | null = null
+  const busGen = ((globalThis as any)[BUS_GEN_KEY] = ((globalThis as any)[BUS_GEN_KEY] ?? 0) + 1) as number
+  const postFocus = (sessionId: string | null): void => {
+    void fetch(`${location.origin}${basePath}/focus`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, tabId: TAB_ID }),
+      signal: AbortSignal.timeout(3000),
+    }).catch(() => {})
+  }
   const DEFAULT_BOOT: VoiceBootConfig = {
     basePath: BASE_PATH,
     silenceMs: 1500,
@@ -663,6 +773,9 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     autoSend: true,
     autoResume: false,
     mode: 'toggle',
+    readAloud: 'voice',
+    showCaptions: true,
+    showStatusBar: true,
     // 批 7O（ADR-0006）：默认 detect（与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐）。
     bargeInMode: 'detect',
     echoGateDb: 6,
@@ -940,6 +1053,31 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         ui.sseDown = false
         notify()
       }
+      // host 重启会丢焦点：重连后补报（首次连接时 focusedSessionId 多为 null，no-op）。
+      if (focusedSessionId && (typeof document === 'undefined' || document.visibilityState === 'visible')) {
+        postFocus(focusedSessionId)
+      }
+    })
+    // 同一 tabId 的新连接顶替了本连接。两种来源要分开处理，否则两边每 3s 互相顶替、朗读时断时续：
+    //   - 插件热更新：同一页面里已有更新的 bus 实例 → 本（旧）实例退场，不重连；
+    //   - 「复制标签页」带走了同一个 sessionStorage tabId：另一个文档在用这个 id → 本页换新 id 重连。
+    source.addEventListener('replaced', () => {
+      source?.close()
+      source = null
+      if ((globalThis as any)[BUS_GEN_KEY] !== busGen) {
+        ui.sseDown = true
+        notify()
+        return
+      }
+      TAB_ID = getTabId(true)
+      connect()
+    })
+    source.addEventListener('focus', (e: MessageEvent<string>) => {
+      try {
+        focusOwnerTab = (JSON.parse(e.data) as { tabId?: string | null }).tabId ?? null
+      } catch {
+        // ignore malformed frame
+      }
     })
     source.addEventListener('error', () => {
       // Issue #15 批 7：SSE 断连提示（EventSource 自带重连，但用户该知道状态同步断了——
@@ -997,8 +1135,24 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     source.addEventListener('turn', (e: MessageEvent<string>) => {
       try {
         const ev = JSON.parse(e.data) as { sessionId?: string; state?: VoiceUiState['turn'] }
+        // 新一轮作答开始：解除「停止朗读」留下的整回合拒绝线。
+        if (ev.state === 'agent-speaking' && ev.sessionId && rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE) {
+          rejectSeqUpTo.delete(ev.sessionId)
+        }
         if (ev.sessionId === activeSessionId && ev.state) {
           ui.turn = ev.state
+          if (ev.state === 'agent-speaking') ui.ttsDrained = false
+          notify()
+        }
+      } catch {
+        // ignore malformed frame
+      }
+    })
+    source.addEventListener('tts-idle', (e: MessageEvent<string>) => {
+      try {
+        const ev = JSON.parse(e.data) as { sessionId?: string }
+        if (ev.sessionId === activeSessionId && !ui.ttsDrained) {
+          ui.ttsDrained = true
           notify()
         }
       } catch {
@@ -1122,7 +1276,14 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   /** 本句已收到的 chunk 数（final 时与帧头校验：SSE 断线丢帧则丢弃坏句）。 */
   let curChunkCount = 0
   audioListeners.add((frame) => {
-    if (frame.sessionId !== activeSessionId) return
+    if (frame.sessionId === activeSessionId && ui.ttsDrained) {
+      ui.ttsDrained = false
+      notify()
+    }
+    const readAloud = ui.boot.readAloud ?? 'voice'
+    if (readAloud === 'off') return
+    const alwaysHere = readAloud === 'always' && frame.sessionId === focusedSessionId && focusOwnerTab === TAB_ID
+    if (frame.sessionId !== activeSessionId && !alwaysHere) return
     // 双重奏根治：拒绝线内的旧句帧（skip 时已开始传输、SSE 在途）→ 丢弃，
     // 防「残余 chunk 重建整句 → 重新入队播放」与新一轮回复叠加。
     const rejectLine = rejectSeqUpTo.get(frame.sessionId)
@@ -1199,7 +1360,7 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   /** 双重奏根治：停播 + 记拒绝线（skip 时在途/已入队句的最大 sentenceId，其后 ≤ 线帧丢弃）。
    *  sidArg：模式让出/抢占时传被让出会话 id（此时 activeSessionId 已切到新会话）。 */
   const doSkipAudio = (sidArg?: string | null): void => {
-    const sid = sidArg ?? activeSessionId
+    const sid = sidArg ?? activeSessionId ?? focusedSessionId
     if (sid) {
       rejectSeqUpTo.set(sid, Math.max(lastFinalSeq.get(sid) ?? -1, curSentenceId ?? -1))
     }
@@ -1367,6 +1528,32 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     warmAudio() {
       engine.warm()
     },
+    playbackLevel() {
+      return engine.level()
+    },
+    setFocusedSession(sessionId) {
+      // 只有可见标签页抢焦点；离开会话（null）只在自己仍持有时才清，免得把别处刚报的焦点清掉。
+      if (sessionId === null) {
+        if (focusedSessionId === null) return
+        focusedSessionId = null
+        if (focusOwnerTab === TAB_ID) postFocus(null)
+        return
+      }
+      focusedSessionId = sessionId
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') postFocus(sessionId)
+    },
+    stopReading() {
+      const sid = activeSessionId ?? focusedSessionId
+      doSkipAudio(sid)
+      if (!sid) return
+      rejectSeqUpTo.set(sid, STOP_READING_LINE)
+      void fetch(`${location.origin}${basePath}/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid, keepAsr: true }),
+        signal: AbortSignal.timeout(3000),
+      }).catch(() => {})
+    },
   }
 }
 
@@ -1386,7 +1573,14 @@ interface VoiceBootConfig {
   autoSend: boolean
   /** 切换回上次语音会话时自动恢复（默认关）。 */
   autoResume: boolean
-  mode: 'toggle' | 'hold'
+  /** once = 说完一段、回复读完后自动退出。 */
+  mode: 'toggle' | 'hold' | 'once'
+  /** 朗读回复：voice 仅语音模式 / always 当前可见会话的每条回复 / off 从不。 */
+  readAloud: 'voice' | 'always' | 'off'
+  /** 字幕浮层开关（默认开）。 */
+  showCaptions: boolean
+  /** 输入框上方状态条开关（默认开）。 */
+  showStatusBar: boolean
   /** 打断方式：detect 自动探测（默认）；auto 自动（VAD 开口打断）；manual 手动（外放推荐，回声不误触发自打断）。 */
   bargeInMode: 'auto' | 'manual' | 'detect'
   /** 回声门控阈值（dB，默认 6）。 */
@@ -1438,13 +1632,135 @@ html.dshvm-holding, html.dshvm-holding * {
 }
 /* 批 3：字幕中文长词/URL 换行（外层 maxHeight:30vh + overflow:hidden 控制高度不溢出）。 */
 .dshvm-caption { word-break: break-word; overflow-wrap: anywhere; }
+/* 麦克风按钮（PR #16 by dyguests）：状态全在按钮上——颜色区分模式，竖条跟随电平，
+   等待转圈、收尾对勾、右上橙点=检测到说话、左上红点=出错。颜色走 dsw 变量，旧宿主无变量时用兜底色。 */
+.dshvm-mic {
+  position: relative; flex: none; width: 34px; height: 34px; padding: 0;
+  display: grid; place-items: center; border: none; border-radius: 999px;
+  background: transparent; color: var(--dsw-alias-label-secondary, #8b949e); cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.dshvm-mic:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(139,148,158,.14)); }
+.dshvm-mic:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #58a6ff); outline-offset: -2px; }
+.dshvm-mic svg { display: block; }
+.dshvm-mic[data-state="pending"] { --c: var(--dsw-alias-state-business-primary, #58a6ff); }
+.dshvm-mic[data-state="on"] { --c: var(--dsw-alias-state-success-primary, #2ea043); }
+.dshvm-mic[data-state="hold"] { --c: var(--dsw-alias-state-business-primary, #58a6ff); }
+.dshvm-mic[data-state="holding"] { --c: var(--dsw-alias-state-error-primary, #f85149); }
+.dshvm-mic[data-state="reading"] { --c: var(--dsw-alias-state-business-primary, #58a6ff); }
+.dshvm-mic[data-state="waiting"], .dshvm-mic[data-state="ending"] { --c: var(--dsw-alias-label-tertiary, #8b949e); }
+.dshvm-mic[data-state]:not([data-state="off"]) { color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent); }
+.dshvm-mic[data-state="on"], .dshvm-mic[data-state="reading"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 10%, transparent); }
+.dshvm-mic[data-state]:not([data-state="off"]):hover { background: color-mix(in srgb, var(--c) 20%, transparent); }
+.dshvm-eq { display: inline-flex; align-items: center; justify-content: center; gap: 2px; width: 16px; height: 16px; pointer-events: none; }
+.dshvm-eq i { display: block; width: 3px; border-radius: 2px; background: currentColor; }
+.dshvm-eq-out { gap: 1.5px; }
+.dshvm-eq-out i { width: 2px; }
+.dshvm-mic-dot { position: absolute; top: 0; width: 7px; height: 7px; border-radius: 999px; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--dsw-specific-input-major, transparent); }
+.dshvm-mic-dot[data-kind="vad"] { right: 0; background: var(--dsw-alias-state-warn-primary, #d29922); }
+.dshvm-mic-dot[data-kind="error"] { left: 0; background: var(--dsw-alias-state-error-primary, #f85149); }
+.dshvm-mic-timer { position: absolute; left: 50%; top: calc(100% + 2px); transform: translateX(-50%); padding: 0 3px; border-radius: 4px;
+  background: var(--dsw-specific-input-major, transparent); font-size: 9.5px; line-height: 12px; color: var(--dsw-alias-label-tertiary, #8b949e);
+  font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.dshvm-spin { animation: dshvm-spin 0.9s linear infinite; }
+.dshvm-menu { display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-3, #fff); border: 1px solid var(--dsw-alias-border-l2, rgba(139,148,158,.35));
+  box-shadow: 0 8px 24px rgba(15, 17, 21, 0.14); color: var(--dsw-alias-label-primary, inherit);
+  font-family: inherit; font-size: 12px; animation: dshvm-fadein 0.12s ease; }
+.dshvm-menu-label { padding: 2px 8px 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.dshvm-menu-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 5px 8px;
+  border: none; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 12px; text-align: left; }
+.dshvm-menu-item:hover, .dshvm-menu-item:focus-visible { background: var(--dsw-alias-interactive-bg-hover, rgba(139,148,158,.14)); outline: none; }
+.dshvm-menu-check { color: var(--dsw-alias-state-business-primary, #58a6ff); font-size: 11px; }
+.dshvm-menu-sep { height: 1px; margin: 4px 2px; background: var(--dsw-alias-border-l1, rgba(139,148,158,.25)); }
+@media (prefers-reduced-motion: reduce) { .dshvm-spin, .dshvm-menu { animation: none; } }
 `
     document.head.appendChild(el)
   }, [])
 }
 
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '')
+const ONCE_SETTLE_MS = 1200
+/** 发出后迟迟没开始回合（提交被宿主拒/排队丢失）→ 退出，草稿留给用户。 */
+const ONCE_NO_START_MS = 30_000
+/** 回合已结束、本地也不在播，但 tts-idle 没到（SSE 断线丢帧）→ 到点也退出，防卡在「等待中」。 */
+const ONCE_STALL_MS = 10_000
+
+/** 麦克风右键快捷设置（PR #16 by dyguests）：交互模式 / 朗读回复 / 字幕 / 状态条 / 自动发送。
+ *  读写与设置卡片同一个 scope（勾选即保存）；交互模式与自动发送下次进入语音模式生效。 */
+function MicMenu({ scope, anchor, onClose }: { scope: MenuScope; anchor: HTMLElement | null; onClose: (refocus: boolean) => void }): React.ReactElement {
+  const [snap, setSnap] = useState(() => scope.getSnapshot())
+  useEffect(() => scope.subscribe(() => setSnap({ ...scope.getSnapshot() })), [scope])
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    const onDown = (e: PointerEvent): void => {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return
+      onClose(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose(true)
+        return
+      }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      e.preventDefault()
+      const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+      const i = items.indexOf(document.activeElement as HTMLButtonElement)
+      items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus()
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [onClose])
+  const v = snap.value ?? {}
+  const width = 208
+  const r = anchor?.getBoundingClientRect()
+  const below = !r || r.top < 340
+  const pos: React.CSSProperties = {
+    position: 'fixed',
+    zIndex: 9999,
+    width,
+    left: r ? Math.max(8, Math.min(window.innerWidth - width - 8, Math.round(r.right - width))) : 8,
+    ...(below ? { top: r ? Math.round(r.bottom + 8) : 96 } : { bottom: Math.round(window.innerHeight - r.top + 8) }),
+  }
+  const item = (role: 'menuitemradio' | 'menuitemcheckbox', checked: boolean, label: string, onPick: () => void): React.ReactElement => (
+    <button key={label} type="button" role={role} aria-checked={checked} className="dshvm-menu-item" onClick={onPick}>
+      <span>{label}</span>
+      <span className="dshvm-menu-check">{checked ? '✓' : ''}</span>
+    </button>
+  )
+  const set = (field: string, value: unknown): void => void scope.set(field, value)
+  const mode = v.mode === 'hold' || v.mode === 'once' ? v.mode : 'toggle'
+  const read = v.readAloud === 'always' || v.readAloud === 'off' ? v.readAloud : 'voice'
+  return (
+    <div ref={menuRef} className="dshvm-menu" role="menu" aria-label={t('stateVoiceMode')} style={pos}>
+      <div className="dshvm-menu-label">{t('modeLabel')}</div>
+      {(['toggle', 'hold', 'once'] as const).map((m) =>
+        item('menuitemradio', mode === m, t(m === 'toggle' ? 'modeToggle' : m === 'hold' ? 'modeHold' : 'modeOnce'), () => set('mode', m)),
+      )}
+      <div className="dshvm-menu-sep" />
+      <div className="dshvm-menu-label">{t('readAloudLabel')}</div>
+      {(['voice', 'always', 'off'] as const).map((m) =>
+        item('menuitemradio', read === m, t(m === 'voice' ? 'readAloudVoice' : m === 'always' ? 'readAloudAlways' : 'readAloudOff'), () => set('readAloud', m)),
+      )}
+      <div className="dshvm-menu-sep" />
+      {item('menuitemcheckbox', v.showCaptions !== false, t('showCaptionsLabel'), () => set('showCaptions', v.showCaptions === false))}
+      {item('menuitemcheckbox', v.showStatusBar !== false, t('showStatusBarLabel'), () => set('showStatusBar', v.showStatusBar === false))}
+      {item('menuitemcheckbox', v.autoSend !== false, t('autoSendLabel'), () => set('autoSend', v.autoSend === false))}
+    </div>
+  )
+}
+
 export function MicButton({
   bus,
+  scope,
   sessionId,
   useSession,
   useInput,
@@ -1481,6 +1797,18 @@ export function MicButton({
   const breakRef = useRef<(() => Promise<void>) | null>(null)
   /** M2：隐藏 tab 时已暂停收音（可见时恢复）；隐私——避免后台持续录音。 */
   const pausedForHiddenRef = useRef(false)
+  /** once 模式：一句已发出、麦克风已关，等回复读完再退出（null = 不在等待）。 */
+  const onceRef = useRef<{
+    sawRun: boolean
+    settle: ReturnType<typeof setTimeout> | null
+    stall: ReturnType<typeof setTimeout> | null
+    noStart: ReturnType<typeof setTimeout>
+  } | null>(null)
+  const [onceWaiting, setOnceWaiting] = useState(false)
+  /** once 收尾稳定窗进行中（按钮显示对勾）。 */
+  const [onceEnding, setOnceEnding] = useState(false)
+  /** 进/出点击节流记录（takeToggleSlot）。 */
+  const toggleHistRef = useRef<number[]>([])
   /** 引导参数读 bus.ui.boot（bus 为单例，组件重挂载不丢；事件时读实时值）。 */
   const bootNow = (): VoiceBootConfig =>
     bus.ui.boot ?? {
@@ -1491,6 +1819,9 @@ export function MicButton({
       autoSend: true,
       autoResume: false,
       mode: 'toggle',
+      readAloud: 'voice',
+      showCaptions: true,
+      showStatusBar: true,
       // 批 7O（ADR-0006）：bootNow 兜底默认与 VOICE_SETTINGS_DEFAULTS 对齐为 detect。
       bargeInMode: 'detect',
       echoGateDb: 6,
@@ -1521,7 +1852,7 @@ export function MicButton({
       bus.subscribe(({ active, ui: u }) => {
         // 按钮文案/常驻提示面依赖：active（提示面让位门）+ state/error/notice/mode/wakeWord/ttsNotice。
         // model 下载进度不在此列（按钮不渲染它；状态条有独立全量订阅）。
-        const key = `${active}|${u.state}|${u.error ?? ''}|${u.notice ?? ''}|${u.mode}|${u.wakeWord}|${u.ttsNotice ?? ''}`
+        const key = `${active}|${u.state}|${u.error ?? ''}|${u.notice ?? ''}|${u.mode}|${u.wakeWord}|${u.ttsNotice ?? ''}|${u.playing}|${u.turn}|${u.sseDown}|${u.idleWarn}|${u.boot?.showStatusBar}`
         if (key === uiKeyRef.current) return
         uiKeyRef.current = key
         bumpUi((t) => t + 1)
@@ -1551,7 +1882,8 @@ export function MicButton({
         idleTimeoutMinutes: c.idleTimeoutMinutes ?? cur.idleTimeoutMinutes,
         autoSend: c.autoSend ?? cur.autoSend,
         autoResume: c.autoResume === true,
-        mode: c.mode === 'hold' ? 'hold' : 'toggle',
+        mode: c.mode === 'hold' || c.mode === 'once' ? c.mode : 'toggle',
+        ...displaySettings(c),
         bargeInMode: c.bargeInMode === 'manual' ? 'manual' : c.bargeInMode === 'detect' ? 'detect' : 'auto',
         echoGateDb: typeof c.echoGateDb === 'number' ? Math.min(12, Math.max(3, c.echoGateDb)) : cur.echoGateDb,
         shortcut: typeof c.shortcut === 'string' ? c.shortcut : cur.shortcut,
@@ -1662,6 +1994,7 @@ export function MicButton({
         isSpeechFalseRun = 0 // M5：同复位迟滞「假」运行计数（模块级，跨会话不重置会误衰减）
         submitInFlightRef.current = false // 批 3 复审 Minor-1：抢占路径直接退出不经 exitMode，须同口径清在途标记（防陈旧 true 跨 enterMode 存活致回填静默失效）
         correctCycleRef.current++ // R2 I-1：抢占废当前纠错周期（旧周期 then 令牌失配即弃）
+        clearOnce()
         breakRef.current = null
         manualHoldRef.current = false
         holdCtrlRef.current = false // 复位 Ctrl 按住态（防抢占后残留致下次手势错乱）
@@ -1746,6 +2079,8 @@ export function MicButton({
       // 起点是提交发出（本行），不是 submitDraftNow 入口（R2 Important-2 后移）；
       // 终点仍是宿主清草稿落地（onPartial 观察到 draftRef 空即清）。语义等价。
       submitInFlightRef.current = true
+      // once 模式：这一句就是本次要说的全部——关麦，等回复读完自动退出。
+      if (bootNow().mode === 'once') beginOnceWait()
       const snapshot = submitText.trim() || draftSnapshot
       // 纠错文本写回草稿（队列 submit 提交的是宿主草稿；steer 直发用 snapshot）。
       // wroteBack 记录写回是否真落地（审查 I2）：老宿主/收窄槽位下 setDraft 缺失是静默
@@ -1853,14 +2188,78 @@ export function MicButton({
       if (eng && (eng.state === 'speech' || eng.holding)) return
       // 到点前 AI 已开播 / 自动发送被关 → 不发（文字已留在草稿）。
       if (bus.ui.playing) return
-      if (bootNow().autoSend === false) return
+      if (bootNow().autoSend === false) {
+        // once + 不自动发送：说完这一段就收工，文字留在草稿里给用户改/发。
+        if (bootNow().mode === 'once') void exitModeRef.current('manual')
+        return
+      }
       submitDraftNow()
     }, AUTO_SEND_EXTRA_MS)
+  }
+
+  const clearOnce = (): void => {
+    const o = onceRef.current
+    if (!o) return
+    onceRef.current = null
+    clearTimeout(o.noStart)
+    if (o.settle) clearTimeout(o.settle)
+    if (o.stall) clearTimeout(o.stall)
+    setOnceWaiting(false)
+    setOnceEnding(false)
+  }
+  /** once 模式收尾判定：由 bus 广播与 running 变化驱动。完成条件持续 ONCE_SETTLE_MS 才退出
+   *  （tts-idle 与下一句音频之间、回合结束与 tts-idle 之间都有空档）；回合结束后本地静默
+   *  ONCE_STALL_MS 也退出（tts-idle 丢失兜底）。任何「又忙起来」都撤销计时。 */
+  const checkOnce = (): void => {
+    const o = onceRef.current
+    if (!o) return
+    const running = useSession ? runningRef.current : bus.ui.turn === 'agent-speaking'
+    if (running) o.sawRun = true
+    const quiet = o.sawRun && !running && !bus.ui.playing
+    const done = onceFinished(o, running, bus.ui.ttsDrained === true, bus.ui.playing)
+    if (done && !o.settle) {
+      setOnceEnding(true)
+      o.settle = setTimeout(() => {
+        if (onceRef.current === o) void exitModeRef.current('manual')
+      }, ONCE_SETTLE_MS)
+    } else if (!done && o.settle) {
+      setOnceEnding(false)
+      clearTimeout(o.settle)
+      o.settle = null
+    }
+    if (quiet && !o.stall) {
+      o.stall = setTimeout(() => {
+        if (onceRef.current === o) void exitModeRef.current('manual')
+      }, ONCE_STALL_MS)
+    } else if (!quiet && o.stall) {
+      clearTimeout(o.stall)
+      o.stall = null
+    }
+  }
+  const beginOnceWait = (): void => {
+    if (onceRef.current || localRef.current !== 'on') return
+    cancelAutoSend()
+    clearIdle() // 等回复期间不算空闲（长回合可能超过空闲时长）
+    const o = {
+      sawRun: false,
+      settle: null,
+      stall: null,
+      noStart: setTimeout(() => {
+        if (onceRef.current === o && !o.sawRun) void exitModeRef.current('manual')
+      }, ONCE_NO_START_MS),
+    }
+    onceRef.current = o
+    setOnceWaiting(true)
+    // 关麦但留在语音模式（host 仍按语音会话朗读回复）；engine.stop 幂等，退出时再 stop 无副作用。
+    void engineRef.current?.stop()
+    bus.setUi({ partial: '', levels: [], isSpeech: undefined })
+    checkOnce()
   }
 
   const exitMode = async (reason: 'manual' | 'idle' | 'typing'): Promise<void> => {
     if (localRef.current === 'off') return
     setLocalMode('off')
+    clearOnce()
     clearIdle()
     cancelPendingSubmit()
     cancelAutoSend()
@@ -1990,7 +2389,8 @@ export function MicButton({
         {
           silenceMs,
           basePath,
-          mode: cfg.mode,
+          // once 的采音/断句/唤醒词与 toggle 完全一致，区别只在定稿后的收尾（见 onSegment）
+          mode: cfg.mode === 'hold' ? 'hold' : 'toggle',
           wakeWord: cfg.wakeWord,
           echoGateDb: cfg.echoGateDb,
           // 批 7N（ADR-0006）：打断方式透传——manual 时 handleAudio 仅在 holdActive 期间入流。
@@ -2161,7 +2561,7 @@ export function MicButton({
       engine.onState((s) => {
         bus.setUi({ state: s })
         if (s === 'speech') cancelAutoSend() // 再开口：取消延迟发送，继续累积
-        if (s === 'idle') resetIdle()
+        if (s === 'idle' && !onceRef.current) resetIdle() // once 等待中 stop 也会回到 idle，不该重新计空闲
       })
       engine.onError((key) => {
         bus.setUi({ error: t(key as 'recognitionFail') })
@@ -2200,7 +2600,7 @@ export function MicButton({
         // engineRef.current 已置 null；迟到回调若继续写，会把旧会话的半句写进
         // 新会话草稿（退出后 state 为空串，wake 门恒真 + 无实例比对时必发生）。
         // 比对进入时捕获的引擎实例（本闭包的创建者），过期即整条忽略。
-        if (engineRef.current !== engine) return
+        if (engineRef.current !== engine || onceRef.current) return
         bus.setUi({ partial: text })
         // 空 partial（刚起口未解出字）直接返回——不剥 live 尾（批 3 复审 OQ-2：剥了下一拍
         // 又补回，输入框可见闪烁；host partial 为段内累计，空即当前段尚无文本）。
@@ -2239,6 +2639,8 @@ export function MicButton({
         // 定稿进草稿（可编辑 Q13）。发送语义：累积模式——连续多段拼成一条消息，
         // 静音到「发送阈值」（断句后额外等固定 AUTO_SEND_EXTRA_MS=1200ms，批 5 与 silenceMs 解耦）或按住 Ctrl / hold 松手才发，
         // 不再每段定稿立即发送（长句碎片化/丢字的根因）。
+        // once 等待中关麦后迟到的定稿：这句话已经发出去了，之后的残段不再写草稿/发送。
+        if (onceRef.current) return
         resetIdle()
         submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：新段=新提交周期
         bus.setUi({ partial: '' }) // 定稿即清实时字幕（防旧 partial 遮蔽思考/朗读状态条）
@@ -2271,8 +2673,8 @@ export function MicButton({
         // AI 自聊修复：TTS 在播（bus.ui.playing）时不得自动发送非强制段——
         // 因 TTS 回声定稿后若无 gate 会经 onSegment 发出，进入 AI 回复→TTS→回声 → 自循环。
         if (bus.ui.playing) return
-        // 自动提交门控：设置关闭时只留草稿，等待用户编辑/发送。
-        if (bootNow().autoSend === false) return
+        // 自动提交门控：设置关闭时只留草稿，等待用户编辑/发送（once 照样走计时，到点收工）。
+        if (bootNow().autoSend === false && bootNow().mode !== 'once') return
         // 累积模式：静音到点才发（期间再开口 → onState('speech') → cancelAutoSend 继续累积）。
         scheduleAutoSend()
       })
@@ -2321,12 +2723,15 @@ export function MicButton({
     }
   }
 
-  /** 点击防抖：2 秒内重复的进/出请求只响应第一次（避免撞 /toggle 限流 429）。 */
-  const toggleGuardRef = useRef(0)
+  /** 不在语音模式时正在朗读（readAloud=always）→ 点按钮 = 停止朗读，而不是进入语音。 */
+  const readingOutside = (): boolean => localRef.current === 'off' && bus.ui.playing
   const toggle = (): void => {
-    const now = Date.now()
-    if (now - toggleGuardRef.current < 2000) return
-    toggleGuardRef.current = now
+    if (readingOutside()) {
+      bus.stopReading()
+      return
+    }
+    // 节流与 host /toggle 限流同口径（2 次/2s）+ 250ms 去抖，避免 429，也不挡「进了马上退」。
+    if (!takeToggleSlot(toggleHistRef.current, Date.now())) return
     if (localRef.current === 'on') void exitModeRef.current('manual')
     else if (localRef.current === 'off') void enterMode()
   }
@@ -2385,13 +2790,31 @@ export function MicButton({
     : undefined
   useEffect(() => {
     runningRef.current = runningSel === true
+    checkOnce()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runningSel])
+  useEffect(() => bus.subscribe(() => checkOnce()), [bus])
+
+  // 当前可见会话上报（readAloud=always 只朗读它）：切会话/切回标签页时重报，卸载时让出。
+  useEffect(() => {
+    if (!sessionId) return
+    bus.setFocusedSession(sessionId)
+    const onVis = (): void => {
+      if (document.visibilityState === 'visible') bus.setFocusedSession(sessionId)
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      bus.setFocusedSession(null)
+    }
+  }, [bus, sessionId])
 
   // 会话切换让出（组件卸载兜底）
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false // 中止在途 enterMode（权限框期间卸载）
+      clearOnce()
       clearIdle()
       cancelPendingSubmit()
       cancelAutoSend()
@@ -2466,12 +2889,12 @@ export function MicButton({
         e.altKey === combo.alt &&
         e.metaKey === combo.meta
       ) {
-        // I2：编辑态（输入框/contenteditable）或输入法合成中，快捷键可能是「粘贴纯文本」等，
-        // 不劫持——交给浏览器；语音切换在非输入上下文照常（输入框里用麦克风按钮）。
+        // I2：输入法合成中不劫持；编辑态（输入框/contenteditable）只在快捷键与编辑操作撞车
+        // （如 Windows 上 Ctrl+Shift+V = 粘贴纯文本）时让给浏览器，其余组合在输入框里照常切换。
         const el = e.target
         const editable =
           el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)
-        if (!editable && !e.isComposing) {
+        if (!e.isComposing && !(editable && isEditingShortcut(combo, IS_MAC))) {
           e.preventDefault()
           cancelCtrl()
           toggleRef.current()
@@ -2479,7 +2902,7 @@ export function MicButton({
         return
       }
       const eng = engineRef.current
-      if (e.key === 'Control' && !e.shiftKey && !e.altKey && !e.metaKey && !e.repeat && eng) {
+      if (e.key === 'Control' && !e.shiftKey && !e.altKey && !e.metaKey && !e.repeat && eng && !onceRef.current) {
         // 单独 Ctrl 按下：记录起点；hold 模式起 600ms 定时器，toggle 模式延迟到 keyup 判定。
         ctrlHoldStart = Date.now()
         otherKeyDuringCtrl = false
@@ -2568,7 +2991,7 @@ export function MicButton({
     }
     const onVisibility = (): void => {
       if (document.hidden) {
-        if (localRef.current === 'on' && engineRef.current) {
+        if (localRef.current === 'on' && engineRef.current && !onceRef.current) {
           // M2：隐藏 tab 暂停收音（隐私），可见时恢复。toggle 与 hold 都关麦——hold 之前只
           // endHeld 不 stop，麦克风后台常开（隐私缺口）。
           if (bootNow().mode === 'hold') {
@@ -2639,7 +3062,18 @@ export function MicButton({
   phaseRef.current = livePhase
   /** 按住说话中（录音态视觉反馈）。 */
   const [holding, setHolding] = useState(false)
-  const label = on
+  const reading = local === 'off' && bus.ui.playing
+  // once 等待中、或状态条被关掉时，按钮自己报「思考中/朗读中」（用户在说话时让位给聆听态）。
+  const showTurn =
+    onceWaiting ||
+    (bootNow().showStatusBar === false && bus.ui.state !== 'speech' && (bus.ui.playing || bus.ui.turn === 'agent-speaking'))
+  const label = on && showTurn
+    ? bus.ui.playing
+      ? t('reading')
+      : t('thinking')
+    : reading
+      ? t('stopReading')
+      : on
     ? busy
       ? // UX：loading-model 是加载/下载模型而非识别——「识别中…」与状态不符。
         bus.ui.state === 'loading-model'
@@ -2753,7 +3187,7 @@ export function MicButton({
           }, 250)
         }
       }
-    } else if (localRef.current === 'on' && bus.ui.playing) {
+    } else if (localRef.current === 'on' && bus.ui.playing && !onceRef.current) {
       // toggle 模式（持续聆听）：播放中按住 = 长按打断 + 接管收音（与 hold 手势统一）；
       // 打断同样延迟到 ≥250ms，短按退出不取消回复。
       toggleHoldRef.current = true
@@ -2805,9 +3239,11 @@ export function MicButton({
     if (ms < 250) {
       // 短按：on → 退出语音模式（tap-to-exit）；off → 进入（hold 模式全程 pointer 驱动）
       // 同受 2 秒点击防抖保护（快速连点只响应第一次）。
-      const now = Date.now()
-      if (now - toggleGuardRef.current < 2000) return
-      toggleGuardRef.current = now
+      if (readingOutside()) {
+        bus.stopReading()
+        return
+      }
+      if (!takeToggleSlot(toggleHistRef.current, Date.now())) return
       if (localRef.current === 'on') {
         engineRef.current?.endHeld(true)
         void exitModeRef.current('manual')
@@ -2832,86 +3268,157 @@ export function MicButton({
   // 空闲超时退出提示、autoResume 引导五条路径写在退出/未激活之后，用户永远看不到
   // （strings 三条文案从未显示）。麦克风按钮常驻（conversation.input.right），
   // 在按钮旁补一行红字；激活态由状态条展示，此处让位防双份显示。
-  const micHint = bus.activeSessionId !== sessionId ? (bus.ui.error ?? bus.ui.notice ?? '') : ''
+  // 状态条被关掉（showStatusBar=false）时，激活态的提示也只能靠这里显示。
+  const statusBarShown = bootNow().showStatusBar !== false
+  const micHint =
+    bus.activeSessionId !== sessionId
+      ? (bus.ui.error ?? bus.ui.notice ?? '')
+      : statusBarShown
+        ? ''
+        : (bus.ui.error ??
+          (bus.ui.sseDown ? t('sseReconnect') : null) ??
+          bus.ui.notice ??
+          (bus.ui.idleWarn ? t('idleWarn30s') : null) ??
+          bus.ui.ttsNotice ??
+          '')
+
+  // 按钮形态（CSS 按 data-state 着色）：按住 > 朗读 > once 收尾/等待 > 语音中 > 进入中 > 关。
+  const visual: 'off' | 'pending' | 'on' | 'hold' | 'holding' | 'reading' | 'waiting' | 'ending' = holding
+    ? 'holding'
+    : bus.ui.playing
+      ? 'reading'
+      : on && onceEnding
+        ? 'ending'
+        : on && onceWaiting
+          ? 'waiting'
+          : on
+            ? holdMode
+              ? 'hold'
+              : 'on'
+            : local === 'pending'
+              ? 'pending'
+              : 'off'
+  // 竖条跟随电平：语音中 = 麦克风，朗读中 = 播放输出（rAF 直改高度，不触发重渲染）。
+  const eqKind = visual === 'reading' ? 'out' : visual === 'on' || visual === 'hold' || visual === 'holding' ? 'in' : null
+  useEffect(() => {
+    const el = btnRef.current
+    if (!el || !eqKind) return
+    const bars = Array.from(el.querySelectorAll<HTMLElement>('.dshvm-eq i'))
+    const base = eqKind === 'out' ? [6, 10, 14, 10, 6] : [6, 12, 8]
+    const paint = (lv: number): void => bars.forEach((b, i) => (b.style.height = `${Math.max(3, base[i] * (0.35 + 0.65 * lv)).toFixed(1)}px`))
+    if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      paint(1)
+      return
+    }
+    let smooth = 0
+    let raf = 0
+    const tick = (): void => {
+      const raw = eqKind === 'out' ? bus.playbackLevel() : (bus.ui.levels[bus.ui.levels.length - 1] ?? 0)
+      smooth = Math.max(Math.min(1, Math.max(0, raw)), smooth * 0.82)
+      paint(smooth)
+      raf = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => cancelAnimationFrame(raf)
+  }, [eqKind, bus])
+
+  // 状态条关掉时，录音计时挪到按钮下方（不占热区）。
+  const showTimer = on && !statusBarShown && !onceWaiting
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    setElapsed(0)
+    if (!showTimer) return
+    const id = setInterval(() => setElapsed((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [showTimer])
+
+  const [menuOpen, setMenuOpen] = useState(false)
+  const closeMenu = React.useCallback((refocus: boolean) => {
+    setMenuOpen(false)
+    if (refocus) btnRef.current?.focus()
+  }, [])
+
+  const title = bus.ui.error
+    ? String(bus.ui.error)
+    : reading
+      ? t('stopReading')
+      : on
+        ? holdMode
+          ? t('titleHold')
+          : t('titleToggle')
+        : t('titleEnter')
 
   return (
     <>
       <button
-      onClick={(e: React.MouseEvent) => {
-        // toggle 模式长按打断松手后，抑制合成的 click（防误触发 tap-to-exit）。
-        if (Date.now() < suppressClickUntilRef.current) return
-        if (holdMode) {
-          // pointer/触摸合成的 click 一律忽略（tap 进入/退出走 pointer 路径，
-          // 否则 tap-exit 的 trailing click 会再次触发 toggle 重进 —— Blocker-1 反面）
-          if (e.detail !== 0) return
-          // 键盘/Space/Enter 激活（detail === 0）保持 a11y 可用
-        }
-        toggle()
-      }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
-      onContextMenu={(e) => e.preventDefault()} // 防长按/右键弹出「复制」菜单
-      ref={btnRef}
-      data-dshvm="mic"
-      aria-label={on ? t('ariaActive') : t('ariaEnter')}
-      aria-pressed={on}
-      title={
-        on
-          ? holdMode
-            ? t('titleHold')
-            : t('titleToggle')
-          : t('titleEnter')
-      }
-      style={{
-        border: holding
-          ? '1px solid rgba(248, 81, 73, 0.6)'
-          : on
-            ? holdMode
-              ? '1px solid rgba(88, 166, 255, 0.45)'
-              : '1px solid rgba(63, 185, 80, 0.45)'
-            : '1px solid rgba(139, 148, 158, 0.35)',
-        background: holding
-          ? 'rgba(248, 81, 73, 0.2)'
-          : on
-            ? holdMode
-              ? 'rgba(88, 166, 255, 0.16)'
-              : 'rgba(63, 185, 80, 0.16)'
-            : local === 'pending'
-              ? 'rgba(88, 166, 255, 0.14)'
-              : 'rgba(139, 148, 158, 0.08)',
-        cursor: 'pointer',
-        padding: '5px 10px',
-        borderRadius: 8,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        fontSize: 12,
-        fontFamily: 'system-ui, sans-serif',
-        color: holding ? '#f85149' : on ? (holdMode ? '#58a6ff' : '#2ea043') : local === 'pending' ? '#58a6ff' : '#8b949e',
-        // 批 H 任务 3：toggle 模式「语音中」绿字加深（#3fb950 → #2ea043）+ fontWeight:600 双保险，
-        // 浅色主题下与浅绿底 (rgba 63,185,80,.16) 对比度 ≥ 4.5:1（WCAG AA 文本级）。
-        fontWeight: on && !holdMode ? 600 : undefined,
-        transition: 'background 0.15s ease, color 0.2s ease, border-color 0.15s ease',
-        touchAction: 'none', // 触摸设备上让 pointer 事件独占（滑出取消可用）
-        userSelect: 'none',
-        WebkitUserSelect: 'none', // iOS Safari 前缀，防长按选中文字
-        WebkitTouchCallout: 'none', // iOS 长按弹出「拷贝/选择」菜单
-      }}
-    >
-      <svg viewBox="0 0 24 24" width={16} height={16} aria-hidden="true">
-        <path
-          fill="currentColor"
-          d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"
-        />
-        <path
-          fill="currentColor"
-          d="M17.3 11a.9.9 0 0 0-1.8 0 3.5 3.5 0 0 1-7 0 .9.9 0 0 0-1.8 0 5.3 5.3 0 0 0 4.4 5.2v1.9h-1.7a.9.9 0 0 0 0 1.8h5.2a.9.9 0 0 0 0-1.8h-1.7v-1.9A5.3 5.3 0 0 0 17.3 11Z"
-        />
-      </svg>
-      {label}
+        type="button"
+        className="dshvm-mic"
+        data-state={visual}
+        onClick={(e: React.MouseEvent) => {
+          // toggle 模式长按打断松手后，抑制合成的 click（防误触发 tap-to-exit）。
+          if (Date.now() < suppressClickUntilRef.current) return
+          if (holdMode && !readingOutside()) {
+            // pointer/触摸合成的 click 一律忽略（tap 进入/退出走 pointer 路径，
+            // 否则 tap-exit 的 trailing click 会再次触发 toggle 重进 —— Blocker-1 反面）
+            if (e.detail !== 0) return
+            // 键盘/Space/Enter 激活（detail === 0）保持 a11y 可用
+          }
+          toggle()
+        }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onContextMenu={(e) => {
+          e.preventDefault() // 防长按/右键弹出「复制」菜单
+          // 只有鼠标右键 / 键盘菜单键开快捷设置；触屏、笔的长按属于按住说话手势。
+          const pt = (e.nativeEvent as PointerEvent).pointerType
+          if (scope && pt !== 'touch' && pt !== 'pen') setMenuOpen(true)
+        }}
+        ref={btnRef}
+        data-dshvm="mic"
+        // 图标按钮：可访问名 = 模式 + 当前状态（看得见的状态由颜色/竖条表达）。
+        aria-label={reading ? t('stopReading') : on ? `${t('ariaActive')} · ${label}` : local === 'pending' ? label : t('ariaEnter')}
+        aria-pressed={on}
+        aria-haspopup={scope ? 'menu' : undefined}
+        aria-expanded={scope ? menuOpen : undefined}
+        title={title}
+      >
+        {visual !== 'waiting' && bus.ui.isSpeech === true && on && (
+          <span className="dshvm-mic-dot" data-kind="vad" title={t('vadDetected')} />
+        )}
+        {bus.ui.error && <span className="dshvm-mic-dot" data-kind="error" />}
+        {visual === 'waiting' ? (
+          <svg viewBox="0 0 24 24" width={16} height={16} aria-hidden="true" className="dshvm-spin">
+            <circle cx={12} cy={12} r={8} fill="none" stroke="currentColor" strokeWidth={2} opacity={0.25} />
+            <path d="M12 4a8 8 0 0 1 8 8" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+          </svg>
+        ) : visual === 'ending' ? (
+          <svg viewBox="0 0 24 24" width={16} height={16} aria-hidden="true">
+            <path d="M5.5 12.5l4.2 4.2 8.8-8.8" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : eqKind ? (
+          <span className={eqKind === 'out' ? 'dshvm-eq dshvm-eq-out' : 'dshvm-eq'} aria-hidden="true">
+            {(eqKind === 'out' ? [6, 10, 14, 10, 6] : [6, 12, 8]).map((h, i) => (
+              <i key={i} style={{ height: h }} />
+            ))}
+          </span>
+        ) : (
+          <svg viewBox="0 0 24 24" width={16} height={16} aria-hidden="true">
+            <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" />
+            <path
+              fill="currentColor"
+              d="M17.3 11a.9.9 0 0 0-1.8 0 3.5 3.5 0 0 1-7 0 .9.9 0 0 0-1.8 0 5.3 5.3 0 0 0 4.4 5.2v1.9h-1.7a.9.9 0 0 0 0 1.8h5.2a.9.9 0 0 0 0-1.8h-1.7v-1.9A5.3 5.3 0 0 0 17.3 11Z"
+            />
+          </svg>
+        )}
+        {showTimer && (
+          <span className="dshvm-mic-timer" aria-hidden="true">
+            {String(Math.floor(elapsed / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
+          </span>
+        )}
       </button>
+      {menuOpen && scope && <MicMenu scope={scope} anchor={btnRef.current} onClose={closeMenu} />}
       {micHint && (
         <span
           data-dshvm="mic-hint"
@@ -2920,7 +3427,7 @@ export function MicButton({
           title={micHint}
           style={{
             fontSize: 11,
-            color: '#f85149',
+            color: 'var(--dsw-alias-state-error-primary, #f85149)',
             maxWidth: 240,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -2998,7 +3505,7 @@ export function VoiceStatusBar({ bus, sessionId }: StatusBarProps): React.ReactE
   }, [b.ui.state])
 
   const isActive = b.active === sessionId
-  if (!isActive) return <></>
+  if (!isActive || b.ui.boot?.showStatusBar === false) return <></>
 
   const stateText =
     b.ui.state === 'loading-model'
@@ -3279,7 +3786,7 @@ export function VoiceOverlay({ bus }: OverlayProps): React.ReactElement {
   }, [bus])
 
   // 播放引擎只推当前语音会话的帧（模式隔离）；有朗读才显示浮层。
-  if (!b.ui.playing) return <></>
+  if (!b.ui.playing || b.ui.boot?.showCaptions === false) return <></>
 
   return (
     <div
