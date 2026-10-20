@@ -57,11 +57,6 @@
 
 ![语音模式真实录制：流式转写 → 自动发送 → 按句朗读 + 实时字幕](plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
 
-**本 fork 定制：语音 UI 已全部收拢到右下角麦克风按钮**（聆听迷你均衡器、朗读五根蓝条、等待转圈、结束对勾、计时在按钮下方，右键可切换交互模式/朗读方式/字幕/状态条）：
-
-![语音输入全部收拢到右下角麦克风按钮](plugin/dsh-voice-mode/assets/demo-compact-ui.gif)
-
-
 > 上图为**当前界面的真实录制**（由 `screenshots/scripts/capture-demo.mjs` 驱动真实链路产出，非 UI 摆拍；UI 持续演进，以实际界面为准）。设置面板见 [使用说明](plugin/dsh-voice-mode/README.md)。
 
 ---
