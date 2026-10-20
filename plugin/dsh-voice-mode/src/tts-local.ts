@@ -213,6 +213,20 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
   /** 当前子进程是否已完成 init（避免每句合成都重建引擎实例——旧实现
    *  ensureReady 每次都会发 init，导致 WASM 每句重载模型 3-5 秒 + 实例泄漏）。 */
   let childInit = false
+  /**
+   * R14（Issue #15 Important-1，引擎级 closed 闸门）：
+   *
+   * TtsQueue 侧 8 处判序全在 `await this.engine.synthesize()` 的调用前/返回后，而
+   * fork 发生在 synthesize **内部**——ensureReady 的 async IIFE 在 await 之后不判任何
+   * close 状态。时序：冷引擎首句合成进入模型校验/下载窗（100-310MB 校验秒级、下载
+   * 分钟级）→ queue.close()（dispose 路径 index.ts void queue.close()）→ engine.close()
+   * 返回（child 原为 null，只置空标志）→ IIFE 续跑 `if (!child) fork(...)` →
+   * 孤儿子进程携带完整模型、无人再 close。setEngine 路径（void old.close()）与试听
+   * synthesize() 同窗口同型暴露。
+   * 修法：close() 最早期置位；ensureReady 的 IIFE 在每个 await 之后判序（至少 fork
+   * 之前）；synthesize 的 call() 前判序。与 TtsQueue.closed 同构，两层各自闭环。
+   */
+  let closed = false
 
   /** 杀掉子进程（下一句合成时自动重启）。 */
   const respawnChild = async (): Promise<void> => {
@@ -260,10 +274,13 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
         engineErrorCode = undefined
         downloadProgress = null
         try {
+        // R14：IIFE 入口判序——close 已到达则根本不起初始化（含其后的模型 ensure/fork）。
+        if (closed) return
         // 冷启动/重建时才校验模型与 init（旧实现每句合成都重哈希数百 MB 模型
         // 文件并重建引擎实例——句间 3-5 秒停顿的真正元凶）。
         if (!child || !childInit) {
-          // 1) 模型文件：主线程校验/下载（带 SSE 进度广播）。
+          // R14：模型校验/下载可能耗时秒级到分钟级，期间 close 极可能落进该窗口。
+          // await 返回后必须判序，否则续跑到的 `if (!child) fork(...)` 会造出孤儿子进程。
           for (const f of spec.files) {
             const ok = await ensureModelFile({
               repo: repoName,
@@ -273,6 +290,7 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
               allowCustomHost,
               broadcast: trackedBroadcast,
             })
+            if (closed) return // R14：校验窗内 close → 不 fork（见 closed 声明处注释）
             if (!ok) throw new Error('local TTS model download/verify failed: ' + f.file)
           }
           // 1b) Kokoro：espeak-ng-data 是按目录分发的 ~355 个语音表文件，spec 只列
@@ -410,7 +428,13 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
     // 设置面板「下载」按钮：无文本也触发模型下载 + 子进程初始化（与首次合成路径一致）。
     prepare: () => ensureReady(),
     async synthesize(text: string, opts: { voice?: string; rate?: number } = {}): Promise<Buffer> {
+      // R14：post-close 调用直接抛错——与 TtsQueue.synthesize() 的早返语义对齐
+      // （那一处 reject，此处同样 reject；调用方本就在 await）。
+      if (closed) throw new Error('local TTS engine closed')
       await ensureReady()
+      // R14：ensureReady 可能在 await 期间被 close（见其 IIFE 内判序）——此时不得
+      // 继续往下走 call()（会打到已置空的 child，或让 IIFE 续跑到 fork）。
+      if (closed) throw new Error('local TTS engine closed')
       const sid = spec.toSid(opts.voice ?? voice)
       const spd =
         typeof opts.rate === 'number' && Number.isFinite(opts.rate)
@@ -482,6 +506,9 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
       return pcmToWav(floatToPcm16(merged), resolvedSampleRate || 16000)
     },
     async close(): Promise<void> {
+      // R14：最早期置位——早于 await call({type:'close'})。否则 ensureReady 的 IIFE
+      // 会在该 await 期间续跑到 fork，造出孤儿子进程（见 closed 声明处注释）。
+      closed = true
       // 先捕获引用再 await：await 期间子进程可能退出、exit 回调把 child 置 null，
       // 回来再 child.kill() 会打到 null（dsh 关停时曾因此 fatal load failure）。
       const c = child

@@ -1206,6 +1206,7 @@ var TtsQueue = class {
   retryTimers = /* @__PURE__ */ new Set();
   /** R13：可取消的重试 sleep——句柄入集供 close() 取消；落定即自摘。 */
   retrySleep(ms) {
+    if (this.closed) return Promise.resolve();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.retryTimers.delete(timer);
@@ -1783,6 +1784,7 @@ function createSherpaLocalEngine(options) {
   const workerPath = fileURLToPath2(new URL("./tts-vits-worker.cjs", import.meta.url));
   let child = null;
   let childInit = false;
+  let closed = false;
   const respawnChild = async () => {
     if (child) {
       child.kill();
@@ -1821,6 +1823,7 @@ function createSherpaLocalEngine(options) {
         engineErrorCode = void 0;
         downloadProgress = null;
         try {
+          if (closed) return;
           if (!child || !childInit) {
             for (const f of spec.files) {
               const ok = await ensureModelFile({
@@ -1831,6 +1834,7 @@ function createSherpaLocalEngine(options) {
                 allowCustomHost,
                 broadcast: trackedBroadcast
               });
+              if (closed) return;
               if (!ok) throw new Error("local TTS model download/verify failed: " + f.file);
             }
             if (options.kind === "kokoro") {
@@ -1949,7 +1953,9 @@ function createSherpaLocalEngine(options) {
     // 设置面板「下载」按钮：无文本也触发模型下载 + 子进程初始化（与首次合成路径一致）。
     prepare: () => ensureReady(),
     async synthesize(text, opts = {}) {
+      if (closed) throw new Error("local TTS engine closed");
       await ensureReady();
+      if (closed) throw new Error("local TTS engine closed");
       const sid = spec.toSid(opts.voice ?? voice);
       const spd = typeof opts.rate === "number" && Number.isFinite(opts.rate) ? Math.min(2, Math.max(0.5, opts.rate)) : speed;
       const segments = parseEmotionTags(text);
@@ -1996,6 +2002,7 @@ function createSherpaLocalEngine(options) {
       return pcmToWav(floatToPcm16(merged), resolvedSampleRate || 16e3);
     },
     async close() {
+      closed = true;
       const c = child;
       if (c) {
         try {

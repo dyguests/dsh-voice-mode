@@ -8,7 +8,14 @@
  * 运行：node test/tts-queue-engine.test.mjs（离线，无网络/无 dsh 依赖）。
  */
 import assert from 'node:assert/strict'
+import { build } from 'esbuild'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { TtsQueue } from '../src/tts-queue.ts'
+
+const here = fileURLToPath(new URL('.', import.meta.url))
 
 let passed = 0
 const t = async (name, fn) => {
@@ -184,7 +191,18 @@ await t('M7②：close() 取消退避重启计时器，close 后 pump 不得再�
   assert.equal(calls.length, 6, `前置条件：前两句应各试 3 次（实际 ${calls.length}）`)
   await sleep(200) // 等外层 catch 的 finally 排上退避 timer（1s 后才触发，200ms 内必已排上）
   const before = calls.length
+  // R14 Minor-2：不被入口门掩蔽的可观测面。删 backoffTimers 取消后，退避 timer 照常
+  // 触发但被 pump 入口判序（closed）拦下——下方 calls 断言仍绿，抓不到「close 后残留
+  // ref'd backoff timer 最长 8s 拖事件循环」这个漏后果。故在 close 前后对 ref'd
+  // Timeout 计数取增量：close 内同步取消 → 两次采样间的差值只能来自取消动作本身
+  // （中间无 macrotask 边界，环境 timer 无从触发/完成）。
+  const timersBefore = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
   await q.close()
+  const timersAfterClose = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+  assert.ok(
+    timersAfterClose < timersBefore,
+    `close 未取消退避 timer：ref'd Timeout 未减少（${timersBefore}→${timersAfterClose}）——泵虽被 closed 闸门拦住（synthesize 断言仍绿），残留 timer 仍拖住事件循环最长 8s`,
+  )
   await sleep(2500) // 超过退避 1s——若 timer 未取消，这里会再起一轮 pump 合成第三句
   assert.equal(
     calls.length,
@@ -282,6 +300,59 @@ await t('R13：重试 sleep 期间 close → 不再 synthesize、无残留 ref\'
   await q.close()
 })
 
+// ---------------------------------------------------------------------------
+// R14（Issue #15 Minor-1）：锁A（重试循环 closed 判序）的**可达窗口**补锁。
+// R13 用例的不可达根因：synthesize 恒即时 reject → close 取消重试 timer 后 sleep
+// promise 永悬挂 → 泵卡在 await 永远到不了循环顶判序（删判序全套件绿）。
+// 真实竞态窗口（源码注释自述）：泵挂在 await synthesize 时 close 落进来 → 在途合成被
+// engine.close() 的 kill→rejectAll 打回 → catch 在 close 的 clear **之后**才跑。
+// fix-host 的修复形态（retrySleep closed 早返）+ 循环顶判序（锁A）共同封死该窗口：
+//   ① 无 post-close synthesize（删锁A :423 即红——第二句会被合成）；
+//   ② close 后无新 retry timer 入集（删 retrySleep 早返即红——会建一个 ≤800ms
+//      ref'd Timeout，违背 close() 自述的「clear 之后不得再有新 timer 入集」）。
+// 两条断言各抓各的判序，互为补充。
+// ---------------------------------------------------------------------------
+await t("R14：close 落在在途 synthesize（被 reject）→ 无 post-close synthesize、无新 retry timer", async () => {
+  let closed = false
+  let rejectInflight = null
+  const calls = []
+  const eng = {
+    mime: 'audio/wav',
+    updateVoice() {},
+    async synthesize(text) {
+      calls.push(`${text}@closed=${closed}`)
+      // 在途挂起：直到 close 将其打回（真实时序：child.on('exit') 的 rejectAll）
+      return new Promise((_res, rej) => {
+        rejectInflight = () => rej(new Error('engine closed (stub rejectAll)'))
+      })
+    },
+    async close() {
+      closed = true
+      rejectInflight?.() // 在途合成被打回 → pump 的 catch 在 close 的 clear 之后才跑
+    },
+  }
+  const q = new TtsQueue({ engine: eng })
+  q.enqueue('s1', 'A') // 第一句：制造在途 synthesize
+  q.enqueue('s1', 'B') // 第二句：留在 pending——删锁A 时它会被 post-close 合成
+  await sleep(60) // 等 A 的 synthesize 已挂起
+  assert.deepEqual(calls, ['A@closed=false'], '前置条件：A 应在途（未 resolve/reject）')
+  const timersBefore = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+  await q.close() // close 期间在途合成被 reject → catch → retrySleep（修复后早返不建 timer）→ 循环顶判序 break
+  const timersAfterClose = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+  assert.equal(
+    timersAfterClose,
+    timersBefore,
+    `close 后新入了 ${timersAfterClose - timersBefore} 个 ref'd retry timer——retrySleep 的 closed 早返失效（残留 ≤800ms 拖事件循环，违背 close 的「clear 之后不得入集」不变式）`,
+  )
+  await sleep(1400) // 覆盖 400/800ms 两轮睡醒窗口（修复后无 timer；删锁A 时 B 会在此合成）
+  assert.deepEqual(
+    calls,
+    ['A@closed=false'],
+    'close 后在途合成被打回后仍发起了 synthesize——重试循环 closed 判序（锁A）失效，post-close synthesize 会让已 close 的本地引擎重走模型校验 + fork 孤儿子进程',
+  )
+  await q.close()
+})
+
 // Minor-8（Issue #15 R13，纵深防御）：公开方法 prepare/synthesize 的 closed 判序。
 // 现实调用方（设置面板）在插件卸载后不可达，非现实缺陷；补早返使公开面自成闭环。
 await t('Minor-8：close 后 prepare 早返、synthesize reject（不触达已 close 的引擎）', async () => {
@@ -308,6 +379,115 @@ await t('Minor-8：close 后 prepare 早返、synthesize reject（不触达已 c
   }
   assert.ok(rejected, 'close 后 synthesize 未 reject——会触达已 close 的引擎')
   assert.equal(eng.synthCalls, 0, 'close 后 synthesize 仍调用了引擎')
+})
+
+// ---------------------------------------------------------------------------
+// R14（Issue #15 Important-1，引擎级 closed 闸门——第 7 道门）：
+// TtsQueue 侧 8 处判序全在 `await this.engine.synthesize()` 的调用前/返回后，而 fork
+// 发生在 synthesize **内部**——tts-local ensureReady 的 async IIFE 在 await 之后不判
+// 任何 close 状态（close() 只置空 child/childInit/ready，首行守卫 `if (ready && child)`
+// 失效，IIFE 续跑 `if (!child) fork(...)`）。
+// 时序：冷引擎首句合成进入模型校验/下载窗（100-310MB 校验秒级、下载分钟级）→
+// queue.close()（=dispose 路径 index.ts void queue.close()）→ engine.close() 返回后
+// IIFE 续跑 fork → 孤儿子进程携带完整模型、无人再 close。
+// setEngine 路径（void old.close()）与试听 synthesize() 同窗口同型暴露。
+//
+// 探针 A 竞态（Important-1 的附带实证）：pump 挂在 await synthesize 时 close，在途合成被
+// engine.close() 的 kill→rejectAll 打回，catch 在 clear **之后**才跑 → 新建 retrySleep
+// timer，违背 tts-queue.ts close() 自述不变式「clear 之后不得再有新 timer 入集」。
+// 修法：retrySleep 助手内判 closed 不入集（直接 resolve，让循环顶部判序立即 break）。
+//
+// 台架：esbuild 真编译 tts-local.ts，桩掉 models（ensureModelFile 可控挂起，制造
+// 「冷引擎模型校验窗」）、child_process（fork 可计数，不真起进程）、tts-runtime、emotion。
+// ---------------------------------------------------------------------------
+console.log('R14：tts-local 引擎级 closed 闸门（post-close fork）+ 探针 A 竞态')
+
+const r14Tmp = join(tmpdir(), 'dsh-vm-r14-fix')
+mkdirSync(r14Tmp, { recursive: true })
+// 只让第一次 ensureModelFile 挂起（制造模型校验窗），后续立即 true（spec.files 有多项）
+writeFileSync(join(r14Tmp, 'models-stub.mjs'), `
+let n = 0
+let rel = null
+globalThis.__r14m = { release: () => rel?.(true) }
+export async function ensureModelFile() { if (n++ === 0) return new Promise((res) => { rel = res }); return true }
+export async function ensureModelTree() { return true }
+`)
+writeFileSync(join(r14Tmp, 'cp-stub.mjs'), `
+globalThis.__r14forks = 0
+export function fork() { globalThis.__r14forks++; return { on: () => {}, send: () => {}, kill: () => {}, stderr: { on: () => {} } } }
+`)
+writeFileSync(join(r14Tmp, 'tts-runtime-stub.mjs'), `
+export class NativeRuntimeUnavailableError extends Error {}
+export function resolveNativeRuntime() { return { env: process.env } }
+`)
+writeFileSync(join(r14Tmp, 'emotion-stub.mjs'), `
+export function parseEmotionTags(t) { return t ? [{ text: t, whisper: false }] : [] }
+`)
+writeFileSync(join(r14Tmp, 'tts-vits-worker.cjs'), '// 桩占位（fork 被桩掉，不会真加载）\n')
+const r14Bundle = join(r14Tmp, 'tts-local.bundle.mjs')
+await build({
+  entryPoints: [join(here, '..', 'src', 'tts-local.ts')],
+  outfile: r14Bundle,
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  plugins: [
+    { name: 'stub-models', setup(b) { b.onResolve({ filter: /models\.ts$/ }, () => ({ path: join(r14Tmp, 'models-stub.mjs') })) } },
+    { name: 'stub-rt', setup(b) { b.onResolve({ filter: /tts-runtime\.ts$/ }, () => ({ path: join(r14Tmp, 'tts-runtime-stub.mjs') })) } },
+    { name: 'stub-emotion', setup(b) { b.onResolve({ filter: /emotion\.ts$/ }, () => ({ path: join(r14Tmp, 'emotion-stub.mjs') })) } },
+    { name: 'stub-cp', setup(b) { b.onResolve({ filter: /child_process$/ }, () => ({ path: join(r14Tmp, 'cp-stub.mjs') })) } },
+  ],
+  logLevel: 'silent',
+})
+const { createSherpaVitsEngine } = await import(pathToFileURL(r14Bundle).href)
+
+await t('R14：冷引擎模型校验窗内 close → 放行后不得 fork（无 post-close 孤儿子进程）', async () => {
+  const eng = createSherpaVitsEngine({ kind: 'vits', cacheDir: r14Tmp, modelHost: () => '', allowCustomHost: false, broadcast: () => {} })
+  let rejected = ''
+  const p = eng.synthesize('第一句').then(
+    () => {},
+    (e) => { rejected = e instanceof Error ? e.message : String(e) },
+  )
+  await sleep(300) // 进入 ensureReady → 挂在模型校验窗（forks 仍为 0）
+  assert.equal(globalThis.__r14forks, 0, '前置条件：模型校验窗内尚未 fork')
+  await eng.close() // queue.close() 的真实路径：child 原为 null，只置空标志
+  assert.equal(globalThis.__r14forks, 0, '前置条件：close 返回时不应有 fork')
+  globalThis.__r14m.release() // 放行模型校验 → IIFE 续跑（修复前会走到 fork）
+  await sleep(400)
+  // 不无条件 await p：无 closed 判序时 synthesize 会越过 ensureReady 继续 call() 到桩
+  // child（send 无响应）而永不 settle——那正是泄漏路径的一部分。故用 race 限时，
+  // 并**先断言 forks**（泄漏的直接可观测量），再判 reject。
+  await Promise.race([p, sleep(300)])
+  assert.equal(
+    globalThis.__r14forks,
+    0,
+    'post-close fork：模型校验窗内 close 后 IIFE 仍续跑到 fork——孤儿子进程携带完整模型、无人再 close（热重载每代泄漏一个）',
+  )
+  assert.ok(/closed/.test(rejected), `close 后 synthesize 应 reject（实际: ${JSON.stringify(rejected)}）`)
+})
+
+await t('R14 探针 A：在途合成被 close 打回后，catch 不得再建 retrySleep timer', async () => {
+  // 复刻真实时序：pump 挂在 await synthesize → close → engine.close() 的 kill→rejectAll
+  // 打回在途合成 → catch 在 close 的 clear **之后**才跑。
+  let rejectSynth = null
+  const eng = {
+    mime: 'audio/wav',
+    updateVoice() {},
+    async synthesize(text) {
+      if (text === 'A') await new Promise((_r, rej) => { rejectSynth = rej })
+      return Buffer.from('RIFF')
+    },
+    async close() { rejectSynth?.(new Error('tts child exited (rejectAll)')) },
+  }
+  const q = new TtsQueue({ engine: eng })
+  q.enqueue('s1', 'A')
+  await sleep(60) // pump 进入 await synthesize
+  // 增量断言：本文件前段用例可能留下其它 timer 句柄，绝对值会误红。
+  const before = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+  await q.close() // clear 发生；engine.close() 打回在途合成 → catch 在 clear 之后跑
+  const mid = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+  await sleep(1200) // 覆盖 400ms + 800ms 两轮睡醒窗口
+  assert.equal(mid, before, `close 后新增 ${mid - before} 个 ref'd Timeout——catch 在 clear 之后又建了 retrySleep timer（违背 close() 自述不变式）`)
 })
 
 console.log(`\ntts-queue-engine：${passed} 项通过`)

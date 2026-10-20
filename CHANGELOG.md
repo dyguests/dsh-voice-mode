@@ -100,8 +100,8 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 
 **测试与口径（终态）**
 
-- 计数（**R4 时点**；终态 622 ✓ / 51 文件——R9 后 616（+5 barge-in-detect-behavior）、R11 后 618（+2 M7）、R12 后 622（+4 I-1/M7①/warmupSense），沿革见 STATE 账本）：`npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；`scripts.test` 链 50 个文件调用）。沿革：R1 41 文件/518 项 → R2 48 文件/583 项 → R3 49 文件/603 项（+20）→ R4 50 文件/611 项（**+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16**）。
-- **行为级测试 74 项**（fix-test scope 枚举口径，**R4 时点**；终态 85 项 = 74 + barge-in-detect-behavior 5 + M7/I-1/warmupSense 行为回归 6）：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（R4 时点；**现值 7/20**——R12 后行为级 +4 = M7① 入口判序双路径 2 + warmupSense 1 + I-1 闸门锁 1，余 13 条合同级；其余各文件计数与 R4 时点一致，现值以 STATE 账本枚举为准）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
+- 计数（**R4 时点**；终态 624 ✓ / 51 文件——R9 后 616（+5 barge-in-detect-behavior）、R11 后 618（+2 M7）、R12 后 622（+4 I-1/M7①/warmupSense）、R13 后 624（+2 第 6 道门/Minor-8），沿革见 STATE 账本）：`npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；`scripts.test` 链 50 个文件调用）。沿革：R1 41 文件/518 项 → R2 48 文件/583 项 → R3 49 文件/603 项（+20）→ R4 50 文件/611 项（**+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16**）。
+- **行为级测试 74 项**（fix-test scope 枚举口径，**R4 时点**；终态 87 项 = 74 + barge-in-detect-behavior 5 + M7/I-1/warmupSense 行为回归 6 + 第 6 道门/Minor-8 2）：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（R4 时点；**现值 7/20**——R12 后 host-fixes 行为级 +4 = M7① 入口判序双路径 3 + warmupSense 1（I-1 闸门锁在 tts-queue-engine、不计入 host-fixes；全套件 +4 breakdown 见 STATE 账本），余 13 条合同级；其余各文件计数与 R4 时点一致，现值以 STATE 账本枚举为准）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
 
 ### Issue #15 R5 修复轮（R4 验真轮 2 Important；2026-10-20，`0763966`）
 
@@ -139,7 +139,7 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 
 **治理**
 
-- 锚点口径成文（现态锚点 + 漂移括注 + 历史时点例外）；第三方符号统一按符号定位；全仓 markdown 链接零坏链；计数 618 ✓ / 51 文件（R12 后 622）、行为级 81 项（R12 后 85）；基线滚至 `c4e2c3a`（R12 后 `38cc23e`）。
+- 锚点口径成文（现态锚点 + 漂移括注 + 历史时点例外）；第三方符号统一按符号定位；全仓 markdown 链接零坏链；计数 618 ✓ / 51 文件（R12 后 622、R13 后 624）、行为级 81 项（R12 后 85、R13 后 87）；基线滚至 `c4e2c3a`（R12 后 `38cc23e`、R13 后 `d7890a4`）。
 
 ### Issue #15 R12 修复轮（R11 验真轮 I-1 Important；2026-10-20，`38cc23e`+`bdeaa8d`+`ef80f9b`）
 
@@ -158,7 +158,7 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 
 **修复（用户可见，真实代码修复）**
 
-- **Important-1：第 6 道门——重试 sleep 期间 close 不再 post-close synthesize**：有界重试的退避 sleep（400ms×attempt）期间若会话被 close，sleep 返回后仍会对已关闭引擎 `synthesize` → 本地 TTS 孤儿子进程被重新 fork（热重载泄漏同型第六处）；修「sleep 期间 close 不再触达 synthesize + 重试 timer 纳入取消集」，两次独立 red-green（锁 A：sleep 期间 close；锁 B：timer 取消）。
+- **Important-1：第 6 道门——重试 sleep 期间 close 不再 post-close synthesize**：有界重试的退避 sleep（400ms×attempt）期间若会话被 close，sleep 返回后仍会对已关闭引擎 `synthesize` → 本地 TTS 孤儿子进程被重新 fork（热重载泄漏同型第六处）；修「sleep 期间 close 不再触达 synthesize + 重试 timer 纳入取消集」，锁 B（timer 取消）red-green 实证（锁 A 抓红能力当时为零，更正注记见 STATE R13 账本）。
 - **Minor-8：纵深防御**：close 后入口早返锁（双保险）。
 - 测试：tts-queue-engine 5→7（+2），计数 622→**624 ✓ / 51 文件**、行为级 85→**87 项**。
 

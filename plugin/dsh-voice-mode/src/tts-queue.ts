@@ -250,6 +250,12 @@ export class TtsQueue {
 
   /** R13：可取消的重试 sleep——句柄入集供 close() 取消；落定即自摘。 */
   private retrySleep(ms: number): Promise<void> {
+    // R14（探针 A 竞态）：close 后不得再入集。pump 挂在 await synthesize 时 close，
+    // 在途合成被 engine.close() 的 kill→rejectAll 打回，catch 在 close 的 clear
+    // **之后**才跑——此处若仍建 timer 就违背 close() 自述的不变式「clear 之后不得再有
+    // 新 timer 入集」，残留一个 ≤800ms 的 ref'd Timeout 拖住事件循环。直接 resolve，
+    // 让上层重试循环顶部的 closed 判序立即 break（也不白等一轮 sleep）。
+    if (this.closed) return Promise.resolve()
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.retryTimers.delete(timer)

@@ -97,6 +97,9 @@ const edgeTtsBuild = {
   logLevel: 'info',
 }
 const edgeTtsResult = await buildAtomically(edgeTtsBuild)
+// 构建期工件登记（R14 Minor-4）：.msedge-tts.meta.json 无运行期加载方（仅
+// scripts/gen-third-party-notices.mjs 消费，且该脚本每次重写它）——「写一半」窗口
+// 的最坏后果是下次生成 notices 时读到残 file 而重跑一次，不影响运行期，故不走原子写。
 writeFileSync(join('lib', '.msedge-tts.meta.json'), JSON.stringify(edgeTtsResult.metafile))
 
 // --- host half: plain ESM cordis plugin; runtime deps stay external ---
@@ -128,7 +131,10 @@ await buildAtomically({
 })
 
 // --- SenseVoice 定稿解码 worker（P4-1 离主线程）：独立 ESM，主线程 new Worker 加载 ---
-await build({
+// R14 Minor-4：走 buildAtomically——与 tts-vits-worker.cjs 同型「运行期被 new Worker
+// 加载的产物」，直接 build 覆盖存在「写一半被加载」窗口（热重载/预览恰在 rebuild 期间
+// 起 worker → 加载到半截文件 → worker 线程 MODULE_NOT_FOUND/语法错，真机实测复现过多例）。
+await buildAtomically({
   entryPoints: ['src/sense-worker.ts'],
   outfile: 'lib/sense-worker.mjs',
   bundle: true,
