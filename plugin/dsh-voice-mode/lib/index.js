@@ -1080,8 +1080,9 @@ var EdgeTtsEngine = class {
     this.rate = rate;
   }
   mime = "audio/mpeg";
-  // 云端引擎可并发预合成（阵列 pump 会同时跑 3 句，减少句间空白）。
-  concurrency = 3;
+  // 串行合成：一句一句按顺序合成，完成的音频直接下发；
+  // 客户端把收到的句子按顺序排队播放，相当于一个带缓存的消费队列。
+  concurrency = 1;
   updateVoice(voice, rate) {
     this.voice = voice;
     if (rate !== void 0 && Number.isFinite(rate)) this.rate = rate;
