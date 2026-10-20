@@ -154,9 +154,12 @@ function makeEngine(bargeInMode) {
   )
 }
 
-/** 经 worklet 节点推语音帧（假时钟 64ms/帧）直到至少一条 partial 上行。 */
-async function speakUntilPartial(hold = false) {
-  if (hold) capturedNode // noop（beginHeld 由调用方先调）
+/**
+ * 经 worklet 节点推语音帧（假时钟 64ms/帧）直到至少一条 partial 上行。
+ * manual 用例由调用方先调 eng.beginHeld()（入口门 :829 只放行按压帧）——本辅助不持有
+ * engine 引用，故不代劳（R12 Minor-6：删掉未用的 hold 形参和空转行）。
+ */
+async function speakUntilPartial() {
   for (let i = 0; i < 12 && host.partialUrls.length === 0; i++) {
     NOW += (FRAME / SR) * 1000
     capturedNode.port.onmessage({ data: new Float32Array(FRAME).fill(SPEECH_AMP) })
@@ -198,7 +201,7 @@ await t('detect + aecOn=false → partial URL 带 &manual=1（外放防回声自
   await settle()
   // manual 模式 handleAudio 入口丢非按压帧——先 beginHeld 才有请求上行
   eng.beginHeld()
-  await speakUntilPartial(true)
+  await speakUntilPartial()
   assert.ok(
     host.partialUrls.every((u) => u.includes('manual=1')),
     `aecOn=false 应解析为 manual（URL 应带 manual=1）：${host.partialUrls[0]}`,
@@ -228,7 +231,7 @@ await t('显式 manual + aecOn=true → 仍 manual（探测不升级显式值）
   await eng.start()
   await settle()
   eng.beginHeld()
-  await speakUntilPartial(true)
+  await speakUntilPartial()
   assert.ok(
     host.partialUrls.every((u) => u.includes('manual=1')),
     `显式 manual 不得被 aecOn 探测升级为 auto：${host.partialUrls[0]}`,

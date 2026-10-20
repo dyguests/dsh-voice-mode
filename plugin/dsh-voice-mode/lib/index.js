@@ -873,10 +873,15 @@ function createAsrRuntime(options) {
     // 内部 5s 上限防止慢模型下载 hang 住 enterMode（失败/超时静默降级走 finalize 时 race）。
     warmupSense: async () => {
       if (!senseVoice()) return;
+      let warmupTimer = null;
       await Promise.race([
         getSenseWorker().then(() => void 0).catch(() => void 0),
-        new Promise((resolve) => setTimeout(resolve, 5e3))
-      ]);
+        new Promise((resolve) => {
+          warmupTimer = setTimeout(resolve, 5e3);
+        })
+      ]).finally(() => {
+        if (warmupTimer) clearTimeout(warmupTimer);
+      });
     },
     // 批 A：仅清缓存键——不 dispose recognizer/senseWorker，避免破坏 I1（in-flight
     // finalize 拿到的旧 recognizer 引用被 free 会丢句）。让现有 fingerprint-gated 路径
@@ -1250,8 +1255,21 @@ var TtsQueue = class {
       this.listeners.delete(listener);
     };
   }
+  /**
+   * I-1（Issue #15 R12）：关闭闸门。close() 最早期置位，此后：
+   *  · enqueue 不再入队/起泵；
+   *  · pump 入口直接返回；
+   *  · pump while 不再取新句（在途那句已发出的 synthesize 允许自然结束——无法取消，
+   *    但其结果不再广播，因为客户端已断开、广播无接收方）；
+   *  · finally 的 pending>0 分支不再重排（即时重启与 backoff timer 都不排）。
+   * 缺此闸门时 close 后仍会触达 engine.synthesize，而 tts-local 的 close() 已把
+   * child/childInit/ready 全置 null → ensureReady 首行守卫失效 → 重走模型校验 + fork
+   * 新子进程（热重载每代泄漏一个孤儿子进程）。详见 close() 处注释。
+   */
+  closed = false;
   /** 为某会话入队一句；若泵空闲则启动。 */
   enqueue(sessionId, text) {
+    if (this.closed) return;
     let q = this.queues.get(sessionId);
     if (!q) {
       q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 };
@@ -1286,10 +1304,11 @@ var TtsQueue = class {
     this.queues.delete(sessionId);
   }
   async pump(sessionId, q) {
-    if (q.busy) return;
+    if (this.closed || q.busy) return;
     q.busy = true;
     try {
       while (q.pending.length > 0) {
+        if (this.closed) break;
         const item = q.pending.shift();
         const MAX_SYNTH_ATTEMPTS = 3;
         let buf = null;
@@ -1305,6 +1324,7 @@ var TtsQueue = class {
             }
           }
         }
+        if (this.closed) break;
         if (item.epoch !== q.epoch) continue;
         if (buf === null) {
           q.failStreak++;
@@ -1355,6 +1375,7 @@ var TtsQueue = class {
     } finally {
       q.busy = false;
       if (this.queues.get(sessionId) !== q) return;
+      if (this.closed) return;
       if (q.pending.length > 0) {
         const delay = q.errorNotified ? q.backoff : 0;
         q.backoff = Math.min(8e3, delay + 1e3);
@@ -1369,6 +1390,7 @@ var TtsQueue = class {
     }
   }
   async close() {
+    this.closed = true;
     for (const timer of this.backoffTimers) clearTimeout(timer);
     this.backoffTimers.clear();
     await this.engine.close();

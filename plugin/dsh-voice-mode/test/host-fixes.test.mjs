@@ -620,4 +620,159 @@ await t('M7①：在途初始化完成于 dispose 之后 → worker 被 terminat
   }
 })
 
+// R12 验真轮补锁（Minor-4）：验真代理变异实测——去掉 IIFE 入口判序（asr-host.ts:419-420）
+// 全套件 51 文件全绿（入口判序零锁），只有去掉 create 后判序（:446-451）才红（即上方
+// 用例）。以下两条路径各自独立覆盖入口判序，共享本文件的 sense 桩计数器（clients/
+// terminated 为模块级，故一律用增量口径 c0/t0）。
+await t('M7①路径①（入口判序）：dispose 先于初始化启动 → 根本不起初始化（clients 不增）', async () => {
+  const c0 = globalThis.__m7a.clients()
+  const t0 = globalThis.__m7a.terminated()
+  const rt = createAsrRuntimeM7a({
+    cacheDir: m7aTmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => true,
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto',
+  })
+  try {
+    rt.reset('s-m7a-entry')
+    rt.dispose() // dispose 先于任何初始化到达
+    // 非 final feed：prewarm 路径（fire-and-forget）触发 getSenseWorker——IIFE 入口
+    // 判序（senseDisposed）应在 ensureSenseModel/Worker/create 之前拦住。
+    await rt.feed('s-m7a-entry', new Float32Array(1600).fill(0.1), false, 0, 0, true).catch(() => {})
+    await sleep(400) // 无入口判序时 IIFE 足以走到 createSenseWorkerClient
+    assert.equal(
+      globalThis.__m7a.clients(),
+      c0,
+      '入口判序失效：dispose 后仍走完 ensure+Worker+create（clients 增）——白跑一套初始化且 worker 线程泄漏',
+    )
+    assert.equal(globalThis.__m7a.terminated(), t0, '入口判序生效时根本不该建 client（无 terminate 增量）')
+  } finally {
+    // runtime 已 dispose；IIFE 若被入口判序拦下则无悬挂（finally 内 syncing 已清）。
+  }
+})
+
+await t('M7①路径②（入口判序）：dispose 后再次 getSenseWorker 不得新建 client（clients 不增）', async () => {
+  const c0 = globalThis.__m7a.clients()
+  const rt = createAsrRuntimeM7a({
+    cacheDir: m7aTmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => true,
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto',
+  })
+  try {
+    rt.reset('s-m7a-again')
+    // 第一次：正常初始化（放行 create → client 落地为 senseWorker）
+    await rt.feed('s-m7a-again', new Float32Array(1600).fill(0.1), false, 0, 0, true).catch(() => {})
+    await sleep(400)
+    assert.equal(globalThis.__m7a.clients(), c0 + 1, '前置条件：第一次应建成 1 个 sense client')
+    globalThis.__m7a.releaseCreate()
+    await sleep(300) // 等 IIFE 完成（senseWorker = client）
+    rt.dispose() // terminate 旧 client；senseWorkerSyncing 清空
+    // dispose 后再触发一次 getSenseWorker：syncing 已清 → 会起**新** IIFE，唯有入口
+    // 判序（senseDisposed）拦得住。
+    await rt.feed('s-m7a-again', new Float32Array(1600).fill(0.1), false, 0, 0, true).catch(() => {})
+    await sleep(400)
+    assert.equal(
+      globalThis.__m7a.clients(),
+      c0 + 1,
+      '入口判序失效：dispose 后再次 getSenseWorker 新建了 client——新 worker 线程泄漏（syncing 已清，无陈旧 promise 兜底）',
+    )
+  } finally {
+    // runtime 已 dispose。
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Minor-3（Issue #15 R12）：warmupSense 的 5s race timer——同型反模式第三处
+// （前两处：senseP :620-629 持句柄+finally clear、listEdgeVoices :177-185）。
+// 早年该 timer 为 ref'd 且无句柄：每次 /toggle on（index.ts await asr.warmupSense()）
+// 都留一个 ≤5s 的悬挂 ref'd timer，关停窗口内拖住 host 自然退出。
+// 按 OQ-3 裁定不取 unref（与另两处一致）。用独立 bundle/stub：create 立即成功，
+// 使 race 由 getSenseWorker 胜出——只有这样 5s timer 才会被剩下，才能观测到未 clear。
+// ---------------------------------------------------------------------------
+console.log('R11：warmupSense 的 5s race timer 落定即 clear')
+
+const m3Tmp = join(tmpdir(), 'dsh-vm-m3-fix')
+mkdirSync(m3Tmp, { recursive: true })
+writeFileSync(join(m3Tmp, 'sherpa-stub.mjs'), `
+export function createOnlineRecognizer() {
+  return {
+    createStream: () => ({ acceptWaveform: () => {}, clear: () => {}, free: () => {} }),
+    isReady: () => false, decode: () => {}, getResult: () => ({ text: '' }), free: () => {},
+    config: { featConfig: { sampleRate: 16000 } },
+  }
+}
+export function createVad() {
+  return {
+    acceptWaveform: () => {}, isDetected: () => false, isEmpty: () => true,
+    front: () => ({ samples: new Float32Array(0), start: 0 }), pop: () => {},
+    clear: () => {}, free: () => {},
+  }
+}
+export default { createOnlineRecognizer, createVad }
+`)
+writeFileSync(join(m3Tmp, 'models-stub.mjs'), `
+export const HOST_PRIMARY = 'https://huggingface.co'
+export function validateModelHost(h, _a) { return h || HOST_PRIMARY }
+export async function ensureModelFile() { return true }
+export async function ensureModelTree() { return true }
+`)
+// create 立即成功：race 由 getSenseWorker 胜出，5s timer 被剩下（未 clear 即可观测）。
+writeFileSync(join(m3Tmp, 'sense-stub.mjs'), `
+export function createSenseWorkerClient() {
+  return { request: async () => true, onDeath: () => {}, terminate: async () => {} }
+}
+`)
+writeFileSync(join(m3Tmp, 'sense-worker.mjs'), '// 桩占位\n')
+const m3Bundle = join(m3Tmp, 'asr-host.bundle.mjs')
+await build({
+  entryPoints: [join(here, '..', 'src', 'asr-host.ts')],
+  outfile: m3Bundle,
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  alias: { 'sherpa-onnx': join(m3Tmp, 'sherpa-stub.mjs') },
+  plugins: [
+    { name: 'stub-models', setup(b) { b.onResolve({ filter: /\.\.?\/models\.ts$/ }, () => ({ path: join(m3Tmp, 'models-stub.mjs') })) } },
+    { name: 'stub-sense', setup(b) { b.onResolve({ filter: /\.\.?\/sense-worker\.ts$/ }, () => ({ path: join(m3Tmp, 'sense-stub.mjs') })) } },
+  ],
+  logLevel: 'silent',
+})
+const { createAsrRuntime: createAsrRuntimeM3 } = await import(pathToFileURL(m3Bundle).href)
+
+await t("Minor-3：warmupSense 返回后无新增悬挂 ref'd Timeout（5s race timer 已 clear）", async () => {
+  const rt = createAsrRuntimeM3({
+    cacheDir: m3Tmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => true,
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto',
+  })
+  try {
+    // 增量断言：runtime 自带 sweep interval（1 个 ref'd Timeout），只看「不增加」。
+    const before = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+    await rt.warmupSense()
+    await sleep(80) // 让 microtask/IO 排空后再采样
+    const after = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+    assert.equal(
+      after,
+      before,
+      `新增 ${after - before} 个悬挂 ref'd Timeout——5s race timer 未 clear（每次 /toggle on 留一个，关停窗口内拖住 host 退出）`,
+    )
+  } finally {
+    rt.dispose()
+  }
+})
+
 console.log(`\nhost-fixes：${passed} 项通过`)

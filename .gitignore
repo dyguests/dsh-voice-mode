@@ -23,6 +23,5 @@ docs/storefront-assets.md
 plugin/dsh-voice-mode/scripts/release.sh
 plugin/dsh-voice-mode/scripts/check-dsh-version.sh
 
-# 构建中间产物
+# 构建中间产物（产物只在 plugin/dsh-voice-mode/lib/，仓库根无 lib/ 产物）
 plugin/dsh-voice-mode/lib/.msedge-tts.meta.json
-lib/.msedge-tts.meta.json

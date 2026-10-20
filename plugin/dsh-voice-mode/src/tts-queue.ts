@@ -311,8 +311,22 @@ export class TtsQueue {
     }
   }
 
+  /**
+   * I-1（Issue #15 R12）：关闭闸门。close() 最早期置位，此后：
+   *  · enqueue 不再入队/起泵；
+   *  · pump 入口直接返回；
+   *  · pump while 不再取新句（在途那句已发出的 synthesize 允许自然结束——无法取消，
+   *    但其结果不再广播，因为客户端已断开、广播无接收方）；
+   *  · finally 的 pending>0 分支不再重排（即时重启与 backoff timer 都不排）。
+   * 缺此闸门时 close 后仍会触达 engine.synthesize，而 tts-local 的 close() 已把
+   * child/childInit/ready 全置 null → ensureReady 首行守卫失效 → 重走模型校验 + fork
+   * 新子进程（热重载每代泄漏一个孤儿子进程）。详见 close() 处注释。
+   */
+  private closed = false
+
   /** 为某会话入队一句；若泵空闲则启动。 */
   enqueue(sessionId: string, text: string): void {
+    if (this.closed) return // I-1：关闭后不入队、不起泵（否则会以 closed 状态再调 synthesize）
     let q = this.queues.get(sessionId)
     if (!q) {
       q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 }
@@ -359,10 +373,11 @@ export class TtsQueue {
   }
 
   private async pump(sessionId: string, q: SessionQueue): Promise<void> {
-    if (q.busy) return
+    if (this.closed || q.busy) return // I-1：关闭后不起泵
     q.busy = true
     try {
       while (q.pending.length > 0) {
+        if (this.closed) break // I-1：关闭后不再取新句（防 close 后继续 synthesize）
         const item = q.pending.shift()!
         // 单句合成有界重试：Edge 云端 WebSocket 偶发 ETIMEDOUT（实测日志），
         // 失败即静默丢句会表现为「长话没规律跳过几句」——重试 3 次、退避后仍失败才跳过。
@@ -380,6 +395,9 @@ export class TtsQueue {
             }
           }
         }
+        // I-1：关闭后不广播——在途那句的 synthesize 允许自然结束（无法取消），但其
+        // 结果已无接收方（客户端 SSE 已断），继续广播只会往断开的连接写帧。
+        if (this.closed) break
         if (item.epoch !== q.epoch) continue
         if (buf === null) {
           // 重试耗尽：跳过该句（不阻塞队列），但**显式通知**调用方——静默丢句在真机上
@@ -444,6 +462,9 @@ export class TtsQueue {
       // 防御：prune 后同会话立即重入时，孤儿泵不得带着残余 pending 重启
       // （否则与新的 SessionQueue 双泵并行合成）。
       if (this.queues.get(sessionId) !== q) return
+      // I-1：关闭后不重排——即时重启与 backoff timer 都不排（close 的 clear 之后
+      // 不得再有新 timer 入集，否则又是同一条泄漏链）。
+      if (this.closed) return
       if (q.pending.length > 0) {
         // 失败退避：1s 指数递增至多 8s；成功/无错误即时。
         const delay = q.errorNotified ? q.backoff : 0
@@ -461,6 +482,18 @@ export class TtsQueue {
   }
 
   async close(): Promise<void> {
+    // I-1（Issue #15 R12）：closed 闸门必须最早期置位——早于清 timer 与关引擎。
+    // M7② 只清了 backoff timer，但 close 后仍有三条路能触达 synthesize：
+    //  1) enqueue 无守卫直接 void this.pump()（实测 close 后 enqueue 会以 closed=true
+    //     再调一次 synthesize）；
+    //  2) pump 的 while 在 await synthesize 期间不判 close，放行后继续取下一句；
+    //  3) finally 的 pending>0 分支既走即时重启也走新排 backoff timer（close 的 clear
+    //     之后再入集）。
+    // 后果链：tts-local 的 close() 把 child/childInit/ready 全置 null → ensureReady 首行
+    // `if (ready && child) return ready` 守卫失效 → 完整重走模型校验 + fork 新子进程——
+    // 插件已卸载却留下孤儿子进程（热重载常态路径，非异常路径）。dispose 路径只
+    // void queue.close() 不 cancel 不 prune，故闸门必须自成闭环。
+    this.closed = true
     // M7②：先取消所有待触发的退避重启，再关引擎——否则计时器会在 close 后触发 pump，
     // 让本地引擎 ensureReady() 重新 fork 出一个孤儿子进程（热重载泄漏）。
     for (const timer of this.backoffTimers) clearTimeout(timer)

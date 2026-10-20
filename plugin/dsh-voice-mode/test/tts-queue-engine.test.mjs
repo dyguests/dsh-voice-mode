@@ -193,4 +193,49 @@ await t('M7②：close() 取消退避重启计时器，close 后 pump 不得再�
   )
 })
 
+// ---------------------------------------------------------------------------
+// I-1（Issue #15 R12，Important）：TtsQueue 缺 closed 闸门。
+// 泄漏链（热重载常态路径，非异常路径）：close() 后仍有三条路触达 engine.synthesize——
+//  1) enqueue 无守卫直接 void this.pump()；
+//  2) pump while 在 await synthesize 期间不判 close，放行后继续取下一句；
+//  3) finally 的 pending>0 分支走即时重启或新排 backoff timer（close 的 clear 之后再入集）。
+// 后果：tts-local 的 close() 已把 child/childInit/ready 全置 null → ensureReady 首行
+// `if (ready && child) return ready` 守卫失效 → 完整重走模型校验 + fork 新子进程——
+// 插件已卸载却留下孤儿子进程。dispose 路径只 void queue.close() 不 cancel 不 prune，
+// 故闸门必须自成闭环。
+// 本用例复现 sweep 的场景：在途合成 + close + 放行 gate。
+// ---------------------------------------------------------------------------
+await t('I-1：close 闸门——在途合成放行后不广播、enqueue 不再起泵、无 synthesize@closed', async () => {
+  let release = null
+  let closed = false
+  const calls = []
+  const frames = []
+  const eng = {
+    mime: 'audio/wav',
+    updateVoice() {},
+    async synthesize(text) {
+      calls.push(`${text}@closed=${closed}`)
+      if (text === 'A') await new Promise((r) => { release = r }) // 首句挂在合成中
+      return Buffer.from('RIFF')
+    },
+    async close() { closed = true },
+  }
+  const q = new TtsQueue({ engine: eng })
+  q.subscribe((f) => frames.push(f))
+  q.enqueue('s1', 'A') // 泵启动，首句合成在途
+  await sleep(50)
+  await q.close() // 在途合成期间 close（热重载/dispose 的真实时序）
+  release() // 放行 gate：在途 synthesize 在此刻完成
+  await sleep(120)
+  // 在途那句允许完成（synthesize 已发出、无法取消），但其结果不得广播。
+  assert.equal(frames.length, 0, 'close 后仍广播帧——客户端 SSE 已断，广播无接收方')
+  assert.deepEqual(calls, ['A@closed=false'], 'close 后不得再有 synthesize 调用')
+  // close 后再 enqueue：不得起泵、不得以 closed 状态调 synthesize。
+  q.enqueue('s1', 'C')
+  await sleep(200)
+  assert.deepEqual(calls, ['A@closed=false'], 'close 后 enqueue 又起了泵——会以 closed 状态调 synthesize（本地引擎随之重走模型校验 + fork）')
+  assert.equal(frames.length, 0, 'close 后 enqueue 仍产生广播')
+  await q.close()
+})
+
 console.log(`\ntts-queue-engine：${passed} 项通过`)

@@ -852,10 +852,20 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
     warmupSense: async (): Promise<void> => {
       if (!senseVoice()) return // 关闭时不预热（与 warmup() 语义对齐，遵守 I10）
       // 5s 上限：典型冷启动 2-5s；超过则上层 fallback 不阻塞 /toggle 返回。
+      // Minor-3（Issue #15 R12）：持句柄 + race 落定即 clear——同型反模式第三处
+      // （前两处：senseP :620-629、listEdgeVoices :177-185）。早年该 timer 为 ref'd
+      // 且无句柄：每次 /toggle on（index.ts await asr.warmupSense()）都留一个 ≤5s 的
+      // 悬挂 ref'd timer，关停窗口内拖住 host 自然退出。按 OQ-3 裁定不取 unref，
+      // 与另两处修法一致。
+      let warmupTimer: ReturnType<typeof setTimeout> | null = null
       await Promise.race([
         getSenseWorker().then(() => undefined).catch(() => undefined),
-        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-      ])
+        new Promise<void>((resolve) => {
+          warmupTimer = setTimeout(resolve, 5000)
+        }),
+      ]).finally(() => {
+        if (warmupTimer) clearTimeout(warmupTimer)
+      })
     },
     // 批 A：仅清缓存键——不 dispose recognizer/senseWorker，避免破坏 I1（in-flight
     // finalize 拿到的旧 recognizer 引用被 free 会丢句）。让现有 fingerprint-gated 路径

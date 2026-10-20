@@ -103,6 +103,44 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 - 计数（**R4 时点**；终态 618 ✓ / 51 文件——R9 后 616（+5 barge-in-detect-behavior）、R11 后 618（+2 M7 行为回归），沿革见 STATE 账本）：`npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；`scripts.test` 链 50 个文件调用）。沿革：R1 41 文件/518 项 → R2 48 文件/583 项 → R3 49 文件/603 项（+20）→ R4 50 文件/611 项（**+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16**）。
 - **行为级测试 74 项**（fix-test scope 枚举口径，**R4 时点**；终态 81 项 = 74 + barge-in-detect-behavior 5 + host-fixes/tts-queue-engine M7 行为回归 2）：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（余 13 条合同级）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
 
+### Issue #15 R5 修复轮（R4 验真轮 2 Important；2026-10-20，`0763966`）
+
+**修复（用户可见）**
+
+- **echo-tail 假绿修复**：`echo-tail.test.mjs` 复辟 R2-B1 同款反模式（同步 `t()` + async 用例浮动）——修复前「✓ 假绿 + summary 提前打印 + 之后才崩」，400ms 回声尾音宽限的行为锁恢复可信（变异实证：宽限永不到期）。
+- **B1 缺陷类全库扫尾**：逐文件审计「t 定义形态 × async 用例体 × await 覆盖」，全库 B1 类残留为零（commit message 审计数字不可复现，更正注记见 `docs/rules/STATE.md`）。
+- **dangling hash 修正**：CHANGELOG/STATE 引用的 `ad824b4`（amend 前同树哈希、从未 push）→ `4916bd8` 并补可追溯说明。
+
+### Issue #15 R6-R8 勘误与口径治理（2026-10-20，`62698e5`+`77cb212`+`4230ba3`+`3cb2046`+`7997b4a`+`a549141`）
+
+**修复（文档事实准确性，用户可见的结论不再失真）**
+
+- **ADR-0008 假断言勘误两轮**：wakeEnabled「仅在 `/stay wake/` 时启用」（全仓零命中该符号）与「真机让位指令 = 0」（调研时点属实、落地后 ADR 未同步而 propagated）均改现态如实 + 勘误句。
+- **口径约定三条**（STATE）：轮次标签按验真轮发现归标签；基线取代码+lib 批（docs-only 提交不滚）；commit message 数字/叙述失准以 STATE 更正注记为准。
+- **计数口径滚动** 583/48 → 616/51 + 沿革落盘（「行为级 vs 全套件」双口径成文）；基线随收口批滚动、旧值移历史备查。
+
+### Issue #15 R9 收口轮（2026-10-20，`bb42829`+`fbf8834`+`567b26d`）
+
+**新增（用户可见）**
+
+- **一级自动探测行为锁**（`barge-in-detect-behavior` 5 项）：detect 模式按原生 AEC 状态落 auto/manual 的行为级锁定（计数 +5）。
+
+**修复（文档事实）**
+
+- **ADR-0006 item 3 假断言勘误**：「第一级自动探测仍未实现」→ 已实现（`503e83e`；`asr.ts:1134-1136`，运行时取值消费于 :301-302/:828-829），一级（已实现）/二级（待真机样本）探测辨析。
+- **全 ADR file:line 终态**（42 处刷新，逐处实测）：STATE Q1「ADR 行号全量同步」彻底关闭（锚点口径后于 R11 成文）。
+
+### Issue #15 R10-R11 最终收尾（2026-10-20，`c4e2c3a`+`7f1b0f4`+`44f8ce6`）
+
+**修复（用户可见，真实代码修复）**
+
+- **dispose 懒重建泄漏两处**（`c4e2c3a`）：dispose 路径资源释放顺序修正，修设置面板多次拉取音色后退出时的泄漏路径；附 M7 两处行为回归（host-fixes +1、tts-queue-engine +1；计数 616→618）。
+- **注释如实化 + 待决登记**：`needsRespawn` 死逻辑（M5）注释改如实，「Aborted 后是否允许同步重试」语义登记产品待决（当前恢复靠 tts-queue pump 3 次有界重试，功能不缺损）。
+
+**治理**
+
+- 锚点口径成文（现态锚点 + 漂移括注 + 历史时点例外）；第三方符号统一按符号定位；全仓 markdown 链接零坏链；计数终态 618 ✓ / 51 文件、行为级 81 项；基线滚至 `c4e2c3a`。
+
 ### 规划中
 
 - F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）

@@ -24,6 +24,12 @@ jobs:
       # typecheck 保持为本地门（需本机 dsh checkout 的 node_modules 提供真实宿主类型）。
       - name: Unit tests & manifest self-check
         run: npm test
+      # 锚点健康门（R12 入 CI）：dsh.client.inject 的 9 个锚点包在目标版本线
+      # （0.1.1-rc.2 / 0.1.2-alpha.4）的存在性。脚本走 registry HTTP（无子进程、
+      # 无宿主类型依赖、不需要 lib 产物），CI 有网即可跑——此前锚点漂移只能靠
+      # 本地门禁发现，升级 dsh 前先红一步，避免「升级后客户端静默挂不上」。
+      - name: Anchor health check
+        run: npm run check:anchors
       - name: Build
         run: npm run build
 
