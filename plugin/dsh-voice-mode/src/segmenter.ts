@@ -69,14 +69,41 @@ export function splitSentences(chunk: string): { sentences: string[]; tail: stri
 export class SentenceSegmenter {
   private buffer = ''
   private readonly maxChars: number
+  /** 是否处在 ``` 代码块内（跨 delta 有效：流式 delta 只有几个 token，代码块总是被切碎送达，
+   *  plainText 的整块正则匹配不到，代码会被逐句念出——「总是朗读」覆盖打字会话后尤其明显）。 */
+  private inFence = false
+  /** delta 末尾悬挂的 1-2 个反引号（可能是被切开的 ``` 前半）。 */
+  private ticks = ''
 
   constructor(options: SegmenterOptions = {}) {
     this.maxChars = options.maxSentenceChars ?? 200
   }
 
+  /** 去掉 ``` 代码块内容（状态跨 delta 保持）；进入代码块处补一个换行，让前面的文字先成句。 */
+  private dropFences(chunk: string): string {
+    let s = this.ticks + chunk
+    this.ticks = ''
+    const hang = /`{1,2}$/.exec(s)
+    if (hang) {
+      this.ticks = hang[0]
+      s = s.slice(0, -hang[0].length)
+    }
+    let out = ''
+    for (;;) {
+      const i = s.indexOf('```')
+      if (i < 0) {
+        if (!this.inFence) out += s
+        return out
+      }
+      if (!this.inFence) out += s.slice(0, i) + '\n'
+      this.inFence = !this.inFence
+      s = s.slice(i + 3)
+    }
+  }
+
   /** 喂入一段 raw delta，返回它补全的完整句子。 */
   feed(chunk: string): string[] {
-    const cleaned = plainText(chunk)
+    const cleaned = plainText(this.dropFences(chunk))
     if (!cleaned) return []
     this.buffer += cleaned
     const { sentences, tail } = splitSentences(this.buffer)
@@ -101,6 +128,8 @@ export class SentenceSegmenter {
   flush(): string[] {
     const t = sanitizeForTts(this.buffer).trim()
     this.buffer = ''
+    this.inFence = false
+    this.ticks = ''
     if (t && !SKIP_PREFIX.test(t)) return [t]
     return []
   }

@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases)](https://github.com/qishuilalala/dsh-voice-mode/releases)
 [![npm version](https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange)](https://www.npmjs.com/package/dsh-voice-mode)
-[![Tests: 647 passing](https://img.shields.io/badge/tests-647%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
+[![Tests: 653 passing](https://img.shields.io/badge/tests-653%20%E2%9C%93-2ea043?style=flat-square)](https://github.com/qishuilalala/dsh-voice-mode/blob/main/docs/rules/STATE.md)
 
 DeepSeek Harness 语音双工对话模式：会话内一键进入 → 边说边出字的流式识别 → 停顿自动发送 → 最终答复按句流式朗读 + 实时字幕，开口即可打断（真 barge-in）。无需 API Key，识别模型在本地宿主端推理。
 
@@ -29,7 +29,9 @@ dsh ≥0.1.7 上按钮挂在发送键左侧（`conversation.input.activity`）�
 - 状态条与字幕默认开启；两项都关掉即上图的「全部收进按钮」形态，此时录音计时显示在按钮下方、提示文字显示在按钮旁
 
 
-> **运行时变更（最近：v0.7.18 ~ v0.7.24）**：① **设置面全版本打通**——dsh 0.1.7+ 上设置页与持久化修复（Settings → 语音模式 专属页、写入与重启保留）；② **国际化重做**——界面语言跟随 dsh 官方语言设置，中/英文完整一致、切换无需刷新；③ **修复 npm/pnpm 全新安装失败与 dsh ≥0.1.7 已安装形态「failed to import」**（0.7.17 及更早版本受影响，请升级到 ≥0.7.18）；④ **官方桌面端（Electron）下本地 Kokoro 修复**——需系统 PATH 上有 Node.js ≥18（或设 `DSHVM_NODE`）；⑤ **v0.7.24：恢复 Edge 云端朗读**——微软服务端自 2026-10-15 起拒绝旧版握手（v0.7.23 及更早的默认 Edge 朗读无声，本地 VITS / Kokoro 不受影响），内联的 msedge-tts 升到 2.1.0；朗读**连续失败时**会提示切换本地引擎；另有 host 加固（`/models/retry` 仅同源 POST、模型树路径校验、错误原文不下行）。兼容 dsh 至 0.2.1-rc.2（0.2.1-alpha.4/5 起设置入口移入侧栏底部「Account menu」弹出层，本插件两处入口仍有效）。
+> **最近两版**：**v0.7.27** 麦克风按钮即状态面板 + 右键快捷设置 + 说完就关 + 总是朗读（PR #16，@dyguests 贡献）；**v0.7.26** issue #15 体验反馈处置（打断不吃句、运行中插话、实时回填输入框、发送延迟解耦、可选 LLM 纠错、设置生效可见、静默故障提示）。完整记录见 [CHANGELOG](https://github.com/qishuilalala/dsh-voice-mode/blob/main/CHANGELOG.md)。
+>
+> **运行时变更（v0.7.18 ~ v0.7.24）**：① **设置面全版本打通**——dsh 0.1.7+ 上设置页与持久化修复（Settings → 语音模式 专属页、写入与重启保留）；② **国际化重做**——界面语言跟随 dsh 官方语言设置，中/英文完整一致、切换无需刷新；③ **修复 npm/pnpm 全新安装失败与 dsh ≥0.1.7 已安装形态「failed to import」**（0.7.17 及更早版本受影响，请升级到 ≥0.7.18）；④ **官方桌面端（Electron）下本地 Kokoro 修复**——需系统 PATH 上有 Node.js ≥18（或设 `DSHVM_NODE`）；⑤ **v0.7.24：恢复 Edge 云端朗读**——微软服务端自 2026-10-15 起拒绝旧版握手（v0.7.23 及更早的默认 Edge 朗读无声，本地 VITS / Kokoro 不受影响），内联的 msedge-tts 升到 2.1.0；朗读**连续失败时**会提示切换本地引擎；另有 host 加固（`/models/retry` 仅同源 POST、模型树路径校验、错误原文不下行）。兼容 dsh 至 0.2.1-rc.2（0.2.1-alpha.4/5 起设置入口移入侧栏底部「Account menu」弹出层，本插件两处入口仍有效）。
 
 ---
 

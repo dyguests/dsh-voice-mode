@@ -12,12 +12,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue" alt="License: MIT"></a>
   <a href="https://github.com/qishuilalala/dsh-voice-mode/releases"><img src="https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases" alt="Latest release"></a>
   <a href="https://www.npmjs.com/package/dsh-voice-mode"><img src="https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange" alt="npm version"></a>
-  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-647%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 647 passing"></a>
+  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-653%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 653 passing"></a>
 </p>
 
 ![dsh-voice-mode 全双工语音对话](assets/hero-banner.png)
 
-> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-rc.2，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§20）。647 项测试全绿（52 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
+> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-rc.2，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§20）。653 项测试全绿（52 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
 
 ---
 
@@ -30,6 +30,20 @@
 - ⏸️ **随时打断** —— AI 还在朗读时**开口即打断**，你的话直接被听见。
 
 **零 API Key**：识别在宿主端**本地推理**（**zipformer2** 流式 + SenseVoice 定稿）；朗读默认 **Edge 云端**（快、自然），可选本地 **VITS** 纯中文 / **Kokoro** 中英混读（回复文本不出本机，隐私优先）。
+
+---
+
+## 🆕 最近更新
+
+**v0.7.27 —— 麦克风按钮即状态面板**（社区贡献 [@dyguests](https://github.com/dyguests)，PR #16）
+- 🎛️ 按钮挂到发送键旁，状态全写在按钮上：聆听绿条、朗读蓝条随音量跳动，出错红点、说话橙点；**右键**一键切交互模式 / 朗读范围 / 字幕 / 状态条
+- 🔁 **说完就关**（`mode: once`）：说一句 → 自动发送 → 读完回复 → 自动退出，适合偶尔问一句
+- 📖 **总是朗读**（`readAloud: always`）：打字发的消息也读出来；代码块自动跳过；点一下按钮就停
+
+**v0.7.26 —— 用户体验反馈全面处置**（[issue #15](https://github.com/qishuilalala/dsh-voice-mode/issues/15)）
+- ✋ 打断不再吃句：AI 朗读时开口，你说的话会被完整保留并转写
+- ⚡ 任务运行中开口直接插话，不再排队等待
+- ✍️ 识别中的文字实时写进输入框；发送等待与断句阈值解耦；可选 LLM 纠错
 
 ---
 
@@ -50,6 +64,8 @@
 3. 🤝 **让位** —— 让位语义 + 三档打断灵敏度（`interruptLevel`），外放也能精准打断
 4. 💬 **有感情** —— 本地 Kokoro 103 音色 + Edge 322 音色，行内可试听；分段朗读不漏句
 5. 👁️ **字幕 a11y** —— 4 档字号 + 3 档宽度，浅色主题变量跟随 dsh 主题
+6. ✋ **打断不吃句** —— 朗读中开口打断，打断前说的话自动并入识别；任务运行中开口直接插话
+7. 🔁 **三种交互** —— 持续聆听 / 按住说话 / 说完就关；朗读范围可选语音模式 / 总是 / 关闭
 
 ---
 
@@ -209,7 +225,7 @@ flowchart LR
 | [完整使用说明（中文）](plugin/dsh-voice-mode/README.md) | 功能 / 手势 / 设置 / 配置 / 已知限制 / 故障排查 |
 | [English docs](plugin/dsh-voice-mode/README.en.md) | Same, in English |
 | [docs/ 索引](docs/README.md) | 架构决策 / 实施计划 / 真机验收 / 规则 / 调研 / 竞品 |
-| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 647 项） |
+| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 653 项） |
 | [CHANGELOG.md](CHANGELOG.md) | Keep a Changelog 格式 |
 | [RELEASE-NOTES.md](RELEASE-NOTES.md) | 60 天时间线 |
 

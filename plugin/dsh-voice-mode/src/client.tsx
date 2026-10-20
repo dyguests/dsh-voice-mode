@@ -260,8 +260,12 @@ interface VoiceBus {
   playbackLevel(): number
   /** 当前可见会话（readAloud=always 时接收它的朗读帧，不依赖语音模式）。 */
   setFocusedSession(sessionId: string | null): void
-  /** 停止朗读：停当前句 + 清 host 队列 + 本回合剩余句不再播（下一次 agent-speaking 自动解除）。 */
-  stopReading(): void
+  /** 停止朗读：停当前句 + 清 host 队列 + 这次回复剩余的句子不再播。
+   *  untilNextRun=true：到用户下一次发起回合（runStarted）才解除——同一回合里工具调用后的后续作答也不读；
+   *  false（宿主拿不到 running 时）：下一次 agent-speaking 即解除。 */
+  stopReading(untilNextRun?: boolean): void
+  /** 会话开始新回合（running 上升沿）：解除「停止朗读」。 */
+  runStarted(sessionId: string): void
   /** isPlaying 尾音截止墙钟：playing 或回声尾音宽限期内均视为「AI 正在朗读」。 */
   playingTailUntil(): number
 }
@@ -301,12 +305,10 @@ const WAVE_BARS = 14
 const BASE_PATH = '/voice-mode'
 /** 右键菜单读写设置所需的 scope 子集（与设置卡片同源）。 */
 interface MenuScope {
-  getSnapshot(): { value?: Record<string, unknown> }
+  getSnapshot(): { status?: string; value?: Record<string, unknown> }
   subscribe(fn: () => void): () => void
   set(field: string, value: unknown): unknown
 }
-/** 设置卡片/右键菜单写入成功后广播：即时生效的显示类设置据此刷新。 */
-const SETTINGS_CHANGED_EVENT = 'dshvm-settings-changed'
 /** 即时生效的显示类设置（朗读范围/字幕浮层/状态条）：不走「下次进入生效」的 fetchConfig 快照。 */
 function displaySettings(c: Partial<VoiceBootConfig>): Pick<VoiceBootConfig, 'readAloud' | 'showCaptions' | 'showStatusBar'> {
   return {
@@ -314,16 +316,6 @@ function displaySettings(c: Partial<VoiceBootConfig>): Pick<VoiceBootConfig, 're
     showCaptions: c.showCaptions !== false,
     showStatusBar: c.showStatusBar !== false,
   }
-}
-/** 设置 scope 包一层：写入成功后广播 SETTINGS_CHANGED_EVENT（Object.create 保留原型方法与 this）。 */
-function withChangeEvent<S extends { set(field: string, value: unknown): Promise<unknown> }>(scope: S): S {
-  const wrapped = Object.create(scope) as S
-  wrapped.set = async (field, value) => {
-    const r = await scope.set(field, value)
-    window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT))
-    return r
-  }
-  return wrapped
 }
 /** 「停止朗读」的拒绝线：本回合剩余句全部不播，下一次 agent-speaking 解除。 */
 const STOP_READING_LINE = Number.MAX_SAFE_INTEGER
@@ -409,20 +401,57 @@ export function apply(ctx: any): void {
   // 麦克风按钮：dsh ≥0.1.7 挂 conversation.input.activity（模型选择器之后、发送键之前，与发送键同排）；
   // 更早的版本没有该槽位，退回 conversation.input.right。activity 是 single 槽位（dsh 自带的实验性
   // 语音输入 bundle 也用它，二者同开时后注册者遮住前者）。两处都注册，但 right 里的只在 activity
-  // 从未声明时才渲染——同一页面只出现一个麦克风（各持一套录音引擎与快捷键监听，不能并存）。
-  let activitySlot = false
+  // 没真正挂上时才渲染——同一页面只出现一个麦克风（各持一套录音引擎与快捷键监听，不能并存）。
+  // 「挂上」以组件实际挂载为准：activity 是 single 槽位，被别的注册者（如 dsh 实验性语音输入）遮住时
+  // 我们的按钮根本不渲染，right 里的兜底必须顶上，否则麦克风和快捷键一起消失。
+  const activity = { declared: false, mounted: 0, listeners: new Set<() => void>() }
+  const activityChanged = (): void => activity.listeners.forEach((fn) => fn())
+  const ActivityMic = (props: MicProps): React.ReactElement => {
+    useEffect(() => {
+      activity.mounted++
+      activityChanged()
+      return () => {
+        activity.mounted--
+        activityChanged()
+      }
+    }, [])
+    return React.createElement(MicButton, props)
+  }
+  const RightMic = (props: MicProps): React.ReactElement | null => {
+    // activity 槽位存在时：它的按钮连续 1.5s 都没挂上（被遮住）才由 right 兜底；会话切换时
+    // activity 按钮短暂卸载再挂载，这个窗口里不能闪出第二个按钮（挂载即有自动恢复/焦点上报等副作用）。
+    const [show, setShow] = useState(() => !activity.declared)
+    useEffect(() => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const evaluate = (): void => {
+        clearTimeout(timer)
+        if (!activity.declared) setShow(true)
+        else if (activity.mounted > 0) setShow(false)
+        else timer = setTimeout(() => setShow(!activity.declared || activity.mounted === 0), 1500)
+      }
+      activity.listeners.add(evaluate)
+      evaluate()
+      return () => {
+        activity.listeners.delete(evaluate)
+        clearTimeout(timer)
+      }
+    }, [])
+    return show ? React.createElement(MicButton, props) : null
+  }
   ctx.slots.inject('conversation.input.activity', () => {
-    activitySlot = true
+    activity.declared = true
+    activityChanged()
     const dispose = ctx.slots.register(
       {
         name: 'conversation.input.activity',
         id: 'voice-mode',
         inject: (): VoiceSlotActions => ({ bus, scope }),
       },
-      MicButton,
+      ActivityMic,
     )
     return () => {
-      activitySlot = false
+      activity.declared = false
+      activityChanged()
       dispose?.()
     }
   })
@@ -434,7 +463,7 @@ export function apply(ctx: any): void {
         order: 80,
         inject: (): VoiceSlotActions => ({ bus, scope }),
       },
-      (props: MicProps) => (activitySlot ? null : React.createElement(MicButton, props)),
+      RightMic,
     ),
   )
 
@@ -468,20 +497,7 @@ export function apply(ctx: any): void {
   //  - 数据面：有 settingsScope（≤0.1.6）走官方设置存储；0.1.7+ 无该服务、官方存储拒写本插件条目
   //    （settings/rejected），走插件自己的 /voice-mode/settings。
   const settingsScope = (ctx as any).get?.('settingsScope')
-  const scope = withChangeEvent(settingsScope ? settingsScope.bind({ namespace: 'voice-mode' }) : createHttpScope())
-  // 显示类设置即时生效：页面加载时取一次，之后每次设置写入成功再取（不碰其余「下次进入生效」的字段）。
-  const refreshDisplay = (): void => {
-    void fetch(`${location.origin}${BASE_PATH}/config`)
-      .then((r) => (r.ok ? (r.json() as Promise<Partial<VoiceBootConfig>>) : null))
-      .then((c) => {
-        if (c) bus.setUi({ boot: { ...bus.ui.boot, ...displaySettings(c) } })
-      })
-      .catch(() => {})
-  }
-  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    refreshDisplay()
-    window.addEventListener(SETTINGS_CHANGED_EVENT, refreshDisplay)
-  }
+  const scope: MenuScope = settingsScope ? settingsScope.bind({ namespace: 'voice-mode' }) : createHttpScope()
   ctx.slots.inject('settings.plugin.item', () =>
     ctx.slots.register(
       {
@@ -756,6 +772,9 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   let focusedSessionId: string | null = null
   /** host 认定的「焦点标签页」：readAloud=always 只在它上面播，同一会话开多个标签页也不叠播。 */
   let focusOwnerTab: string | null = null
+  /** host 广播的语音模式归属：该会话在别的标签页语音模式中时，「总是朗读」让那个标签页播，本页不叠播。 */
+  let voiceActive: string | null = null
+  let voiceOwnerTab: string | null = null
   const busGen = ((globalThis as any)[BUS_GEN_KEY] = ((globalThis as any)[BUS_GEN_KEY] ?? 0) + 1) as number
   const postFocus = (sessionId: string | null): void => {
     void fetch(`${location.origin}${basePath}/focus`, {
@@ -1072,6 +1091,15 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
       TAB_ID = getTabId(true)
       connect()
     })
+    // 显示类设置（朗读范围/状态条/字幕）：host 在连上时和每次设置变化时下发——任一标签页、任一设置路径改了都即时同步。
+    source.addEventListener('display', (e: MessageEvent<string>) => {
+      try {
+        ui.boot = { ...ui.boot, ...displaySettings(JSON.parse(e.data) as Partial<VoiceBootConfig>) }
+        notify()
+      } catch {
+        // ignore malformed frame
+      }
+    })
     source.addEventListener('focus', (e: MessageEvent<string>) => {
       try {
         focusOwnerTab = (JSON.parse(e.data) as { tabId?: string | null }).tabId ?? null
@@ -1092,6 +1120,8 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         const data = JSON.parse(e.data) as { active?: string | null; ownerTabId?: string | null }
         const active = data.active ?? null
         const ownerTabId = data.ownerTabId ?? null
+        voiceActive = active
+        voiceOwnerTab = ownerTabId
         // B1 修复：activeSessionId 语义 = 「本 tab 正在跑的语音会话」（owner），只在本地
         // enter/exit 设置，绝不从全局 mode 广播「收养」——否则多 tab 每个 tab 都把
         // activeSessionId 同步成同一值，同一句 TTS 在 N 个 tab 叠加播放、字幕浮层重复。
@@ -1136,7 +1166,12 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
       try {
         const ev = JSON.parse(e.data) as { sessionId?: string; state?: VoiceUiState['turn'] }
         // 新一轮作答开始：解除「停止朗读」留下的整回合拒绝线。
-        if (ev.state === 'agent-speaking' && ev.sessionId && rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE) {
+        if (
+          ev.state === 'agent-speaking' &&
+          ev.sessionId &&
+          rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE &&
+          !stopUntilRun.has(ev.sessionId)
+        ) {
           rejectSeqUpTo.delete(ev.sessionId)
         }
         if (ev.sessionId === activeSessionId && ev.state) {
@@ -1268,6 +1303,8 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   // doSkipAudio（skip/打断/退出）设；enter 既不清也不设（重入后新句 seq > 线，
   // 旧帧 ≤ 线仍被拒，见 enter 内注释）。
   const rejectSeqUpTo = new Map<string, number>()
+  /** 「停止朗读」要等到下一次回合开始才解除的会话（见 stopReading）。 */
+  const stopUntilRun = new Set<string>()
   /** 各会话最后完整入队（final）的 sentenceId（skip 取线用）。 */
   const lastFinalSeq = new Map<string, number>()
   let curSentenceId: number | null = null
@@ -1282,7 +1319,11 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     }
     const readAloud = ui.boot.readAloud ?? 'voice'
     if (readAloud === 'off') return
-    const alwaysHere = readAloud === 'always' && frame.sessionId === focusedSessionId && focusOwnerTab === TAB_ID
+    const alwaysHere =
+      readAloud === 'always' &&
+      frame.sessionId === focusedSessionId &&
+      focusOwnerTab === TAB_ID &&
+      !(voiceActive === frame.sessionId && voiceOwnerTab !== null && voiceOwnerTab !== TAB_ID)
     if (frame.sessionId !== activeSessionId && !alwaysHere) return
     // 双重奏根治：拒绝线内的旧句帧（skip 时已开始传输、SSE 在途）→ 丢弃，
     // 防「残余 chunk 重建整句 → 重新入队播放」与新一轮回复叠加。
@@ -1531,6 +1572,10 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     playbackLevel() {
       return engine.level()
     },
+    runStarted(sessionId) {
+      if (rejectSeqUpTo.get(sessionId) === STOP_READING_LINE) rejectSeqUpTo.delete(sessionId)
+      stopUntilRun.delete(sessionId)
+    },
     setFocusedSession(sessionId) {
       // 只有可见标签页抢焦点；离开会话（null）只在自己仍持有时才清，免得把别处刚报的焦点清掉。
       if (sessionId === null) {
@@ -1542,11 +1587,13 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
       focusedSessionId = sessionId
       if (typeof document === 'undefined' || document.visibilityState === 'visible') postFocus(sessionId)
     },
-    stopReading() {
+    stopReading(untilNextRun = false) {
       const sid = activeSessionId ?? focusedSessionId
       doSkipAudio(sid)
       if (!sid) return
       rejectSeqUpTo.set(sid, STOP_READING_LINE)
+      if (untilNextRun) stopUntilRun.add(sid)
+      else stopUntilRun.delete(sid)
       void fetch(`${location.origin}${basePath}/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -2727,7 +2774,7 @@ export function MicButton({
   const readingOutside = (): boolean => localRef.current === 'off' && bus.ui.playing
   const toggle = (): void => {
     if (readingOutside()) {
-      bus.stopReading()
+      bus.stopReading(!!useSession)
       return
     }
     // 节流与 host /toggle 限流同口径（2 次/2s）+ 250ms 去抖，避免 429，也不挡「进了马上退」。
@@ -2788,8 +2835,11 @@ export function MicButton({
   const runningSel = useSession
     ? useSession((s: any) => (s === undefined ? undefined : s.running))
     : undefined
+  const prevRunningRef = useRef(false)
   useEffect(() => {
     runningRef.current = runningSel === true
+    if (runningSel === true && !prevRunningRef.current && sessionId) bus.runStarted(sessionId)
+    prevRunningRef.current = runningSel === true
     checkOnce()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runningSel])
@@ -3240,7 +3290,7 @@ export function MicButton({
       // 短按：on → 退出语音模式（tap-to-exit）；off → 进入（hold 模式全程 pointer 驱动）
       // 同受 2 秒点击防抖保护（快速连点只响应第一次）。
       if (readingOutside()) {
-        bus.stopReading()
+        bus.stopReading(!!useSession)
         return
       }
       if (!takeToggleSlot(toggleHistRef.current, Date.now())) return
@@ -3299,7 +3349,7 @@ export function MicButton({
               ? 'pending'
               : 'off'
   // 竖条跟随电平：语音中 = 麦克风，朗读中 = 播放输出（rAF 直改高度，不触发重渲染）。
-  const eqKind = visual === 'reading' ? 'out' : visual === 'on' || visual === 'hold' || visual === 'holding' ? 'in' : null
+  const eqKind = visual === 'reading' ? 'out' : visual === 'on' || visual === 'holding' ? 'in' : null
   useEffect(() => {
     const el = btnRef.current
     if (!el || !eqKind) return

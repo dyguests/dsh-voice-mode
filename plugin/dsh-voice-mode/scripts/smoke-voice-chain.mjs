@@ -23,6 +23,8 @@ const loop = process.argv.includes('--loop')
 const ttsDown = process.argv.includes('--tts-down')
 // --once（配合 --loop）：交互模式设为 once——说完一句、回复读完后应自动退出语音模式（0.1.7+ 插件设置端点）
 const once = process.argv.includes('--once')
+// --always：不进语音模式，readAloud=always 下经 RPC 发一条打字消息 → 回复应在当前标签页朗读；再点按钮应停止朗读
+const always = process.argv.includes('--always')
 if (!url) { console.error('用法: node scripts/smoke-voice-chain.mjs <宿主启动 URL>'); process.exit(2) }
 const here = dirname(fileURLToPath(import.meta.url))
 const cache = process.env.DSHVM_MODEL_CACHE || join(homedir(), '.cache', 'dsh-voice-mode', 'models')
@@ -81,6 +83,8 @@ await page.addInitScript(() => {
     if (String(u).includes('/voice-mode/stream')) {
       e.addEventListener('audio', () => { window.__vc.audio++ })
       e.addEventListener('tts-error', () => { window.__vc.ttsError++ })
+      e.addEventListener('focus', (ev) => { window.__vc.focus = ev.data })
+      e.addEventListener('turn', (ev) => { window.__vc.turn = ev.data })
       e.addEventListener('tts-skip', (ev) => { try { const s = Number(JSON.parse(ev.data).streak) || 1; window.__vc.skip++; window.__vc.skipMax = Math.max(window.__vc.skipMax, s) } catch {} })
     }
     return e
@@ -117,6 +121,47 @@ for (let i = 0; i < 5; i++) {
 const mic = await page.waitForSelector('[data-dshvm="mic"]', { timeout: 30000 }).catch(() => null)
 if (!mic) { bad('mic 按钮未渲染'); await closer(); process.exit(1) }
 ok('mic 按钮渲染（当前会话已选中）')
+
+if (always) {
+  const st = await page.evaluate(async () => (await fetch('/voice-mode/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ readAloud: 'always' }) })).status)
+  st === 200 ? ok('朗读范围已设为 always') : bad(`设置 always 失败（HTTP ${st}）`)
+  // 真实用户打字时已与页面交互过（浏览器自动播放策略据此放行 AudioContext）：先在空白处点一下
+  await page.mouse.click(5, 5)
+  await page.waitForTimeout(1500)
+  // 发给界面当前显示的会话（MicButton 上报的焦点会话；UI 可能没选中上面 RPC 新建的那个）
+  const focusSid = await page.evaluate(() => { try { return JSON.parse(window.__vc.focus || '{}').sessionId || '' } catch { return '' } })
+  focusSid ? ok(`可见会话已上报焦点 ${focusSid.slice(0, 18)}…`) : bad('可见会话没有上报焦点（/focus）')
+  const sent = await page.evaluate(async (id) => {
+    const r = await fetch('/api/session/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'vc-2', method: 'session/prompt', payload: { args: { request: { sessionId: id, requestId: 'vc-always-1', mode: 'queue', content: [{ type: 'text', text: '请用中文写三句话介绍一下春天，每句话单独成句。' }] } } } }) })
+    return { status: r.status, body: (await r.text()).slice(0, 300) }
+  }, focusSid || sid)
+  sent.status === 200 && !/"ok":false|error/i.test(sent.body) ? ok('经 RPC 发出打字消息（未进入语音模式）') : bad(`发送失败（HTTP ${sent.status}）：${sent.body}`)
+  let reading = false
+  for (let i = 0; i < 90 && !reading; i++) {
+    await page.waitForTimeout(1000)
+    reading = await page.evaluate(() => document.querySelector('[data-dshvm="mic"]')?.getAttribute('data-state') === 'reading')
+  }
+  const vc = await page.evaluate(() => window.__vc)
+  if (!reading) console.log('  诊断：最后 focus 事件', vc.focus, '最后 turn', vc.turn)
+  reading ? ok(`always：未进语音模式也在本标签页朗读（${vc.audio} 帧，按钮进入朗读态）`) : bad(`always：90s 内没有开始朗读（音频帧 ${vc.audio}）`)
+  if (reading) {
+    await page.click('[data-dshvm="mic"]')
+    let stopped = false
+    for (let i = 0; i < 20 && !stopped; i++) {
+      await page.waitForTimeout(250)
+      stopped = await page.evaluate(() => document.querySelector('[data-dshvm="mic"]')?.getAttribute('data-state') === 'off')
+    }
+    const voiceOn = await page.evaluate(async (id) => (await (await fetch('/voice-mode')).json()).active === id, focusSid)
+    stopped && !voiceOn ? ok('朗读中点按钮 = 停止朗读（没有误进语音模式）') : bad(`停止朗读失败（按钮复位=${stopped}，误进语音=${voiceOn}）`)
+    await page.waitForTimeout(3000)
+    const still = await page.evaluate(() => document.querySelector('[data-dshvm="mic"]')?.getAttribute('data-state'))
+    still !== 'reading' ? ok('停止后本回合余句不再播放') : bad('停止后又继续朗读')
+  }
+  await page.evaluate(async () => { await fetch('/voice-mode/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ readAloud: 'voice' }) }) })
+  await closer()
+  process.exit(failed ? 1 : 0)
+}
 
 // 4) 点 mic 进入语音模式 → 等待真实语音被识别
 if (once) {

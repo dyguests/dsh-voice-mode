@@ -1066,12 +1066,38 @@ function splitSentences(chunk) {
 var SentenceSegmenter = class {
   buffer = "";
   maxChars;
+  /** 是否处在 ``` 代码块内（跨 delta 有效：流式 delta 只有几个 token，代码块总是被切碎送达，
+   *  plainText 的整块正则匹配不到，代码会被逐句念出——「总是朗读」覆盖打字会话后尤其明显）。 */
+  inFence = false;
+  /** delta 末尾悬挂的 1-2 个反引号（可能是被切开的 ``` 前半）。 */
+  ticks = "";
   constructor(options = {}) {
     this.maxChars = options.maxSentenceChars ?? 200;
   }
+  /** 去掉 ``` 代码块内容（状态跨 delta 保持）；进入代码块处补一个换行，让前面的文字先成句。 */
+  dropFences(chunk) {
+    let s = this.ticks + chunk;
+    this.ticks = "";
+    const hang = /`{1,2}$/.exec(s);
+    if (hang) {
+      this.ticks = hang[0];
+      s = s.slice(0, -hang[0].length);
+    }
+    let out = "";
+    for (; ; ) {
+      const i = s.indexOf("```");
+      if (i < 0) {
+        if (!this.inFence) out += s;
+        return out;
+      }
+      if (!this.inFence) out += s.slice(0, i) + "\n";
+      this.inFence = !this.inFence;
+      s = s.slice(i + 3);
+    }
+  }
   /** 喂入一段 raw delta，返回它补全的完整句子。 */
   feed(chunk) {
-    const cleaned = plainText(chunk);
+    const cleaned = plainText(this.dropFences(chunk));
     if (!cleaned) return [];
     this.buffer += cleaned;
     const { sentences, tail } = splitSentences(this.buffer);
@@ -1094,6 +1120,8 @@ var SentenceSegmenter = class {
   flush() {
     const t = sanitizeForTts(this.buffer).trim();
     this.buffer = "";
+    this.inFence = false;
+    this.ticks = "";
     if (t && !SKIP_PREFIX.test(t)) return [t];
     return [];
   }
@@ -2236,7 +2264,7 @@ var en = {
   descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
   settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
-  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
+  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / read replies / status bar / caption overlay / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
   effectivePending: "{count} change(s) will apply next time you enter voice mode: {items}",
   valueOn: "On",
   valueOff: "Off",
@@ -2723,6 +2751,9 @@ var Config = z.object({
   // I3 + M7（zod 界）：500-3000ms，与 settings schema 一致。
   yieldMs: z.number().min(500).max(3e3).default(1500)
 });
+function displayOf(v) {
+  return { readAloud: v.readAloud, showCaptions: v.showCaptions, showStatusBar: v.showStatusBar };
+}
 function voiceSettingsFromConfig(config) {
   const {
     ttsEngine,
@@ -2979,6 +3010,7 @@ function apply(ctx, config) {
   const applyVset = (next) => {
     const prev = vset;
     vset = next;
+    broadcast("display", displayOf(next));
     if (next.ttsEngine !== engineKind) {
       engineKind = next.ttsEngine;
       queue.setEngine(makeEngine(engineKind));
@@ -3656,6 +3688,7 @@ data: ${JSON.stringify(payload)}
         }
         send("mode", { active: activeVoiceSession, ownerTabId: activeTabId });
         send("focus", { sessionId: focusedSessionId, tabId: focusedTabId });
+        send("display", displayOf(vset));
         const heartbeat = setInterval(() => {
           try {
             res.write(": hb\n");
@@ -3671,6 +3704,11 @@ data: ${JSON.stringify(payload)}
           sseClients.delete(client);
           if (tabId !== null && latestConnByTab.get(tabId) === client) {
             latestConnByTab.delete(tabId);
+            if (tabId === focusedTabId) {
+              focusedSessionId = null;
+              focusedTabId = null;
+              broadcast("focus", { sessionId: null, tabId: null });
+            }
             if (tabId === activeTabId) {
               if (ownerYieldTimer) clearTimeout(ownerYieldTimer);
               ownerYieldTimer = setTimeout(() => yieldActiveSession(activeVoiceSession), 8e3);

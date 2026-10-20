@@ -415,6 +415,10 @@ function sseRes() {
     r.ended = true
     end0(b)
   }
+  r._closeCbs = []
+  r.on = (ev, cb) => {
+    if (ev === 'close') r._closeCbs.push(cb)
+  }
   r.events = () => r.chunks.filter((c) => c.startsWith('event: ')).map((c) => c.split('\n')[0].slice(7))
   return r
 }
@@ -428,9 +432,9 @@ const postFocus = (payload, extra = {}) =>
 const focusOf = (res) => JSON.parse(res.body)
 
 const watcher = openStream('tab-W')
-await t('SSE 上线即下发 mode + focus（新标签页立刻知道焦点归属）', () => {
+await t('SSE 上线即下发 mode + focus + display（新标签页立刻知道焦点归属与显示类设置）', () => {
   assert.equal(watcher.statusCode, 200)
-  assert.deepEqual(watcher.events().slice(0, 2), ['mode', 'focus'])
+  assert.deepEqual(watcher.events().slice(0, 3), ['mode', 'focus', 'display'])
 })
 
 await t('/focus 入参：缺 tabId / sessionId 非字符串非 null → 400', async () => {
@@ -460,6 +464,16 @@ await t('/focus：别的标签页离开会话（null）不清掉当前焦点', a
 await t('/focus：焦点标签页自己离开 → 清空', async () => {
   const r = await postFocus({ sessionId: null, tabId: 'A' })
   assert.deepEqual(focusOf(r), { ok: true, sessionId: null, tabId: null })
+})
+
+await t('焦点标签页的 SSE 断开 → 清焦点并广播（不再给关掉的页面合成朗读）', async () => {
+  const f = openStream('tab-F')
+  await postFocus({ sessionId: 's9', tabId: 'tab-F' })
+  const before = watcher.events().length
+  f._closeCbs.forEach((cb) => cb())
+  const r = await postFocus({ sessionId: null, tabId: 'tab-other' })
+  assert.deepEqual(focusOf(r), { ok: true, sessionId: null, tabId: null }, '断开后焦点未清')
+  assert.ok(watcher.events().slice(before).includes('focus'), '清焦点未广播')
 })
 
 await t('SSE 同 tabId 重连：旧连接收到 replaced 并被关闭（不再互相顶替）', () => {

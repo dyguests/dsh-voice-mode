@@ -526,6 +526,11 @@ export const Config: z<Config> = z.object({
  * 0.1.7+ 路径 B：从插件自身 Config 派生出运行时设置值。
  * Config 已与 VoiceSettingsValue 逐字段一一对应（含默认值），故此处直接平面拷贝。
  */
+/** 客户端即时生效的显示类设置（SSE 'display' 下行）。 */
+function displayOf(v: VoiceSettingsValue): Pick<VoiceSettingsValue, 'readAloud' | 'showCaptions' | 'showStatusBar'> {
+  return { readAloud: v.readAloud, showCaptions: v.showCaptions, showStatusBar: v.showStatusBar }
+}
+
 function voiceSettingsFromConfig(config: Config): VoiceSettingsValue {
   const {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
@@ -856,6 +861,8 @@ export function apply(ctx: Context, config: Config): void {
   const applyVset = (next: VoiceSettingsValue): void => {
     const prev = vset
     vset = next
+    // 显示类设置即时同步到所有标签页（不论从哪个标签页/哪条设置路径改的）。
+    broadcast('display', displayOf(next))
     if (next.ttsEngine !== engineKind) {
       engineKind = next.ttsEngine
       queue.setEngine(makeEngine(engineKind))
@@ -1714,6 +1721,7 @@ export function apply(ctx: Context, config: Config): void {
         // 上线即告知当前模式归属（纠正多标签页/多会话漂移）。
         send('mode', { active: activeVoiceSession, ownerTabId: activeTabId })
         send('focus', { sessionId: focusedSessionId, tabId: focusedTabId })
+        send('display', displayOf(vset))
         const heartbeat = setInterval(() => {
           try {
             res.write(': hb\n')
@@ -1732,6 +1740,13 @@ export function apply(ctx: Context, config: Config): void {
           // 若也武装，会在新连接已取消计时之后再次武装，8s 后误让出健康 owner。
           if (tabId !== null && latestConnByTab.get(tabId) === client) {
             latestConnByTab.delete(tabId)
+            // 焦点标签页断开（关页/刷新）：清焦点，免得 readAloud=always 继续给没人听的页面合成；
+            // 只是断线的话，客户端重连 open 时会补报焦点。
+            if (tabId === focusedTabId) {
+              focusedSessionId = null
+              focusedTabId = null
+              broadcast('focus', { sessionId: null, tabId: null })
+            }
             // B2：owner tab 的 SSE 断开 → 8s 宽限内没重连则让出（防 transient blip 误让出）。
             if (tabId === activeTabId) {
               if (ownerYieldTimer) clearTimeout(ownerYieldTimer)

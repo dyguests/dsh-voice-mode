@@ -1707,7 +1707,7 @@ var zh = {
   descWakeWord: "\u5524\u9192\u8BCD\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5982\u300C\u4F60\u597D\u5C0FD\u300D\uFF09\uFF1A\u8BF4\u51FA\u8BCD\u5934\u624D\u8FDB\u5165\u8BC6\u522B\uFF0C\u907F\u514D\u8BEF\u89E6\u3002\u53EF\u4E0E\u547D\u4EE4\u8FDE\u8BF4\uFF08\u300C\u4F60\u597D\u5C0FD\uFF0C\u5E2E\u6211\u67E5\u5929\u6C14\u300D\u2014\u2014\u8BCD\u5934\u4F1A\u81EA\u52A8\u5265\u6389\u3001\u4E0D\u8FDB\u6D88\u606F\uFF09\uFF1B\u6BCF\u53E5\u65AD\u53E5\u6216\u6253\u65AD\u540E\u9700\u91CD\u8BF4\uFF1B\u4EC5 toggle \u6A21\u5F0F\u751F\u6548\uFF08hold / \u624B\u52A8\u6253\u65AD\u4E0B\u4E0D\u751F\u6548\uFF1Bdetect \u81EA\u52A8\u63A2\u6D4B\u672A\u751F\u6548\u3001\u56DE\u843D manual \u65F6\u540C\u6837\u4E0D\u751F\u6548\u2014\u2014Safari \u7B49\u65E0\u539F\u751F\u56DE\u58F0\u6D88\u9664\u7684\u673A\u5668\u4F1A\u9ED8\u8BA4\u843D\u5230\u8FD9\u4E00\u6863\uFF09\uFF1B\u6717\u8BFB\u671F\u8BF4\u5524\u9192\u8BCD\u4E0D\u89E6\u53D1\uFF08\u6253\u65AD\u4ECD\u6309 VAD \u5F00\u53E3\u5373\u6253\u65AD\uFF09\u3002\u5339\u914D\u5E26\u5BB9\u9519\uFF08\u540C\u97F3\u5B57 / \u524D\u5BFC\u8BED\u6C14\u8BCD\uFF09\uFF0C\u5EFA\u8BAE 3-4 \u5B57\uFF1B\u975E\u4E13\u7528 KWS \u5F15\u64CE\uFF0C\u5608\u6742\u73AF\u5883\u53EF\u80FD\u5EF6\u8FDF\u6216\u8BEF\u6FC0\u6D3B",
   wakePlaceholder: "\u5982\uFF1A\u4F60\u597D\u5C0FD",
   settingsCardDesc: "\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u9759\u97F3\u505C\u987F / \u7A7A\u95F2\u8D85\u65F6 / \u6A21\u578B\u955C\u50CF / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u9006\u6587\u672C\u5F52\u4E00\u5316 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519",
-  settingsEffectiveNote: "\u751F\u6548\u65F6\u673A\u5206\u56DB\u6863\uFF1A\u2460 \u5373\u65F6\u2014\u2014\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / Kokoro \u6A21\u578B\u7CBE\u5EA6\uFF08\u5DF2\u7F13\u5B58\u5219\u5373\u65F6\uFF0C\u5426\u5219\u4E0B\u6B21\u4E0B\u8F7D\uFF09/ \u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u5BF9\u540E\u7EED\u56DE\u590D\u751F\u6548\uFF09/ \u6A21\u578B\u955C\u50CF\uFF08\u4E0B\u6B21\u4E0B\u8F7D\u5C1D\u8BD5\u5373\u751F\u6548\uFF09\uFF1B\u2461 \u4E0B\u6B21\u8BC6\u522B\u65F6\u2014\u2014\u5B9A\u7A3F\u91CD\u8BD1\uFF08SenseVoice\uFF09/ \u9006\u6587\u672C\u5F52\u4E00\u5316\uFF1B\u2462 \u4E0B\u4E00\u6BB5\u8BDD\u2014\u2014\u9759\u97F3\u5224\u5B9A\u65F6\u957F\uFF08\u65AD\u53E5\u7AEF\u70B9\uFF1B\u53D1\u9001\u7B49\u5F85\u56FA\u5B9A 1.2 \u79D2\u4E0D\u53D7\u5F71\u54CD\uFF09\uFF1B\u2463 \u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u2014\u2014\u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u5FEB\u6377\u952E / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519 / \u7A7A\u95F2\u65F6\u957F\u3002\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u624D\u751F\u6548\u7684\u9879\u4F1A\u5217\u5728\u5361\u7247\u9876\u90E8\uFF08\u542B\u5F53\u524D\u751F\u6548\u503C\uFF09\u3002",
+  settingsEffectiveNote: "\u751F\u6548\u65F6\u673A\u5206\u56DB\u6863\uFF1A\u2460 \u5373\u65F6\u2014\u2014\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / Kokoro \u6A21\u578B\u7CBE\u5EA6\uFF08\u5DF2\u7F13\u5B58\u5219\u5373\u65F6\uFF0C\u5426\u5219\u4E0B\u6B21\u4E0B\u8F7D\uFF09/ \u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u5BF9\u540E\u7EED\u56DE\u590D\u751F\u6548\uFF09/ \u6717\u8BFB\u56DE\u590D / \u72B6\u6001\u6761 / \u5B57\u5E55\u6D6E\u5C42 / \u6A21\u578B\u955C\u50CF\uFF08\u4E0B\u6B21\u4E0B\u8F7D\u5C1D\u8BD5\u5373\u751F\u6548\uFF09\uFF1B\u2461 \u4E0B\u6B21\u8BC6\u522B\u65F6\u2014\u2014\u5B9A\u7A3F\u91CD\u8BD1\uFF08SenseVoice\uFF09/ \u9006\u6587\u672C\u5F52\u4E00\u5316\uFF1B\u2462 \u4E0B\u4E00\u6BB5\u8BDD\u2014\u2014\u9759\u97F3\u5224\u5B9A\u65F6\u957F\uFF08\u65AD\u53E5\u7AEF\u70B9\uFF1B\u53D1\u9001\u7B49\u5F85\u56FA\u5B9A 1.2 \u79D2\u4E0D\u53D7\u5F71\u54CD\uFF09\uFF1B\u2463 \u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u2014\u2014\u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u5FEB\u6377\u952E / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519 / \u7A7A\u95F2\u65F6\u957F\u3002\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u624D\u751F\u6548\u7684\u9879\u4F1A\u5217\u5728\u5361\u7247\u9876\u90E8\uFF08\u542B\u5F53\u524D\u751F\u6548\u503C\uFF09\u3002",
   effectivePending: "\u6709 {count} \u9879\u4FEE\u6539\u5C06\u5728\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u65F6\u751F\u6548\uFF1A{items}",
   valueOn: "\u5F00",
   valueOff: "\u5173",
@@ -1978,7 +1978,7 @@ var en = {
   descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
   settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
-  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
+  settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / read replies / status bar / caption overlay / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
   effectivePending: "{count} change(s) will apply next time you enter voice mode: {items}",
   valueOn: "On",
   valueOff: "Off",
@@ -3463,7 +3463,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "99baeb7";
+var BUILD_TAG = "2fbb26c";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3500,22 +3500,12 @@ var ECHO_TAIL_MS = 400;
 var HOLD_CLEAR_FRAMES = 2;
 var WAVE_BARS = 14;
 var BASE_PATH2 = "/voice-mode";
-var SETTINGS_CHANGED_EVENT = "dshvm-settings-changed";
 function displaySettings(c) {
   return {
     readAloud: c.readAloud === "always" || c.readAloud === "off" ? c.readAloud : "voice",
     showCaptions: c.showCaptions !== false,
     showStatusBar: c.showStatusBar !== false
   };
-}
-function withChangeEvent(scope) {
-  const wrapped = Object.create(scope);
-  wrapped.set = async (field, value) => {
-    const r = await scope.set(field, value);
-    window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
-    return r;
-  };
-  return wrapped;
 }
 var STOP_READING_LINE = Number.MAX_SAFE_INTEGER;
 function getTabId(fresh = false) {
@@ -3575,19 +3565,52 @@ function apply(ctx) {
     document.addEventListener("pointerdown", resumeAudio, { passive: true });
     document.addEventListener("keydown", resumeAudio, { passive: true });
   }
-  let activitySlot = false;
+  const activity = { declared: false, mounted: 0, listeners: /* @__PURE__ */ new Set() };
+  const activityChanged = () => activity.listeners.forEach((fn) => fn());
+  const ActivityMic = (props) => {
+    (0, import_react3.useEffect)(() => {
+      activity.mounted++;
+      activityChanged();
+      return () => {
+        activity.mounted--;
+        activityChanged();
+      };
+    }, []);
+    return React.createElement(MicButton, props);
+  };
+  const RightMic = (props) => {
+    const [show, setShow] = (0, import_react3.useState)(() => !activity.declared);
+    (0, import_react3.useEffect)(() => {
+      let timer;
+      const evaluate = () => {
+        clearTimeout(timer);
+        if (!activity.declared) setShow(true);
+        else if (activity.mounted > 0) setShow(false);
+        else timer = setTimeout(() => setShow(!activity.declared || activity.mounted === 0), 1500);
+      };
+      activity.listeners.add(evaluate);
+      evaluate();
+      return () => {
+        activity.listeners.delete(evaluate);
+        clearTimeout(timer);
+      };
+    }, []);
+    return show ? React.createElement(MicButton, props) : null;
+  };
   ctx.slots.inject("conversation.input.activity", () => {
-    activitySlot = true;
+    activity.declared = true;
+    activityChanged();
     const dispose = ctx.slots.register(
       {
         name: "conversation.input.activity",
         id: "voice-mode",
         inject: () => ({ bus, scope })
       },
-      MicButton
+      ActivityMic
     );
     return () => {
-      activitySlot = false;
+      activity.declared = false;
+      activityChanged();
       dispose?.();
     };
   });
@@ -3600,7 +3623,7 @@ function apply(ctx) {
         order: 80,
         inject: () => ({ bus, scope })
       },
-      (props) => activitySlot ? null : React.createElement(MicButton, props)
+      RightMic
     )
   );
   ctx.slots.inject(
@@ -3628,17 +3651,7 @@ function apply(ctx) {
     )
   );
   const settingsScope = ctx.get?.("settingsScope");
-  const scope = withChangeEvent(settingsScope ? settingsScope.bind({ namespace: "voice-mode" }) : createHttpScope());
-  const refreshDisplay = () => {
-    void fetch(`${location.origin}${BASE_PATH2}/config`).then((r) => r.ok ? r.json() : null).then((c) => {
-      if (c) bus.setUi({ boot: { ...bus.ui.boot, ...displaySettings(c) } });
-    }).catch(() => {
-    });
-  };
-  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-    refreshDisplay();
-    window.addEventListener(SETTINGS_CHANGED_EVENT, refreshDisplay);
-  }
+  const scope = settingsScope ? settingsScope.bind({ namespace: "voice-mode" }) : createHttpScope();
   ctx.slots.inject(
     "settings.plugin.item",
     () => ctx.slots.register(
@@ -3846,6 +3859,8 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
   let activeSessionId = null;
   let focusedSessionId = null;
   let focusOwnerTab = null;
+  let voiceActive = null;
+  let voiceOwnerTab = null;
   const busGen = globalThis[BUS_GEN_KEY] = (globalThis[BUS_GEN_KEY] ?? 0) + 1;
   const postFocus = (sessionId) => {
     void fetch(`${location.origin}${basePath}/focus`, {
@@ -4095,6 +4110,13 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
       TAB_ID = getTabId(true);
       connect();
     });
+    source.addEventListener("display", (e) => {
+      try {
+        ui.boot = { ...ui.boot, ...displaySettings(JSON.parse(e.data)) };
+        notify();
+      } catch {
+      }
+    });
     source.addEventListener("focus", (e) => {
       try {
         focusOwnerTab = JSON.parse(e.data).tabId ?? null;
@@ -4112,6 +4134,8 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
         const data = JSON.parse(e.data);
         const active = data.active ?? null;
         const ownerTabId = data.ownerTabId ?? null;
+        voiceActive = active;
+        voiceOwnerTab = ownerTabId;
         const preempted = active !== activeSessionId || ownerTabId !== null && activeSessionId !== null && ownerTabId !== TAB_ID;
         if (activeSessionId !== null && preempted) {
           const prev = activeSessionId;
@@ -4140,7 +4164,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("turn", (e) => {
       try {
         const ev = JSON.parse(e.data);
-        if (ev.state === "agent-speaking" && ev.sessionId && rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE) {
+        if (ev.state === "agent-speaking" && ev.sessionId && rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE && !stopUntilRun.has(ev.sessionId)) {
           rejectSeqUpTo.delete(ev.sessionId);
         }
         if (ev.sessionId === activeSessionId && ev.state) {
@@ -4241,6 +4265,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
   };
   connect();
   const rejectSeqUpTo = /* @__PURE__ */ new Map();
+  const stopUntilRun = /* @__PURE__ */ new Set();
   const lastFinalSeq = /* @__PURE__ */ new Map();
   let curSentenceId = null;
   let curChunks = [];
@@ -4253,7 +4278,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     }
     const readAloud = ui.boot.readAloud ?? "voice";
     if (readAloud === "off") return;
-    const alwaysHere = readAloud === "always" && frame.sessionId === focusedSessionId && focusOwnerTab === TAB_ID;
+    const alwaysHere = readAloud === "always" && frame.sessionId === focusedSessionId && focusOwnerTab === TAB_ID && !(voiceActive === frame.sessionId && voiceOwnerTab !== null && voiceOwnerTab !== TAB_ID);
     if (frame.sessionId !== activeSessionId && !alwaysHere) return;
     const rejectLine = rejectSeqUpTo.get(frame.sessionId);
     if (rejectLine !== void 0 && frame.sentenceId <= rejectLine) return;
@@ -4443,6 +4468,10 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     playbackLevel() {
       return engine.level();
     },
+    runStarted(sessionId) {
+      if (rejectSeqUpTo.get(sessionId) === STOP_READING_LINE) rejectSeqUpTo.delete(sessionId);
+      stopUntilRun.delete(sessionId);
+    },
     setFocusedSession(sessionId) {
       if (sessionId === null) {
         if (focusedSessionId === null) return;
@@ -4453,11 +4482,13 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
       focusedSessionId = sessionId;
       if (typeof document === "undefined" || document.visibilityState === "visible") postFocus(sessionId);
     },
-    stopReading() {
+    stopReading(untilNextRun = false) {
       const sid = activeSessionId ?? focusedSessionId;
       doSkipAudio(sid);
       if (!sid) return;
       rejectSeqUpTo.set(sid, STOP_READING_LINE);
+      if (untilNextRun) stopUntilRun.add(sid);
+      else stopUntilRun.delete(sid);
       void fetch(`${location.origin}${basePath}/cancel`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -5334,7 +5365,7 @@ function MicButton({
   const readingOutside = () => localRef.current === "off" && bus.ui.playing;
   const toggle = () => {
     if (readingOutside()) {
-      bus.stopReading();
+      bus.stopReading(!!useSession);
       return;
     }
     if (!takeToggleSlot(toggleHistRef.current, Date.now())) return;
@@ -5380,8 +5411,11 @@ function MicButton({
     })();
   }, [sessionId]);
   const runningSel = useSession ? useSession((s) => s === void 0 ? void 0 : s.running) : void 0;
+  const prevRunningRef = (0, import_react3.useRef)(false);
   (0, import_react3.useEffect)(() => {
     runningRef.current = runningSel === true;
+    if (runningSel === true && !prevRunningRef.current && sessionId) bus.runStarted(sessionId);
+    prevRunningRef.current = runningSel === true;
     checkOnce();
   }, [runningSel]);
   (0, import_react3.useEffect)(() => bus.subscribe(() => checkOnce()), [bus]);
@@ -5713,7 +5747,7 @@ function MicButton({
     }
     if (ms < 250) {
       if (readingOutside()) {
-        bus.stopReading();
+        bus.stopReading(!!useSession);
         return;
       }
       if (!takeToggleSlot(toggleHistRef.current, Date.now())) return;
@@ -5737,7 +5771,7 @@ function MicButton({
   const statusBarShown = bootNow().showStatusBar !== false;
   const micHint = bus.activeSessionId !== sessionId ? bus.ui.error ?? bus.ui.notice ?? "" : statusBarShown ? "" : bus.ui.error ?? (bus.ui.sseDown ? t("sseReconnect") : null) ?? bus.ui.notice ?? (bus.ui.idleWarn ? t("idleWarn30s") : null) ?? bus.ui.ttsNotice ?? "";
   const visual = holding ? "holding" : bus.ui.playing ? "reading" : on && onceEnding ? "ending" : on && onceWaiting ? "waiting" : on ? holdMode ? "hold" : "on" : local === "pending" ? "pending" : "off";
-  const eqKind = visual === "reading" ? "out" : visual === "on" || visual === "hold" || visual === "holding" ? "in" : null;
+  const eqKind = visual === "reading" ? "out" : visual === "on" || visual === "holding" ? "in" : null;
   (0, import_react3.useEffect)(() => {
     const el = btnRef.current;
     if (!el || !eqKind) return;

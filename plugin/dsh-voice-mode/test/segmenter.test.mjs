@@ -113,5 +113,25 @@ t('无标点长墙按安全阀切分', () => {
   assert.ok(out.length >= 1 && out[0].length <= 10)
 })
 
+t('流式切碎的 ``` 代码块整块不读（含跨 delta 的反引号与语言标记）', () => {
+  const s = new SentenceSegmenter()
+  const out = []
+  for (const d of ['看下面的代码', '：\n``', '`ts\nconst a = 1;', '\nconsole.log(a);\n`', '``\n改好了。', '下一步', '。']) out.push(...s.feed(d))
+  out.push(...s.flush())
+  const all = out.join('|')
+  assert.ok(!/const|console/.test(all), `代码被念出：${all}`)
+  assert.ok(all.includes('看下面的代码') && all.includes('改好了') && all.includes('下一步'), `正文丢失：${all}`)
+})
+t('未闭合代码块到流结束也不读，且不影响下一回合', () => {
+  const s = new SentenceSegmenter()
+  s.feed('先说一句。```js\nlet x = 1;\n')
+  assert.deepEqual(s.flush(), [])
+  assert.deepEqual(s.feed('新回合。'), ['新回合。'])
+})
+t('行内单反引号照常朗读内容', () => {
+  const s = new SentenceSegmenter()
+  assert.deepEqual([...s.feed('运行 `'), ...s.feed('npm test'), ...s.feed('` 就行。')].join(''), '运行 npm test 就行。')
+})
+
 console.log(`\nsegmenter：${passed} 项通过`)
 rmSync(tmp, { recursive: true, force: true })

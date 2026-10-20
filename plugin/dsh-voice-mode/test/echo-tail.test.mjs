@@ -380,6 +380,19 @@ await t('源码锁：setUi 实现含 playing 降沿记录（playingEndAt = Date.
     fire('turn', { sessionId: RS, state: 'agent-speaking' })
     assert.equal(await playOne(), true, '新一轮回复没恢复朗读')
   })
+  await t('stopReading(untilNextRun)：同一回合后续作答（工具调用后）仍不读，下一回合开始才恢复', async () => {
+    bus.stopReading(true)
+    fire('turn', { sessionId: RS, state: 'agent-speaking' })
+    assert.equal(await playOne(), false, '同一回合的后续作答又开始朗读')
+    bus.runStarted(RS)
+    assert.equal(await playOne(), true, '新回合没恢复朗读')
+  })
+  await t('always：该会话在别的标签页语音模式中 → 让那个标签页播，本页不叠播', async () => {
+    fire('mode', { active: RS, ownerTabId: 'voice-owner-tab' })
+    assert.equal(await playOne(), false, '语音模式在别处时本页也播了')
+    fire('mode', { active: null, ownerTabId: null })
+    assert.equal(await playOne(), true)
+  })
   await t('readAloud=off：焦点会话也不播', async () => {
     bus.setUi({ boot: { ...bus.ui.boot, readAloud: 'off' } })
     assert.equal(await playOne(), false)
