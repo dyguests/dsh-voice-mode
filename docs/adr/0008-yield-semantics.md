@@ -90,7 +90,7 @@ YIELDING (let the user interrupt)
 | 时延预算 | 200-500ms（人感知阈） | 256-597ms（实测 CONTEXT.md L37） |
 | LLM 介入 | 是（system prompt 注入信号） | 否（纯前端） |
 
-**新加的"pauseAtBoundary"必须经 epoch 通道**（CLAUDE.md "CONTEXT.md 不丢句不变量"），不能直接 `engine.interrupt()`（那会破坏 `tts-queue.ts:358-370` 的"重试 3 次"（MAX_SYNTH_ATTEMPTS）+ `:264` 的 epoch 守卫不变量）。
+**新加的"pauseAtBoundary"必须经 epoch 通道**（CLAUDE.md "CONTEXT.md 不丢句不变量"），不能直接 `engine.interrupt()`（那会破坏 `tts-queue.ts:413-430` 的"重试 3 次"（MAX_SYNTH_ATTEMPTS）+ `:296` 的 epoch 守卫不变量；2026-10-20 10:34 实测（R13 fix-host 第 6 道门改动后））。
 
 ### 5. ADR-0008 之外但本 ADR 顺带解决的
 
@@ -119,8 +119,8 @@ YIELDING (let the user interrupt)
 - `src/index.ts:896`（system-prompt/assemble 注入点，可扩展）
 - `src/asr.ts:817-888`（echoFloor/echoPeak 跨区 + ADR-0006 真机结论）
 - `src/asr.ts:184-185`（wakeEnabled 唤醒词门：唤醒词非空且非 hold 模式，逻辑可参考）
-- `src/asr-host.ts:584`（finalize 同步路径 `finalizeP`，"不丢句"不变量；原 442-466 区现为 senseTranscribe）
-- `src/tts-queue.ts:325`（cancel() 硬打断；epoch 守卫；不丢句；原 268-307 区现为 updateVoice）
+- `src/asr-host.ts:607`（finalize 同步路径 `finalizeP`，"不丢句"不变量；原 442-466 区现为 senseTranscribe、原 584 锚点已漂移；2026-10-20 10:30 实测刷新）
+- `src/tts-queue.ts:379`（cancel() 硬打断；epoch 守卫；不丢句；原 268-307 区现为 updateVoice、原 325 锚点已漂移；2026-10-20 10:34 实测（R13 fix-host 第 6 道门改动后））
 - `src/tts-queue.ts`（`q.epoch` 逐队列代际字段——epoch 通道本体：声明 :204/:212，自增 :264（setEngine）/ :328（cancel），入队快照 :317，泵内守卫 :361。**勘误（2026-10-20）**：原「`_SSMLTemplate` epoch 通道」全 src 0 命中，系幻影符号）
 - `src/client.tsx:1946`（hardBreak 函数定义 + 注释上下文 L1941-1945）
 - `src/client.tsx:2106`（`onAecState` 回调已用，证明回调注入机制成熟；原 1539 区现为 fetchConfig）

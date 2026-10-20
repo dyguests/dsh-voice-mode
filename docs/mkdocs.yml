@@ -1,6 +1,6 @@
 # mkdocs.yml —— dsh-voice-mode 文档站（GitHub Pages，仅文档，不引入 CI）
 # 部署：本地 `mkdocs build` 产出 site/，由人工或一次性 `mkdocs gh-deploy` 推送 gh-pages 分支
-# 真源数字：v0.7.7 · 254 测试 · 兼容 dsh 0.1.1-rc.2 → 0.1.5-rc.2
+# 真源数字：v0.7.25 · 622 测试 · 兼容 dsh 0.2.1-rc.2（2026-10-20 刷新）
 site_name: dsh-voice-mode
 site_description: DeepSeek Harness 全双工语音插件文档 —— 边说边出字 · 按句朗读 · 开口即打断
 site_author: qishuilalala
@@ -46,6 +46,10 @@ nav:
       - docs/adr/0006-barge-in-auto-degrade.md
       - docs/adr/0007-emotion-tag-dsl.md
       - docs/adr/0008-yield-semantics.md
+      - docs/adr/0009-plugin-settings-self-persistence.md
+      - docs/adr/0010-i18n-official-locale.md
+      - docs/adr/0011-bundle-msedge-tts-inline.md
+      - docs/adr/0012-barge-in-salvage.md
   - 实施计划:
       - docs/plan/README.md
       - docs/plan/implementation-plan-2026-09-14.md
@@ -54,6 +58,7 @@ nav:
       - docs/qa/README.md
       - docs/qa/real-machine-acceptance-checklist.md
       - docs/qa/must-verify-manually.md
+      - review-2026-10-19-full-audit.md
   - 规则:
       - docs/rules/README.md
       - docs/rules/STATE.md

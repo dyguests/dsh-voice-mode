@@ -238,4 +238,76 @@ await t('I-1：close 闸门——在途合成放行后不广播、enqueue 不再
   await q.close()
 })
 
+// ---------------------------------------------------------------------------
+// R13（Issue #15 Important-1）：I-1 的 closed 闸门漏第 6 条路径——pump 内层重试
+// sleep 不判 closed。5 处判序全在重试循环之外，for 每轮只判 epoch。
+// 链条（真实时序，无需网络故障）：某句 synthesize reject（本地子进程退出被
+// child.on('exit') 的 rejectAll 打回，或 Edge ETIMEDOUT）→ 进 400/800ms 重试 sleep
+// → close 落进该窗口 → 睡醒 attempt+1 直接 synthesize 已 close 的引擎 →
+// tts-local close() 已置空 child/childInit/ready → ensureReady 首行守卫失效 →
+// 重走模型校验 + fork 孤儿子进程。
+// 另：重试 sleep timer 无句柄、不进 backoffTimers、不被 close 取消——close 瞬间
+// 残留 1 个 ref'd Timeout，拖住事件循环 ≤800ms（同型反模式家族第 5 处）。
+// I-1/M7② 两个既有行为锁都够不到：前者只构造 synthesize resolve、后者只构造重试
+// 耗尽走外层 catch。故本用例专测「重试途中 close」。
+// ---------------------------------------------------------------------------
+await t('R13：重试 sleep 期间 close → 不再 synthesize、无残留 ref\'d timer', async () => {
+  let closed = false
+  const calls = []
+  const frames = []
+  const eng = {
+    mime: 'audio/wav',
+    updateVoice() {},
+    async synthesize(text) {
+      calls.push(`${text}@closed=${closed}`)
+      throw new Error('ETIMEDOUT (stub)') // 恒失败：制造重试 sleep 窗口
+    },
+    async close() { closed = true },
+  }
+  const q = new TtsQueue({ engine: eng })
+  q.subscribe((f) => frames.push(f))
+  q.enqueue('s1', 'A')
+  await sleep(60) // 等第一次 synthesize 已 reject、进入 400ms 重试 sleep
+  await q.close() // close 落进重试 sleep 窗口（真实时序：本地子进程退出打回在途合成）
+  // close 瞬间采样：重试 sleep timer 必须已被取消（否则残留 ref'd Timeout ≤800ms）。
+  const mid = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+  await sleep(1400) // 覆盖 400ms + 800ms 两轮睡醒窗口
+  assert.deepEqual(
+    calls,
+    ['A@closed=false'],
+    '重试 sleep 期间 close 后仍发起了 synthesize——已 close 的本地引擎会重走模型校验 + fork 孤儿子进程',
+  )
+  assert.equal(frames.length, 0, 'close 后不得广播')
+  assert.equal(mid, 0, `close 瞬间残留 ${mid} 个 ref'd Timeout——重试 sleep timer 未被 close 取消（拖住事件循环 ≤800ms）`)
+  await q.close()
+})
+
+// Minor-8（Issue #15 R13，纵深防御）：公开方法 prepare/synthesize 的 closed 判序。
+// 现实调用方（设置面板）在插件卸载后不可达，非现实缺陷；补早返使公开面自成闭环。
+await t('Minor-8：close 后 prepare 早返、synthesize reject（不触达已 close 的引擎）', async () => {
+  const eng = {
+    mime: 'audio/wav',
+    updateVoice() {},
+    prepareCalls: 0,
+    synthCalls: 0,
+    async synthesize() { eng.synthCalls++; return Buffer.from('RIFF') },
+    async prepare() { eng.prepareCalls++ },
+    async close() {},
+  }
+  const q = new TtsQueue({ engine: eng })
+  await q.prepare()
+  assert.equal(eng.prepareCalls, 1, '前置条件：close 前 prepare 应生效')
+  await q.close()
+  await q.prepare() // 不得再触达引擎
+  assert.equal(eng.prepareCalls, 1, 'close 后 prepare 仍触达引擎——会走 ensureReady 重走模型校验 + fork')
+  let rejected = false
+  try {
+    await q.synthesize('x')
+  } catch (e) {
+    rejected = e instanceof Error && /closed/.test(e.message)
+  }
+  assert.ok(rejected, 'close 后 synthesize 未 reject——会触达已 close 的引擎')
+  assert.equal(eng.synthCalls, 0, 'close 后 synthesize 仍调用了引擎')
+})
+
 console.log(`\ntts-queue-engine：${passed} 项通过`)

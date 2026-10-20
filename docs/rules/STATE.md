@@ -482,7 +482,7 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 
 ### 过程中修复的 release.sh 三个潜在 bug（本地脚本，不入库）
 
-① audit 步骤显式走官方 registry（本机 npmrc 默认 npmmirror 无 audit 端点，门禁必失败）；② 门禁后 `git checkout -- lib/` 还原（npm test 的 BUILD_TAG 守卫必然重建 lib，原「工作区必须干净」检查永远不过——旧脚本被弃用的 probable 原因之一）；③ 步骤 3/5/9 的 git add 与 CHANGELOG 读取改 cwd 相对路径（原仓库根相对路径在插件目录全部静默失败或 fatal）。下次发版前建议 `--no-publish` 干跑复核。
+① audit 步骤显式走官方 registry（本机 npmrc 默认 npmmirror 无 audit 端点，门禁必失败）；② 门禁后 `git checkout -- lib/` 还原（真正重建 lib 的是 `npm pack --dry-run` 的 prepack 跑 `build.mjs`——**npm test 不重建 lib**（无 build 调用）；原「工作区必须干净」检查永远不过——旧脚本被弃用的 probable 原因之一。**误归因更正（R13 第六次 sweep 实证，以本注记为准）**：原注记称「npm test 的 BUILD_TAG 守卫必然重建 lib」系误归因，release.sh:80-81 同款注释已同步提交修正文本）；③ 步骤 3/5/9 的 git add 与 CHANGELOG 读取改 cwd 相对路径（原仓库根相对路径在插件目录全部静默失败或 fatal）。下次发版前建议 `--no-publish` 干跑复核。
 
 ### 遗留（转后续）
 
@@ -549,6 +549,8 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 1. **LLM 纠错相似度护栏**：验真代理实测归一化 Levenshtein ≥0.5 区分度干净——合法纠错 0.75-0.95（「现再几点」→「现在几点」0.75、「帮我差一下天气」→「帮我查一下天气」0.86）vs 作答/复述形态 0.11-0.43（「现在几点」→「现在是下午三点。」0.38）；约 15 行无依赖，误报方向安全（回退原文）。当前长度护栏够不到「与原文等长的简短作答」（已实测复证）。建议上车，待用户确认。
 2. backchannel 让位丢一句（行为不改、注释如实）；待机期附和词护栏；toggle+manual 待机态 push-to-talk；yieldedSegment 弃段误伤面（让位后只说单个附和词会被弃）；待机期模型下载提示；host 202 不喂流致重复 202 的段音频处理（新旧同症，已论证不丢段）。
 3. **M5 `needsRespawn` 死逻辑**（Issue #15 R11 登记，`src/tts-local.ts:430-441`）：`respawnChild()`（:218-225）同步把 child 置 null，紧随其后的 Aborted 重试 `call()` 必被 :240-243 的空 child 守卫 reject——重试从不成功（只把 `Aborted` 改写为 `tts child not running` 后抛出），`needsRespawn` 唯一赋值（false）不改变任何结果。让其生效需改重试语义（respawn 后应等子进程重建再 call，而非同步重试），涉及「Aborted 后是否允许同步重试」的语义选择，**建议产品/架构侧拍板**；当前恢复靠 `tts-queue.ts` pump 的 3 次有界重试（每次 400ms 退避）→ ensureReady → fork 新子进程，功能不缺损。
+
+4. **docs/research/ 断头引用待维护者决策**（R13 登记）：`docs/research/` 被 `.gitignore` 排除（不入库），但被已入库文档当证据引用——clone 后引用断头。docs/README 已声明「research 不入库」属知情取舍；**待维护者拍板**：(a) research 转入库（需评估体积/凭据/隐私）；或 (b) 把入库文档中的 research 引用改为不依赖 research 的表述（关键结论内联到 findings/ 或 ADR）。
 
 **流程校正（记入）**：`6995ae7` 的 commit message 称「每个 Blocker/Important 修复均有变异实证」——asr 验真实证 12 项仅 2 项有抓红测试，言过其实。后续 commit message 只写实证过的范围。
 **产品取舍登记待用户**（未擅自做）：backchannel 让位丢一句、待机期附和词护栏、toggle+manual 待机态 push-to-talk、yieldedSegment 弃段的误伤面（让位后只说单个附和词会被弃）、steer 前 beginSubmission 回显（宿主无此符号，待核）、待机期模型下载提示（202 不亮 loading-model 的代价）、host 202 不喂流致重复 202 丢段音频（新旧同症）。

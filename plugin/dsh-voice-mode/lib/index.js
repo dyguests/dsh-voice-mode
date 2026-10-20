@@ -1194,6 +1194,26 @@ var TtsQueue = class {
    * listEdgeVoices 的 timer 修法同构）。
    */
   backoffTimers = /* @__PURE__ */ new Set();
+  /**
+   * R13（Issue #15 Important-1）：重试 sleep 计时器句柄集。
+   *
+   * 与 backoffTimers 分开而非合并：语义不同（一个是「失败退避后重启泵」，一个是
+   * 「单句合成重试间的 sleep」），且 sleep 由 retrySleep 统一创建、落定即自摘。
+   * 不持句柄的后果：close 落进 400/800ms sleep 窗口时，该 timer 仍会走完——
+   * 残留一个 ref'd Timeout 拖住事件循环 ≤800ms（同型反模式家族第 5 处，
+   * 前三处：asr-host senseP、listEdgeVoices、warmupSense；第四处 backoffTimers）。
+   */
+  retryTimers = /* @__PURE__ */ new Set();
+  /** R13：可取消的重试 sleep——句柄入集供 close() 取消；落定即自摘。 */
+  retrySleep(ms) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.retryTimers.delete(timer);
+        resolve();
+      }, ms);
+      this.retryTimers.add(timer);
+    });
+  }
   constructor(options) {
     this.engine = options.engine;
     this.onError = options.onError;
@@ -1240,6 +1260,7 @@ var TtsQueue = class {
   }
   /** 触发当前引擎预热/下载模型并初始化（设置面板「下载」按钮；Edge 为无操作）。 */
   async prepare() {
+    if (this.closed) return;
     await this.engine.prepare?.();
   }
   /**
@@ -1247,6 +1268,7 @@ var TtsQueue = class {
    * 失败（含非法音色）抛错。
    */
   async synthesize(text, options = {}) {
+    if (this.closed) throw new Error("tts queue closed");
     return this.engine.synthesize(text, options);
   }
   subscribe(listener) {
@@ -1314,13 +1336,14 @@ var TtsQueue = class {
         let buf = null;
         for (let attempt = 0; attempt < MAX_SYNTH_ATTEMPTS; attempt++) {
           if (item.epoch !== q.epoch) break;
+          if (this.closed) break;
           try {
             buf = await this.engine.synthesize(item.text);
             break;
           } catch (e) {
             console.warn(`[dsh-voice-mode] synthesis failed (${attempt + 1}/${MAX_SYNTH_ATTEMPTS}): ${String(e)}`);
             if (attempt < MAX_SYNTH_ATTEMPTS - 1) {
-              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+              await this.retrySleep(400 * (attempt + 1));
             }
           }
         }
@@ -1393,6 +1416,8 @@ var TtsQueue = class {
     this.closed = true;
     for (const timer of this.backoffTimers) clearTimeout(timer);
     this.backoffTimers.clear();
+    for (const timer of this.retryTimers) clearTimeout(timer);
+    this.retryTimers.clear();
     await this.engine.close();
   }
 };

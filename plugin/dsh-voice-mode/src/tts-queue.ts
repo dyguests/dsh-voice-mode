@@ -237,6 +237,27 @@ export class TtsQueue {
    * listEdgeVoices 的 timer 修法同构）。
    */
   private readonly backoffTimers = new Set<ReturnType<typeof setTimeout>>()
+  /**
+   * R13（Issue #15 Important-1）：重试 sleep 计时器句柄集。
+   *
+   * 与 backoffTimers 分开而非合并：语义不同（一个是「失败退避后重启泵」，一个是
+   * 「单句合成重试间的 sleep」），且 sleep 由 retrySleep 统一创建、落定即自摘。
+   * 不持句柄的后果：close 落进 400/800ms sleep 窗口时，该 timer 仍会走完——
+   * 残留一个 ref'd Timeout 拖住事件循环 ≤800ms（同型反模式家族第 5 处，
+   * 前三处：asr-host senseP、listEdgeVoices、warmupSense；第四处 backoffTimers）。
+   */
+  private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>()
+
+  /** R13：可取消的重试 sleep——句柄入集供 close() 取消；落定即自摘。 */
+  private retrySleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.retryTimers.delete(timer)
+        resolve()
+      }, ms)
+      this.retryTimers.add(timer)
+    })
+  }
 
   constructor(options: {
     engine: TtsEngine
@@ -293,6 +314,11 @@ export class TtsQueue {
 
   /** 触发当前引擎预热/下载模型并初始化（设置面板「下载」按钮；Edge 为无操作）。 */
   async prepare(): Promise<void> {
+    // Minor-8（Issue #15 R13，纵深防御）：close 后不得再触发引擎 prepare——
+    // 否则会走到 ensureReady 重走模型校验 + fork（I-1 同一条后果链）。
+    // 现实调用方（设置面板「下载」按钮）在插件卸载后不可达，故非现实缺陷；
+    // 补早返使公开面自成闭环，不依赖调用方自觉。
+    if (this.closed) return
     await this.engine.prepare?.()
   }
 
@@ -301,6 +327,9 @@ export class TtsQueue {
    * 失败（含非法音色）抛错。
    */
   async synthesize(text: string, options: { voice?: string; rate?: number } = {}): Promise<Buffer> {
+    // Minor-8：同上——close 后 reject 而非触达已 close 的引擎（调用方本就在 await，
+    // reject 与既有「失败抛错」语义一致，无需新错误码）。
+    if (this.closed) throw new Error('tts queue closed')
     return this.engine.synthesize(text, options)
   }
 
@@ -385,13 +414,20 @@ export class TtsQueue {
         let buf: Buffer | null = null
         for (let attempt = 0; attempt < MAX_SYNTH_ATTEMPTS; attempt++) {
           if (item.epoch !== q.epoch) break // 打断：停止重试
+          // R13（Issue #15 Important-1）：重试 sleep 期间 close 落进来 → 睡醒直接
+          // synthesize 已 close 的引擎。I-1 的 5 处判序全在重试循环**之外**，此处是
+          // 漏掉的第 6 条路径（实测复现：close 后仍有两次 synthesize@closed=true）。
+          // 后果同 I-1：tts-local 的 close() 已置空 child/childInit/ready → ensureReady
+          // 首行守卫失效 → 重走模型校验 + fork 孤儿子进程。真实时序无需网络故障——
+          // close→kill child→在途 synthesize 被 child.on('exit') 的 rejectAll 打回即可进入。
+          if (this.closed) break
           try {
             buf = await this.engine.synthesize(item.text)
             break
           } catch (e) {
             console.warn(`[dsh-voice-mode] synthesis failed (${attempt + 1}/${MAX_SYNTH_ATTEMPTS}): ${String(e)}`)
             if (attempt < MAX_SYNTH_ATTEMPTS - 1) {
-              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
+              await this.retrySleep(400 * (attempt + 1))
             }
           }
         }
@@ -498,6 +534,10 @@ export class TtsQueue {
     // 让本地引擎 ensureReady() 重新 fork 出一个孤儿子进程（热重载泄漏）。
     for (const timer of this.backoffTimers) clearTimeout(timer)
     this.backoffTimers.clear()
+    // R13：一并取消重试 sleep 计时器——否则 close 落进 400/800ms 窗口时残留 ref'd
+    // timer 拖住事件循环（且睡醒后会走上面补的 closed 判序而 break，timer 本身仍走完）。
+    for (const timer of this.retryTimers) clearTimeout(timer)
+    this.retryTimers.clear()
     await this.engine.close()
   }
 }

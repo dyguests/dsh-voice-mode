@@ -56,7 +56,7 @@ export interface TtsEngine {
 ```
 
 **`src/tts-local.ts` 加 `normalizeEmotionTags(text: string, engine: TtsEngine): string`**：
-- 在 `enqueue` 之前调一次（`src/tts-queue.ts:304` 接口 / 调用点 `src/index.ts:1716,1735`）
+- 在 `enqueue` 之前调一次（`src/tts-queue.ts:357` 接口 / 调用点 `src/index.ts:1716,1735`；2026-10-20 10:34 实测（R13 fix-host 第 6 道门改动后））
 - 解析 `<\w+(?:\s+\d+ms)?>` → 按引擎映射替换为对应 SSML/停顿/emoji
 - 返回**纯字符串**（注意：Edge 引擎后续需走 `rawToFile`/`rawToStream` 路径而非 `_SSMLTemplate`，因为后者的 `<prosody>` 包裹破坏 `<mstts:express-as>` 嵌入）
 
@@ -76,7 +76,7 @@ export interface TtsEngine {
 - [ ] 未知标签按字面文本朗读
 - [ ] 三引擎跑通样例句 `"你好<laugh>今天天气真好"`：Kokoro 笑声 token、VITS emoji+停顿、Edge `<mstts:express-as style="cheerful">`
 - [ ] 现有 `ttsEngine: edge/vits/kokoro` 切换不影响其他字段
-- [ ] **不破坏现有不丢句不变量**：`tts-queue.ts:358-370` 重试 + `:264`/`:328`（epoch 自增）/`:361`（泵内守卫）不动
+- [ ] **不破坏现有不丢句不变量**：`tts-queue.ts:413-430` 重试 + `:296`/`:382`（epoch 自增）/`:416`（泵内守卫，另 :430 continue）不动（2026-10-20 10:34 实测（R13 fix-host 第 6 道门改动后））
 
 ## 后果
 
