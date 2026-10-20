@@ -5,23 +5,26 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [0.7.25] - 2026-10-19
-
-**Patch**：兼容 dsh 0.2.1-alpha.5 / 0.2.1-rc.2（四层验证全绿）；`engines.dsh` 改为带上界；验证矩阵扩至 17 版 / 14 核心；冒烟脚本适配 0.2.1 设置入口迁移。
-
-### 兼容
-
-- 复核 dsh **0.2.1-alpha.5 / 0.2.1-rc.2**（next 通道；rc.2 为 0.2.1 正式版候选）：17 版锚点 9/9、17 版 host/client 双 typecheck、14 核心 runtime 冒烟（16 断言：mic 双语渲染、设置卡片/迁移/写入/刷新保留/专属页/双语卡片/语言热切换/覆盖层落盘/引擎热切换/非法值与跨源拒绝）、真 LLM + 真实语音闭环 4 帧 / 0 tts-error。实证见 `docs/compat-contract.md` §19。
-- **`engines.dsh` 改为 `">=0.1.1-rc.2 <0.3.0"`**（原无上界）：dsh 0.2.1-alpha.4 起 next/alpha 通道由 `engines.dsh` 单独硬校验兼容性（不满足即拒绝加载），无上界意味着未来破坏性大版本仍会被放行到未测试宿主；按官方推荐风格封顶 0.3.0，未验证的新大版本将被干净拒绝。已实测范围 0.1.1-rc.2 → 0.2.1-rc.2 全部落在界内。
-- 适配 0.2.1-alpha.4/5 起设置入口迁移：Settings 从侧栏「More」菜单移入底部「Account menu」弹出层（未认证时引导后弹可关登录门）。插件两处入口（设置弹窗「语音模式」专属页 + 插件详情页卡片）均仍有效，业务源码零改动；冒烟脚本新增第三条导航路径与登录门关闭（对照组线上 0.2.0-rc.2 回归 16/16，旧宿主无回归）。
-
-### 测试与工具
-
-- `scripts/typecheck-dual.sh` cordis 映射补表：`0.2.1-alpha.4/5 → 4.0.5-alpha.2`、`0.2.1-rc.2 → 4.0.5`（npm view peer 实证）。
-- `scripts/verify-dual.sh` 矩阵 15→17 版锚点/typecheck、12→14 核心冒烟；`check-dsh-version.sh` 恢复 exit 0 对齐。
-- 文档同步：根/插件中英 README 兼容声明、CONTEXT.md 宿主兼容行、`docs/RELEASE-WORKFLOW.md`（发版正典回 release.sh）。
-
 ## [Unreleased]
+
+### 规划中
+
+- F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）
+- ADR-0003：client-side VAD 下沉（语音活动检测从 host 侧移至客户端，进一步压延迟）
+- 发布与美化批次：博客、发布说明与文档收尾（对应 `blog/` 与 `RELEASE-NOTES.md`）
+- 引擎层静态审计待办（需真机验证后再改，见 CONTEXT.md「已知待办」）
+
+## [0.7.26] - 2026-10-20
+
+**Issue #15 体验反馈处置**：打断语音抢救（不再吃句）、运行中语音直接插话（steer）、实时转写回填输入框、准确/快速模式与定稿耗时提示、可选 LLM 纠错（默认关）、发送延迟与静音阈值解耦、设置生效时机与当前生效值可见、静默故障提示与一键复制诊断。
+
+### 发版与 CI
+
+- CI 修复：test job 先构建再测试（`lib/` 入库而 `lib/.msedge-tts.meta.json` 不入库，干净 checkout 下 package-install 测试必红）。
+- 新增 `.github/workflows/release.yml`：推 `vX.Y.Z` tag → 校验 tag/package.json/CHANGELOG 一致 → pnpm 冻结锁构建+测试+锚点 → `npm publish --provenance` → GitHub Release（正文取本文件对应段）。
+- `scripts/full-e2e.sh` / `scripts/smoke-runtime.sh` 可在 macOS 运行：工作目录取真实路径（`/tmp`、`/var` 为符号链接时宿主不选中预置工作区，mic 不渲染）、无 `setsid` 时回退、`DEEPSEEK_API_KEY` 可直接经环境变量传入。
+- 发版前实证（macOS，dsh 0.2.1-rc.2）：`npm test` 全绿；8 处修复点反向变异全部被测试抓红；runtime 冒烟（中英 mic 渲染 + 设置卡片 13 断言 + console 0 error）通过；真实语音闭环（VITS 合成语音 → 浏览器采集 → 流式识别 → 自动发送 → DeepSeek 回复 → 朗读帧到达客户端，0 tts-error）通过。
+
 
 ### Issue #15 用户体验反馈处置（10 项，8 批+收口；计划真源 `docs/plan/issue-15-ux-feedback.md`）
 
@@ -162,12 +165,21 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 - **Minor-8：纵深防御**：close 后入口早返锁（双保险）。
 - 测试：tts-queue-engine 5→7（+2），计数 622→**624 ✓ / 51 文件**、行为级 85→**87 项**。
 
-### 规划中
+## [0.7.25] - 2026-10-19
 
-- F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）
-- ADR-0003：client-side VAD 下沉（语音活动检测从 host 侧移至客户端，进一步压延迟）
-- 发布与美化批次：博客、发布说明与文档收尾（对应 `blog/` 与 `RELEASE-NOTES.md`）
-- 引擎层静态审计待办（需真机验证后再改，见 CONTEXT.md「已知待办」）
+**Patch**：兼容 dsh 0.2.1-alpha.5 / 0.2.1-rc.2（四层验证全绿）；`engines.dsh` 改为带上界；验证矩阵扩至 17 版 / 14 核心；冒烟脚本适配 0.2.1 设置入口迁移。
+
+### 兼容
+
+- 复核 dsh **0.2.1-alpha.5 / 0.2.1-rc.2**（next 通道；rc.2 为 0.2.1 正式版候选）：17 版锚点 9/9、17 版 host/client 双 typecheck、14 核心 runtime 冒烟（16 断言：mic 双语渲染、设置卡片/迁移/写入/刷新保留/专属页/双语卡片/语言热切换/覆盖层落盘/引擎热切换/非法值与跨源拒绝）、真 LLM + 真实语音闭环 4 帧 / 0 tts-error。实证见 `docs/compat-contract.md` §19。
+- **`engines.dsh` 改为 `">=0.1.1-rc.2 <0.3.0"`**（原无上界）：dsh 0.2.1-alpha.4 起 next/alpha 通道由 `engines.dsh` 单独硬校验兼容性（不满足即拒绝加载），无上界意味着未来破坏性大版本仍会被放行到未测试宿主；按官方推荐风格封顶 0.3.0，未验证的新大版本将被干净拒绝。已实测范围 0.1.1-rc.2 → 0.2.1-rc.2 全部落在界内。
+- 适配 0.2.1-alpha.4/5 起设置入口迁移：Settings 从侧栏「More」菜单移入底部「Account menu」弹出层（未认证时引导后弹可关登录门）。插件两处入口（设置弹窗「语音模式」专属页 + 插件详情页卡片）均仍有效，业务源码零改动；冒烟脚本新增第三条导航路径与登录门关闭（对照组线上 0.2.0-rc.2 回归 16/16，旧宿主无回归）。
+
+### 测试与工具
+
+- `scripts/typecheck-dual.sh` cordis 映射补表：`0.2.1-alpha.4/5 → 4.0.5-alpha.2`、`0.2.1-rc.2 → 4.0.5`（npm view peer 实证）。
+- `scripts/verify-dual.sh` 矩阵 15→17 版锚点/typecheck、12→14 核心冒烟；`check-dsh-version.sh` 恢复 exit 0 对齐。
+- 文档同步：根/插件中英 README 兼容声明、CONTEXT.md 宿主兼容行、`docs/RELEASE-WORKFLOW.md`（发版正典回 release.sh）。
 
 ## [0.7.24] - 2026-10-15
 
