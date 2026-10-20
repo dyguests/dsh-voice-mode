@@ -499,4 +499,125 @@ await t('listEdgeVoices 返回后无新增悬挂 Timeout（30s 超时 timer 已 
   assert.equal(after, before, `新增 ${after - before} 个悬挂 Timeout——超时 timer 未 clear（/voices 反复调用会累积）`)
 })
 
+// ---------------------------------------------------------------------------
+// M7①（Issue #15 R11）：dispose 后禁止 SenseVoice worker 懒重建。
+// 泄漏链：dispose() 只 terminate **当时已存在**的 worker；而在途的 getSenseWorker
+// 初始化（async IIFE，含 await ensureSenseModel + await client.request('create')）
+// 完成后仍执行 `senseWorker = client`——把一个 dispose 完全不知道的 Worker 赋值回来。
+// 后果：该 Worker 线程永不 terminate（热重载每代泄漏一个常驻线程 + WASM 模型内存），
+// 且 senseWorkerSyncing 残留指向它的已解析 promise，后续 getSenseWorker 直接返回陈旧值。
+// 本用例走查该时序：init 在途 → dispose → 放行 create（完成回调在 dispose 之后到达）。
+// ---------------------------------------------------------------------------
+console.log('R11：dispose 后 SenseVoice worker 不得懒重建（在途初始化完成回调）')
+
+const m7aTmp = join(tmpdir(), 'dsh-vm-m7a-fix')
+mkdirSync(m7aTmp, { recursive: true })
+writeFileSync(
+  join(m7aTmp, 'sherpa-stub.mjs'),
+  `
+export function createOnlineRecognizer() {
+  return {
+    createStream: () => ({ acceptWaveform: () => {}, clear: () => {}, free: () => {} }),
+    isReady: () => false, decode: () => {}, getResult: () => ({ text: '' }), free: () => {},
+    config: { featConfig: { sampleRate: 16000 } },
+  }
+}
+export function createVad() {
+  return {
+    acceptWaveform: () => {}, isDetected: () => false, isEmpty: () => true,
+    front: () => ({ samples: new Float32Array(0), start: 0 }), pop: () => {},
+    clear: () => {}, free: () => {},
+  }
+}
+export default { createOnlineRecognizer, createVad }
+`,
+)
+writeFileSync(
+  join(m7aTmp, 'models-stub.mjs'),
+  `
+export const HOST_PRIMARY = 'https://huggingface.co'
+export function validateModelHost(h, _a) { return h || HOST_PRIMARY }
+export async function ensureModelFile() { return true }
+export async function ensureModelTree() { return true }
+`,
+)
+// sense 桩：request('create') 可控挂起（制造「初始化在途」窗口）；记录 client 创建数
+// 与真实 worker 的 terminate 数——terminate 数是泄漏的直接可观测量。
+writeFileSync(
+  join(m7aTmp, 'sense-stub.mjs'),
+  `
+let createRelease = null
+let clients = 0
+let terminated = 0
+globalThis.__m7a = {
+  clients: () => clients,
+  terminated: () => terminated,
+  releaseCreate: () => createRelease?.(true),
+}
+export function createSenseWorkerClient(w) {
+  clients++
+  return {
+    request: async (op) => {
+      if (op === 'create') return new Promise((res) => { createRelease = res })
+      return 'X'
+    },
+    onDeath: () => {},
+    terminate: async () => { terminated++; try { await w.terminate() } catch { /* 已退出则忽略 */ } },
+  }
+}
+`,
+)
+writeFileSync(join(m7aTmp, 'sense-worker.mjs'), '// 桩占位\n')
+
+const m7aBundle = join(m7aTmp, 'asr-host.bundle.mjs')
+await build({
+  entryPoints: [join(here, '..', 'src', 'asr-host.ts')],
+  outfile: m7aBundle,
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  alias: { 'sherpa-onnx': join(m7aTmp, 'sherpa-stub.mjs') },
+  plugins: [
+    { name: 'stub-models', setup(b) { b.onResolve({ filter: /\.\.?\/models\.ts$/ }, () => ({ path: join(m7aTmp, 'models-stub.mjs') })) } },
+    { name: 'stub-sense', setup(b) { b.onResolve({ filter: /\.\.?\/sense-worker\.ts$/ }, () => ({ path: join(m7aTmp, 'sense-stub.mjs') })) } },
+  ],
+  logLevel: 'silent',
+})
+const { createAsrRuntime: createAsrRuntimeM7a } = await import(pathToFileURL(m7aBundle).href)
+
+await t('M7①：在途初始化完成于 dispose 之后 → worker 被 terminate 而非赋值回 senseWorker', async () => {
+  const rt = createAsrRuntimeM7a({
+    cacheDir: m7aTmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => true, // 开：走 getSenseWorker 初始化路径
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto',
+  })
+  try {
+    rt.reset('s-m7a')
+    // 发起 final → 定稿链路上的 senseTranscribe 触发 getSenseWorker 初始化，
+    // request('create') 挂起 → 进入「初始化在途」窗口。
+    const p = rt.feed('s-m7a', new Float32Array(1600).fill(0.1), true, 0, 0, true)
+    await sleep(400)
+    assert.equal(globalThis.__m7a.clients(), 1, '前置条件：应已创建 1 个 sense client')
+    assert.equal(globalThis.__m7a.terminated(), 0, '前置条件：尚未 terminate')
+    // dispose 在在途初始化期间到达。
+    rt.dispose()
+    // 放行 create：初始化完成回调在 dispose 之后才到达（本用例的核心时序）。
+    globalThis.__m7a.releaseCreate()
+    await p.catch(() => {})
+    await sleep(300)
+    assert.equal(
+      globalThis.__m7a.terminated(),
+      1,
+      '在途初始化产出的 worker 未被 terminate——dispose 后它被赋值回 senseWorker，线程泄漏（热重载每代泄漏一个常驻线程 + WASM 模型内存）',
+    )
+  } finally {
+    // 该 runtime 已 dispose；无其它需清理的 timer（sweep interval 已在 dispose 内清）。
+  }
+})
+
 console.log(`\nhost-fixes：${passed} 项通过`)

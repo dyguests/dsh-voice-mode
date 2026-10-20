@@ -425,9 +425,21 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
         return pcmToWav(Buffer.alloc(0), 16000)
       }
       // 逐段调子进程合成 + 拼 PCM；段间插静音（紧跟 break）；whisper 段乘 0.5。
+      // M5 续：见上方 needsRespawn 处注释——Aborted 重试为死路径。
       const chunks: Float32Array[] = []
       let resolvedSampleRate = 0
-      let needsRespawn = true // Aborted 重试只对第一段生效（避免多段重复重启）
+      // M5（Issue #15 R11）：注释改如实——这段「Aborted 后重试一次」是**死路径**。
+      // respawnChild()（:218-225）同步把 child 置 null，紧随其后的重试 call() 必被
+      // :240-243 的空 child 守卫 reject('tts child not running')。因此：
+      //  · 注释原宣称的「Aborted 重试只对第一段生效」从未发生——重试从不成功，
+      //    它只是把 'Aborted' 错误改写成 'tts child not running' 后抛出；
+      //  · needsRespawn 随之成为死逻辑：它唯一的赋值（false）不改变任何结果，
+      //    因为第一次重试就已经失败抛出，多段场景根本走不到第二次判断。
+      // 实际恢复路径在 tts-queue.ts 的 pump：3 次有界重试（每次多付 400ms 退避），
+      // 由它重新触发 ensureReady → fork 新子进程。
+      // 【待决，已登记】让 needsRespawn 真正生效需改重试语义（respawnChild 后应等
+      // 子进程重建再 call，而非同步重试），属行为变更，本轮只修注释不动逻辑。
+      let needsRespawn = true
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i]
         const preBreak = (seg as { preBreakMs?: number }).preBreakMs ?? 0

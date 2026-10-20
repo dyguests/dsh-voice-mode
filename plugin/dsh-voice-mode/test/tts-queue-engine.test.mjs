@@ -3,6 +3,8 @@
  *  1) 不归零 seq——切换后新句 sentenceId 超过已广播水位（= client 拒绝线的来源，
  *     否则引擎热切换后新回复前 N 句被静默丢弃）；
  *  2) 停播孤儿泵——在途合成完成后不得再用旧引擎广播（双轨广播根因）。
+ * M7②（R11）：close() 必须取消待触发的退避重启计时器——否则 close 后 pump 仍会跑，
+ *   让本地引擎 ensureReady() 重新 fork 合成子进程（热重载泄漏）。
  * 运行：node test/tts-queue-engine.test.mjs（离线，无网络/无 dsh 依赖）。
  */
 import assert from 'node:assert/strict'
@@ -144,6 +146,51 @@ await t('setEngine 弃积压：旧队列 pending 不得残留到新引擎', asyn
   assert.deepEqual(next.calls, ['新一句'], '新引擎只应合成切换后入队的句子')
   assert.equal(frames[0].sentenceId, 0, '本队列从未广播过句子，首句 seq=0（水位未回归）')
   await q.close()
+})
+
+// ---------------------------------------------------------------------------
+// M7②（Issue #15 R11）：close() 必须取消待触发的退避重启计时器。
+// 泄漏链：pump 失败退避的 setTimeout 不持句柄 → close() 无从取消 → 计时器触发 pump →
+// 若该会话仍有 pending 就调 engine.synthesize → 本地引擎 ensureReady() **重新 fork
+// 合成子进程**——插件已卸载、引擎已 close，却留下孤儿子进程（热重载每代泄漏一个）。
+// 可达路径说明：while 退出时 pending 已空，故 finally 里 pending>0 只可能来自外层
+// catch（try 抛错时仍有积压）——而内层 for 已捕获 synthesize 错误，唯一能逃出去的就是
+// onSkip 回调抛错。故本用例用抛错的 onSkip 构造该路径（与 M6 注释所述一致）。
+// ---------------------------------------------------------------------------
+await t('M7②：close() 取消退避重启计时器，close 后 pump 不得再跑', async () => {
+  const calls = []
+  const eng = {
+    mime: 'audio/wav',
+    updateVoice() {},
+    async synthesize(text) {
+      calls.push(text)
+      throw new Error('ETIMEDOUT (stub)')
+    },
+    async close() {},
+  }
+  const q = new TtsQueue({
+    engine: eng,
+    onSkip: () => {
+      throw new Error('onSkip boom (stub：模拟宿主回调抛错以触达外层 catch)')
+    },
+  })
+  // 三句：前两句各耗尽 3 次重试后经外层 catch 排上退避 timer，第三句仍在 pending。
+  q.enqueue('s1', 'A')
+  q.enqueue('s1', 'B')
+  q.enqueue('s1', 'C')
+  // 轮询到 6 次调用（= 前两句各 3 次）而非固定 sleep，防慢机时序脆弱。
+  const t0 = Date.now()
+  while (calls.length < 6 && Date.now() - t0 < 15000) await sleep(20)
+  assert.equal(calls.length, 6, `前置条件：前两句应各试 3 次（实际 ${calls.length}）`)
+  await sleep(200) // 等外层 catch 的 finally 排上退避 timer（1s 后才触发，200ms 内必已排上）
+  const before = calls.length
+  await q.close()
+  await sleep(2500) // 超过退避 1s——若 timer 未取消，这里会再起一轮 pump 合成第三句
+  assert.equal(
+    calls.length,
+    before,
+    `close 后仍有 ${calls.length - before} 次 synthesize——退避 timer 未取消，pump 在 close 后重启引擎（本地引擎会 fork 孤儿子进程）`,
+  )
 })
 
 console.log(`\ntts-queue-engine：${passed} 项通过`)

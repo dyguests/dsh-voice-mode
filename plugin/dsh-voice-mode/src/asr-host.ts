@@ -387,6 +387,20 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
   let senseWorkerSyncing: Promise<SenseWorkerClient | null> | null = null
   /** 批 2：上次建 worker 用的 language+ITN 指纹；变化触发 terminate+重建。 */
   let senseWorkerLangKey = ''
+  /**
+   * M7①（Issue #15 R11）：dispose 后禁止懒重建。
+   *
+   * 漏洞：dispose() 只把 senseWorker/senseWorkerSyncing 置 null 并 terminate **当时已存在**
+   * 的 worker；而在途的 senseWorkerSyncing 初始化（下方 async IIFE）完成后仍会执行
+   * `senseWorker = client`——把一个 dispose 完全不知道的 Worker 赋值回来。后果：
+   *  · 该 Worker 线程永不 terminate（热重载每代泄漏一个常驻线程 + 其 WASM 模型内存）；
+   *  · senseWorkerSyncing 也残留一个指向已泄漏 worker 的已解析 promise（其 .finally 的
+   *    `if (!senseWorker)` 因 senseWorker 已被复活而跳过），后续 getSenseWorker 直接
+   *    返回这个陈旧 promise，重建路径被永久污染。
+   * 修法：dispose 置位本标志；初始化**完成前**判序——已 dispose 则 terminate 刚建好的
+   * worker 并返回 null，绝不赋值（与 finalizing 代际判定同模式的「完成前判序」思路）。
+   */
+  let senseDisposed = false
   const getSenseWorker = async (): Promise<SenseWorkerClient | null> => {
     if (!senseVoice()) return null // P4：开关关闭 → 只用流式 zipformer
     // 批 7O：语言已固定 'auto'（批 7M 砍 recognitionLanguage），指纹仅剩 ITN 一维——
@@ -402,6 +416,8 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
     if (senseWorker) return senseWorker
     if (senseWorkerSyncing) return senseWorkerSyncing
     senseWorkerSyncing = (async () => {
+      // M7①：dispose 已到达则根本不要起初始化（含其后的模型 ensure 与 fork）。
+      if (senseDisposed) return null
       const sensePath = await ensureSenseModel()
       if (!sensePath) return null
       try {
@@ -427,6 +443,12 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
           await client.terminate()
           return null
         }
+        // M7①：create 期间 dispose 可能已到达（await 让出事件循环）。此时若仍赋值，
+        // 这个 dispose 不知道的 Worker 就会泄漏（详见 senseDisposed 声明处注释）。
+        if (senseDisposed) {
+          await client.terminate()
+          return null
+        }
         senseWorker = client
         return client
       } catch (e) {
@@ -435,7 +457,8 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
       }
     })().finally(() => {
       // 未产出时清空同步位，令下次调用可重建（否则恒 null）。
-      if (!senseWorker) senseWorkerSyncing = null
+      // M7①：disposed 时也清——否则残留一个指向已泄漏/已终止 worker 的已解析 promise。
+      if (!senseWorker || senseDisposed) senseWorkerSyncing = null
     })
     return senseWorkerSyncing
   }
@@ -774,6 +797,9 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
     },
     dispose: () => {
       clearInterval(sweepTimer)
+      // M7①：先置位再清理——令在途的 getSenseWorker 初始化在完成前判序退出
+      // （否则它会把一个 dispose 不知道的 Worker 赋值回 senseWorker，线程泄漏）。
+      senseDisposed = true
       // 释放 SenseVoice worker（terminate 常驻线程，防热重载后线程泄漏）。
       let w = senseWorker
       senseWorker = null

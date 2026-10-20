@@ -13,7 +13,7 @@ dsh-voice-mode 当前 TTS 三引擎（Edge/VITS/Kokoro）**都不支持情感/�
 调研与真机对照发现：
 - TTS 子代理 §3 红线 1（2026-09 第一轮）：**Orpheus / Bark / Dia 风格的内联情感标签 → tts-local 文本归一化**（小工程量）
 - 真机对照基线审查（2026-09 第二轮）：A1 Edge 路径评估 — `msedge-tts` `Prosody.d.ts` 仅 `pitch/rate/volume`，**无 `style`**；评估为"6-10 天 fork 或自拼 SSML"
-- 本轮（第三轮）深度复查（2026-09-14）：**纠正上述结论**——`msedge-tts` 仓库 `dist/MsEdgeTTS.d.ts:122` 已暴露 `rawToFile(dirPath, requestSSML)`，可绕过 `_SSMLTemplate` 直接拼 SSML 字符串提交，**无需 fork**
+- 本轮（第三轮）深度复查（2026-09-14）：**纠正上述结论**——`msedge-tts` `dist/MsEdgeTTS.d.ts` 已暴露 `rawToFile(dirPath, requestSSML)`（按符号定位；2026-09-14 时点在 :122，安装版 2.1.0 实测 :136），可绕过 `_SSMLTemplate` 直接拼 SSML 字符串提交，**无需 fork**
 
 ## 决策（提议）
 
@@ -63,7 +63,7 @@ export interface TtsEngine {
 **`src/tts-queue.ts` Edge 引擎 (`src/tts-queue.ts:109` 的 `EdgeTtsEngine`)**：
 - 检测 `text` 是否包含 emotion 标签（已 stripped 时不含）
 - 不含：走原 `synthesize` 路径
-- 含：切换到 rawSSML 路径（用 **`MsEdgeTTS.rawToFile`(L122) 或 `rawToStream`(L132)** —— 仓库公开 API；私有 `_rawSSMLRequest`(L137-139) 不可直接调用）—— 无需 fork
+- 含：切换到 rawSSML 路径（用 **`MsEdgeTTS.rawToFile` 或 `rawToStream`**（按符号定位；2026-09-14 时点 L122/L132，安装版 2.1.0 时点实测 :136 `rawToFile` / :146 `rawToStream`）—— 仓库公开 API；私有 `_rawSSMLRequest` 不可直接调用）—— 无需 fork
 
 **`src/index.ts:1699` `tapActiveStream`**（调用点 :918）：
 - 在 `segmenter.feed(chunk.text)` 之前调 `normalizeEmotionTags(chunk.text, engine)`，把抽取到的情绪信息塞到 `enqueue` 路径
@@ -87,7 +87,7 @@ export interface TtsEngine {
 - 与 ADR-0006 互补：自动打断模式保证"对话节奏"，本 ADR 提升"对话质感"
 
 **负面 / 成本**
-- 工程量：**实测 2-3 天（不是 6-10 天）**——靠 msedge-tts 已暴露的 `rawToFile`(L122) / `rawToStream`(L132) API
+- 工程量：**实测 2-3 天（不是 6-10 天）**——靠 msedge-tts 已暴露的 `rawToFile` / `rawToStream` API（按符号定位；安装版 2.1.0 时点实测 d.ts:136 `rawToFile` / :146 `rawToStream`）
 - Edge rawSSML 路径与 `_SSMLTemplate` 路径**互斥**——需要在合成前判断是否含标签，决定走哪条流
 - SSML 标签的语义不正确时 Edge 静默失败——需在批测脚本加 SSML 合法性检查
 - `<laugh>` 等情感标签的"标准度"由各家引擎定义——Kokoro 实际有的 IPA token 决定可表达范围
@@ -98,7 +98,7 @@ export interface TtsEngine {
 - TTS 子代理 §3 红线 1（Orpheus / Bark / Dia 风格）
 - 国际对话式语音子代理 §6 Hume EVI（**emotion scores 是社会-语用层第一个杠杆**）
 - 真机对照基线审查（已纠正：`rawToFile`/`rawToStream` 暴露，`ProsodyOptions` 缺 `style` 但 rawSSML 仍可拼 `<mstts:express-as>`）
-- msedge-tts 仓库：`dist/MsEdgeTTS.d.ts:122 rawToFile(dirPath, requestSSML: string): Promise<...>` 已公开
+- msedge-tts 仓库：`dist/MsEdgeTTS.d.ts` `rawToFile(dirPath, requestSSML: string): Promise<...>` 已公开（按符号定位；安装版 2.1.0 实测 :136）
 
 ## 备选方案
 
@@ -132,12 +132,12 @@ export interface TtsEngine {
 
 4. **`<break N ms>` 语义落地** —— 段后置静音（EmotionSegment.preBreakMs 标在「break 之前的最后一段」上，语义 = 该段 PCM 合成完后插入的静音毫秒数）。sherpa-onnx 不支持 SSML 时段间停顿标签，落地通过 PCM 后处理实现（`src/tts-local.ts:476-481`）。
 
-5. **`<laugh>/<sigh>/<emphasis>` 剥离不读出** —— 在 `src/emotion.ts:32` 标签处理分支识别后丢弃，不进入段序列。LLM 端若需真实笑声/叹气/强调，等第二步 Edge `rawToFile/rawToStream` 路径（ADR-0007 落地顺序第 2 步，本批未实施）。
+5. **`<laugh>/<sigh>/<emphasis>` 剥离不读出** —— 在 `src/emotion.ts:33` `parseEmotionTags` 标签处理分支识别后丢弃（2026-10-20 收尾终检修正，原 :32 为文档注释收尾行），不进入段序列。LLM 端若需真实笑声/叹气/强调，等第二步 Edge `rawToFile/rawToStream` 路径（ADR-0007 落地顺序第 2 步，本批未实施）。
 
 **未实施的部分**（按 ADR-0007「落地顺序」第 2 步，留未来）：
 
-- 第二步 Edge `rawToFile` / `rawToStream` 路径（`msedge-tts` `dist/MsEdgeTTS.d.ts:122/132` 公开 API）：`<mstts:express-as style="cheerful/sad/whisper">` 注入。
-- 第一步遗漏项（批 4 审查 I2）：**LLM prompt 注入**（VOICE_SPOKEN_PROMPT 未追加 emotion 标签使用指引）—— 即便修复 B1，端用户也无路径触发 emotion 标签输出。**已在批 6 STATE 记录**，未来如需启用需：(1) host `inject` 加 `systemPrompt`；(2) 追加 emotion 标签使用指引到 `src/index.ts:72` VOICE_SPOKEN_PROMPT；(3) 真机验证 LLM 是否输出 `<laugh>` 等标签。
+- 第二步 Edge `rawToFile` / `rawToStream` 路径（`msedge-tts` `dist/MsEdgeTTS.d.ts` 公开 API，按符号定位 `rawToFile`/`rawToStream`；安装版 2.1.0 时点实测 :136 / :146）：`<mstts:express-as style="cheerful/sad/whisper">` 注入。
+- 第一步遗漏项（批 4 审查 I2）：**LLM prompt 注入**（VOICE_SPOKEN_PROMPT 未追加 emotion 标签使用指引）—— 即便修复 B1，端用户也无路径触发 emotion 标签输出。**已在批 6 STATE 记录**，未来如需启用需：(1) host `inject` 加 `systemPrompt`；(2) 追加 emotion 标签使用指引到 `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts:103-110` `VOICE_SPOKEN_PROMPT` 迁入；2026-10-20 收尾终检发现并刷新）；(3) 真机验证 LLM 是否输出 `<laugh>` 等标签。
 
 **真机验收（批 6 §8.4 真机冒烟清单第 4 项）**：
 

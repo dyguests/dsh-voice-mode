@@ -547,6 +547,7 @@ function createAsrRuntime(options) {
   let senseWorker = null;
   let senseWorkerSyncing = null;
   let senseWorkerLangKey = "";
+  let senseDisposed = false;
   const getSenseWorker = async () => {
     if (!senseVoice()) return null;
     const langKey = `auto\0${senseITN() ? "1" : "0"}`;
@@ -559,6 +560,7 @@ function createAsrRuntime(options) {
     if (senseWorker) return senseWorker;
     if (senseWorkerSyncing) return senseWorkerSyncing;
     senseWorkerSyncing = (async () => {
+      if (senseDisposed) return null;
       const sensePath = await ensureSenseModel();
       if (!sensePath) return null;
       try {
@@ -581,6 +583,10 @@ function createAsrRuntime(options) {
           await client.terminate();
           return null;
         }
+        if (senseDisposed) {
+          await client.terminate();
+          return null;
+        }
         senseWorker = client;
         return client;
       } catch (e) {
@@ -588,7 +594,7 @@ function createAsrRuntime(options) {
         return null;
       }
     })().finally(() => {
-      if (!senseWorker) senseWorkerSyncing = null;
+      if (!senseWorker || senseDisposed) senseWorkerSyncing = null;
     });
     return senseWorkerSyncing;
   };
@@ -823,6 +829,7 @@ function createAsrRuntime(options) {
     },
     dispose: () => {
       clearInterval(sweepTimer);
+      senseDisposed = true;
       let w = senseWorker;
       senseWorker = null;
       senseWorkerSyncing = null;
@@ -1171,6 +1178,17 @@ var TtsQueue = class {
   onError;
   /** 单句合成重试耗尽被跳过通知（每句一次；此前是静默丢句——真机「回复偶尔不朗读」根因之一）。 */
   onSkip;
+  /**
+   * M7②（Issue #15 R11）：退避重启计时器句柄集。
+   *
+   * 漏洞：pump 失败退避路径的 `setTimeout(() => void this.pump(...), delay)` 不持句柄，
+   * close() 无从取消。close 后计时器仍触发 pump → 若该会话还有 pending，就会调
+   * engine.synthesize → 本地引擎 ensureReady() **重新 fork 合成子进程**——插件已卸载、
+   * 引擎已 close，却留下一个孤儿子进程（热重载每代泄漏一个，CPU/内存常驻）。
+   * 修法：句柄入集，触发即自摘；close() 时全量 clearTimeout（与 asr-host senseP、
+   * listEdgeVoices 的 timer 修法同构）。
+   */
+  backoffTimers = /* @__PURE__ */ new Set();
   constructor(options) {
     this.engine = options.engine;
     this.onError = options.onError;
@@ -1340,12 +1358,19 @@ var TtsQueue = class {
       if (q.pending.length > 0) {
         const delay = q.errorNotified ? q.backoff : 0;
         q.backoff = Math.min(8e3, delay + 1e3);
-        if (delay > 0) setTimeout(() => void this.pump(sessionId, q), delay);
-        else void this.pump(sessionId, q);
+        if (delay > 0) {
+          const timer = setTimeout(() => {
+            this.backoffTimers.delete(timer);
+            void this.pump(sessionId, q);
+          }, delay);
+          this.backoffTimers.add(timer);
+        } else void this.pump(sessionId, q);
       }
     }
   }
   async close() {
+    for (const timer of this.backoffTimers) clearTimeout(timer);
+    this.backoffTimers.clear();
     await this.engine.close();
   }
 };

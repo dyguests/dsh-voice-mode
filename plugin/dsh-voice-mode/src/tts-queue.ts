@@ -226,6 +226,17 @@ export class TtsQueue {
   private readonly onError?: (sessionId: string) => void
   /** 单句合成重试耗尽被跳过通知（每句一次；此前是静默丢句——真机「回复偶尔不朗读」根因之一）。 */
   private readonly onSkip?: (sessionId: string, text: string, streak: number) => void
+  /**
+   * M7②（Issue #15 R11）：退避重启计时器句柄集。
+   *
+   * 漏洞：pump 失败退避路径的 `setTimeout(() => void this.pump(...), delay)` 不持句柄，
+   * close() 无从取消。close 后计时器仍触发 pump → 若该会话还有 pending，就会调
+   * engine.synthesize → 本地引擎 ensureReady() **重新 fork 合成子进程**——插件已卸载、
+   * 引擎已 close，却留下一个孤儿子进程（热重载每代泄漏一个，CPU/内存常驻）。
+   * 修法：句柄入集，触发即自摘；close() 时全量 clearTimeout（与 asr-host senseP、
+   * listEdgeVoices 的 timer 修法同构）。
+   */
+  private readonly backoffTimers = new Set<ReturnType<typeof setTimeout>>()
 
   constructor(options: {
     engine: TtsEngine
@@ -416,7 +427,11 @@ export class TtsQueue {
         }
       }
     } catch (e) {
-      // 引擎级失败：把句子推回以便重试；每会话只提示一次。
+      // M6（Issue #15 R11）：注释改如实。早年写「把句子推回以便重试」——**无对应代码**：
+      // item 在 while 顶部已 shift() 出 q.pending，失败后并不回队，该句就此丢弃。
+      // 本 catch 实际只做两件事：打一行带 sessionId 的诊断日志 + 每会话首次置
+      // errorNotified 并回调 onError。且它近乎不可达——内层 for 循环已对每次
+      // synthesize 做了 try/catch + 3 次重试，能逃到这里的只有监听器之外的非预期抛错。
       // 批 A：补 sessionId 上下文（item / attempt 是 while/for 内部 const/let，
       // 外层 catch 不可见——不做捕获重构以保持外科手术式改动）。
       console.warn(`[dsh-voice-mode] TTS unavailable: sid=${sessionId} err=${String(e)}`)
@@ -433,13 +448,23 @@ export class TtsQueue {
         // 失败退避：1s 指数递增至多 8s；成功/无错误即时。
         const delay = q.errorNotified ? q.backoff : 0
         q.backoff = Math.min(8000, delay + 1000)
-        if (delay > 0) setTimeout(() => void this.pump(sessionId, q), delay)
-        else void this.pump(sessionId, q)
+        if (delay > 0) {
+          // M7②：持句柄 + 触发即自摘，供 close() 全量取消（详见 backoffTimers 声明处）。
+          const timer = setTimeout(() => {
+            this.backoffTimers.delete(timer)
+            void this.pump(sessionId, q)
+          }, delay)
+          this.backoffTimers.add(timer)
+        } else void this.pump(sessionId, q)
       }
     }
   }
 
   async close(): Promise<void> {
+    // M7②：先取消所有待触发的退避重启，再关引擎——否则计时器会在 close 后触发 pump，
+    // 让本地引擎 ensureReady() 重新 fork 出一个孤儿子进程（热重载泄漏）。
+    for (const timer of this.backoffTimers) clearTimeout(timer)
+    this.backoffTimers.clear()
     await this.engine.close()
   }
 }

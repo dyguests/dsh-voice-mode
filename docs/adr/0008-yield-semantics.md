@@ -127,10 +127,10 @@ YIELDING (let the user interrupt)
 - `CONTEXT.md:26`（"打断计数仅在播放期累积"不变量）
 - `CONTEXT.md:27`（"不丢句"不变量）
 - `CONTEXT.md:39-40`（"echoGateDb 原生 AEC 生效时从未被执行"真机事实；lead 提示 38-39，实测该 bullet 在 39-40，38 为播放门行）
-- `@deepseek-ai/dsh-system-prompt@0.1.5-rc.1/lib/types/index.d.ts:12-13, 27`（`SystemPrompt` service 已暴露）
+- `@deepseek-ai/dsh-system-prompt@0.1.5-rc.1/lib/types/index.d.ts`（按符号定位 `SystemPrompt` service；行号 12-13/27 为 0.1.5-rc.1 时点）
 - `docs/findings/2026-09-15-yield-semantics-research.md`（让位调研 7 机制详细）
 - `docs/competitive/sources/scan-system-prompt-design-2026-09.md`（4 层模板完整设计稿）
-- `docs/competitive/scan-multilang-a11y-compliance-2026-09.md`（多语言/a11y/合规调研）
+- `docs/competitive/sources/scan-multilang-a11y-compliance-2026-09.md`（多语言/a11y/合规调研）
 - `docs/competitive/sources/scan-vertical-products-2026-09.md`（Notion AI / Otter 排障对比）
 
 ## 备选方案
@@ -172,7 +172,7 @@ YIELDING (let the user interrupt)
 - `docs/findings/2026-09-15-yield-semantics-research.md`（让位调研 7 机制详细）
 - `docs/competitive/sources/scan-system-prompt-design-2026-09.md`（4 层模板完整设计稿）
 - `docs/competitive/sources/scan-multilang-a11y-compliance-2026-09.md`（多语言/a11y/合规调研）
-- `docs/competitive/scan-vertical-products-2026-09.md`§3.5（NotebookLM Interactive mode 让位调研）
+- `docs/competitive/sources/scan-vertical-products-2026-09.md`§3.5（NotebookLM Interactive mode 让位调研）
 - `docs/competitive/sources/scan-international-conversational-2026-09.md`（OpenAI Realtime 服务让位 + Hume EVI 让位调研）
 - `docs/competitive/sources/scan-baseline-review-2026-09.md`（真机对照基线 — A1 Edge 路径 + 7 条真红）
 - `docs/competitive/scan-2026-09.md`§0.2 + §0.1d（第一性原理深挖 + ADR 推进）
@@ -207,7 +207,7 @@ YIELDING (let the user interrupt)
 
 2. **`matchBackchannel` 不复用 `normalizeWake`** —— `normalizeWake` 会剥前置语气词（`嗯/哎/呃` 等），把 backchannel 词表里的核心词「嗯」剥成空串。落地采用独立 `normalizeBackchannel`（只去空白/标点/小写，保留语气词）。
 
-3. **`backchannelYield` 默认 true 是产品决策（I10 豁免）** —— 关 = onBackchannel 不挂 = 行为等同改造前。**多处置顶显式声明**（`src/index.ts:193/305` defaults + schema + `src/client.tsx:1604` engine config）。
+3. **`backchannelYield` 默认 true 是产品决策（I10 豁免）** —— 关 = onBackchannel 不挂 = 行为等同改造前。**多处置顶显式声明**（`src/index.ts:185/227` interface+defaults、`:352-356` schema、`:441/:489` Config 双路 + `src/client.tsx:674` DEFAULT_BOOT + `src/asr.ts:106-107/:487` 引擎侧消费——2026-10-20 收尾终检刷新，原 193/305/1604 已漂移）。
 
 4. **plan §7.2 词表含 `right`(5 字符) 与 §10 R4b ≤4 上限冲突** —— 按 §10 严格执行，`right` 被长度上限滤掉（commit message 显式声明）。批 5 审查 subagent 通过后 plan §7.2 已修（删 right）。
 
