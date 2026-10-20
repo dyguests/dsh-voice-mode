@@ -141,6 +141,19 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 
 - 锚点口径成文（现态锚点 + 漂移括注 + 历史时点例外）；第三方符号统一按符号定位；全仓 markdown 链接零坏链；计数 618 ✓ / 51 文件（R12 后 622）、行为级 81 项（R12 后 85）；基线滚至 `c4e2c3a`（R12 后 `38cc23e`）。
 
+### Issue #15 R12 修复轮（R11 验真轮 I-1 Important；2026-10-20，`38cc23e`+`bdeaa8d`+`ef80f9b`）
+
+**修复（用户可见，真实代码修复）**
+
+- **I-1：TtsQueue 无 closed 闸门**（Important）：dispose/close 之后，在途 pump 与后续 enqueue 仍对已关闭引擎 `synthesize`、本地 TTS 子进程被重新 fork（热重载泄漏）——补 closed 闸门（5 处判序）+ 行为锁 red-green 实证。
+- **warmupSense 5s race timer**：同型第三处修（计时器生命周期与会话代际对齐）。
+- **M7① 入口判序双路径独立抓红**：入口判序（防 dispose 后在途 final 继续走 `ensureSenseModel`+fork 的浪费）此前零行为锁，本轮与 create 后判序各自独立抓红（host-fixes +3）；**I-1 闸门锁**（tts-queue-engine +1）。
+- **CI 纳入 `check:anchors`**：文档锚点检查进 CI，防行号漂移复发；另清理 Minor-6 死行。
+
+**测试与口径**
+
+- 计数：R11 后 618 → **R12 后 622 ✓ / 51 文件**（+4 = I-1 闸门锁 1 + M7① 入口判序双路径锁 2 + warmupSense 1；现行口径实为 14 处，更正注记见 STATE 账本）；行为级 81 → **85 项**。
+
 ### 规划中
 
 - F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）

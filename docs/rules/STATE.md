@@ -541,6 +541,10 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
 
 **总则（commit message 失准处理，2026-10-20 立）**：凡 commit message 的数字/叙述失准（git 历史不可改），一律在 STATE 落更正注记并以注记为准——B1 审计数字、dangling hash 叙述、M4 行号叙述、M7① 变异叙述均按此办理。
 
+**R12 修复轮已落库**（`38cc23e`，已 push）：R11 验真轮 I-1 Important 全修——① **I-1 TtsQueue closed 闸门**（用户可见代码修复）：dispose/close 后在途 pump/enqueue 仍对已 close 引擎 synthesize、本地 TTS 子进程被重新 fork（热重载泄漏）；closed 闸门 5 处判序 + 行为锁 red-green 实证；② warmupSense 5s race timer 同型第三处修；③ M7① 入口判序双路径**独立抓红**（入口判序此前零锁，本轮补齐，host-fixes +3）；④ I-1 闸门行为锁（tts-queue-engine +1，计数 618→622）；⑤ Minor-6 死行清理；⑥ CI 纳入 `check:anchors` 步。计数终态 **622 ✓/51 文件**、行为级 **85 项**；基线滚至 `38cc23e`。
+**R12 验真轮结论**：clean（0 Blocker / 0 Important / 3 Minor = CHANGELOG 延迟补录（本批已补）、「15 处」口径差 1（见下条）、BUILD_TAG 仅 client.js——设计事实：lib/index.js 由源码内联、BUILD_TAG 只注入 client 壳，非缺陷）。
+**口径更正（Minor-2，commit message 失准以本注记为准）**：`bdeaa8d` message 称计数同步「15 处现行口径」，实测现行语义 **14 处**（11 处文档正文 + 3 处徽章，徽章 URL+alt 合计 1 处）+ 沿革括注若干——message 的 15 含沿革括注混淆，以本注记为准。
+
 **产品待决项（R3 验真轮实测数据支撑，待用户拍板）**：
 1. **LLM 纠错相似度护栏**：验真代理实测归一化 Levenshtein ≥0.5 区分度干净——合法纠错 0.75-0.95（「现再几点」→「现在几点」0.75、「帮我差一下天气」→「帮我查一下天气」0.86）vs 作答/复述形态 0.11-0.43（「现在几点」→「现在是下午三点。」0.38）；约 15 行无依赖，误报方向安全（回退原文）。当前长度护栏够不到「与原文等长的简短作答」（已实测复证）。建议上车，待用户确认。
 2. backchannel 让位丢一句（行为不改、注释如实）；待机期附和词护栏；toggle+manual 待机态 push-to-talk；yieldedSegment 弃段误伤面（让位后只说单个附和词会被弃）；待机期模型下载提示；host 202 不喂流致重复 202 的段音频处理（新旧同症，已论证不丢段）。
