@@ -40,12 +40,17 @@ fi
 echo "   内存检查通过：available ${MEM_AVAIL_MB}MB"
 
 # 凭据注入：值只进本进程与 dsh 子进程 env；不写入任何文件 / 日志
-if ! grep -q '^DEEPSEEK_API_KEY=' /root/.env 2>/dev/null; then
-  echo "✗ /root/.env 缺 DEEPSEEK_API_KEY"; exit 2
+# 已在环境里（如 DEEPSEEK_API_KEY=… bash scripts/full-e2e.sh …）则直接用，否则读 /root/.env
+if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+  if ! grep -q '^DEEPSEEK_API_KEY=' /root/.env 2>/dev/null; then
+    echo "✗ 环境变量与 /root/.env 均无 DEEPSEEK_API_KEY"; exit 2
+  fi
+  DEEPSEEK_API_KEY="$(grep '^DEEPSEEK_API_KEY=' /root/.env | cut -d= -f2-)"
 fi
-export DEEPSEEK_API_KEY="$(grep '^DEEPSEEK_API_KEY=' /root/.env | cut -d= -f2-)"
+export DEEPSEEK_API_KEY
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/dsh-vm-e2e-XXXXXX")
+# pwd -P：macOS 的 /tmp、/var 是指向 /private 的符号链接，宿主按真实路径校验预置工作区，路径不一致则静默不选中（mic 不渲染）
+WORK=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/dsh-vm-e2e-XXXXXX")" && pwd -P)
 DSH_HOME="$WORK/home"
 BOOTLOG="$WORK/boot.log"
 NODE_PID=""
@@ -141,7 +146,7 @@ if [ -n "${DSHVM_TTS_DOWN:-}" ]; then
   export NODE_OPTIONS="--require $(cd "$(dirname "$0")" && pwd)/fixtures/block-edge-tts.cjs ${NODE_OPTIONS:-}"
   echo "   [tts-down] 已预加载 block-edge-tts 夹具（NODE_OPTIONS）"
 fi
-DSH_HOME="$DSH_HOME" setsid node "$BIN" ${BOOT_ARGS:-web --port "$PORT" --host 127.0.0.1 --no-open} >"$BOOTLOG" 2>&1 &
+DSH_HOME="$DSH_HOME" $(command -v setsid) node "$BIN" ${BOOT_ARGS:-web --port "$PORT" --host 127.0.0.1 --no-open} >"$BOOTLOG" 2>&1 &
 NODE_PID=$!
 
 URL=""

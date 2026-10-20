@@ -19,7 +19,8 @@ PORT="${2:-3120}"
 LINK_SRC="$PWD"
 if command -v cygpath >/dev/null 2>&1; then LINK_SRC="$(cygpath -m "$PWD")"; fi
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/dsh-smoke-XXXXXX")
+# pwd -P：macOS 的 /tmp、/var 是符号链接，宿主按真实路径校验预置工作区（见 full-e2e.sh）
+WORK=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/dsh-smoke-XXXXXX")" && pwd -P)
 DSH_HOME="$WORK/home"
 BOOTLOG="$WORK/boot.log"
 NODE_PID=""
