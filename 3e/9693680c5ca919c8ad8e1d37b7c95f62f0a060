@@ -1,0 +1,16 @@
+plugin/dsh-voice-mode/CUSTOMIZATIONS.md
+  h_3553f4e32d4a9f 29
+plugin/dsh-voice-mode/lib/index.js
+  h_3553f4e32d4a9f 1083-1085
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e9693680c5ca919c8ad8e1d37b7c95f62f0a060",
+  "prompts": {},
+  "humans": {
+    "h_3553f4e32d4a9f": {
+      "author": "fanhl <dyguests@qq.com>"
+    }
+  }
+}
