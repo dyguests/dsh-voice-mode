@@ -1080,8 +1080,8 @@ var EdgeTtsEngine = class {
     this.rate = rate;
   }
   mime = "audio/mpeg";
-  // 云端引擎可并发预合成（阵列 pump 会同时跑 5 句，尽量填满句间空白）。
-  concurrency = 5;
+  // 云端引擎可并发预合成（阵列 pump 会同时跑 3 句，减少句间空白）。
+  concurrency = 3;
   updateVoice(voice, rate) {
     this.voice = voice;
     if (rate !== void 0 && Number.isFinite(rate)) this.rate = rate;

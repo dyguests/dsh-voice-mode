@@ -26,7 +26,7 @@
 
 ### 宿主
 - `POST /voice-mode/focus`：上报当前会话，`always` 模式只朗读该会话。
-- TTS 队列滑动窗口预合成（Edge 并发 5），缩短句间空白。
+- TTS 队列滑动窗口预合成（Edge 并发 3），缩短句间空白。
 - `/voice-mode/stream`：同 tabId 去重、上限 8、心跳写失败清理，修复连接占满导致朗读无声。
 
 ### 客户端
