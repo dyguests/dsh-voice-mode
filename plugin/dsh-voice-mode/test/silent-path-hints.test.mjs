@@ -139,7 +139,7 @@ t('client（UX Blocker）：mic 按钮旁常驻提示面（data-dshvm=mic-hint�
   // 前提：错误/提示的唯一原渲染处是状态条，而状态条仅激活时渲染
   const barIdx = clientSrc.indexOf('const isActive = b.active === sessionId')
   assert.ok(barIdx >= 0, '缺状态条激活门')
-  assert.ok(clientSrc.slice(barIdx, barIdx + 80).includes('if (!isActive) return'), '状态条未在非激活态早退')
+  assert.ok(clientSrc.slice(barIdx, barIdx + 80).includes('if (!isActive ||'), '状态条未在非激活态早退')
   // 常驻提示面：mic 按钮（conversation.input.right 常驻）旁红字
   assert.ok(clientSrc.includes('data-dshvm="mic-hint"'), '缺 mic 旁常驻提示面')
   const hintIdx = clientSrc.indexOf('const micHint =')

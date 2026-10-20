@@ -1690,9 +1690,20 @@ var zh = {
   descBargeInSalvage: "AI \u6717\u8BFB\u65F6\u4F60\u5F00\u53E3\u6253\u65AD\uFF1A\u81EA\u52A8\u4FDD\u7559\u4ECE\u5F00\u53E3\u5230\u6253\u65AD\u751F\u6548\u4E4B\u95F4\u4F60\u8BF4\u7684\u8BDD\uFF0C\u5E76\u5165\u8BC6\u522B\u7EE7\u7EED\u53D1\u9001\uFF08\u4FEE\u300C\u6253\u65AD\u5403\u53E5\u300D\uFF1B\u5173 = \u4E22\u5F03\u6253\u65AD\u524D\u8BED\u97F3\u2014\u2014\u4EC5\u5916\u653E\u4E14\u65E0\u56DE\u58F0\u6D88\u9664\u7684\u73AF\u5883\u5EFA\u8BAE\u5173\uFF09",
   descLlmCorrect: "\u53D1\u9001\u524D\u7528\u5927\u6A21\u578B\u5BF9\u6574\u6761\u8BED\u97F3\u6587\u672C\u505A\u4E00\u6B21\u7EA0\u9519\uFF08\u53EA\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57/\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\uFF1B\u9700\u5BBF\u4E3B\u5DF2\u914D\u7F6E\u9ED8\u8BA4\u6A21\u578B\uFF0C\u672A\u914D\u7F6E\u5219\u81EA\u52A8\u7528\u539F\u6587\uFF09\u3002\u5F00 = \u6BCF\u6761\u6D88\u606F\u591A\u4E00\u6B21\u7EA0\u9519\u7B49\u5F85\uFF1A\u901A\u5E38 1 \u79D2\u5185\uFF0C\u6700\u957F\u7EA6 10 \u79D2\uFF1B\u6BCF\u5206\u949F\u6700\u591A 10 \u6B21\uFF0C\u8BED\u97F3\u6A21\u5F0F\u5173\u95ED\u6216\u89E6\u53D1\u9650\u6D41\u65F6\u6309\u539F\u6587\u53D1\u9001\u3002\u7EA0\u9519\u5931\u8D25\u6216\u8F93\u51FA\u5F02\u5E38\u540C\u6837\u81EA\u52A8\u7528\u539F\u6587",
   descYieldMs: "\u8BA9\u4F4D\u8BED\u4E49\u89E6\u53D1\u540E\u7B49\u5F85\u65F6\u957F\uFF08\u6BEB\u79D2\uFF0C500-3000\uFF0C\u9ED8\u8BA4 1500\uFF1B\u7A97\u53E3\u5185\u7528\u6237\u771F\u8981\u8BF4\u5219\u539F hardBreak \u63A5\u7BA1\uFF0C\u7A97\u53E3\u5230\u70B9\u81EA\u52A8\u6062\u590D\u64AD\u653E\uFF09\u3002\u4EC5\u300C\u6309\u4F4F\u8BF4\u8BDD\u300D\u6A21\u5F0F\u64AD\u653E\u671F\u53EF\u89E6\u53D1",
-  descMode: "\u4EA4\u4E92\u6A21\u5F0F\uFF08toggle \u6301\u7EED\u8046\u542C+\u9759\u97F3\u65AD\u53E5 / hold \u6309\u4F4F\u8BF4\u8BDD\uFF09",
+  descMode: "\u4EA4\u4E92\u6A21\u5F0F\uFF08toggle \u6301\u7EED\u8046\u542C+\u9759\u97F3\u65AD\u53E5 / hold \u6309\u4F4F\u8BF4\u8BDD / once \u8BF4\u5B8C\u4E00\u6BB5\u3001\u7B49\u56DE\u590D\u6717\u8BFB\u5B8C\u518D\u81EA\u52A8\u9000\u51FA\uFF09",
   modeToggle: "\u6301\u7EED\u8046\u542C",
   modeHold: "\u6309\u4F4F\u8BF4\u8BDD",
+  modeOnce: "\u8BF4\u5B8C\u5C31\u5173",
+  stopReading: "\u505C\u6B62\u6717\u8BFB",
+  readAloudLabel: "\u6717\u8BFB\u56DE\u590D",
+  readAloudVoice: "\u8BED\u97F3\u6A21\u5F0F",
+  readAloudAlways: "\u603B\u662F",
+  readAloudOff: "\u5173\u95ED",
+  descReadAloud: "\u8BED\u97F3\u6A21\u5F0F=\u53EA\u5728\u8BED\u97F3\u6A21\u5F0F\u91CC\u6717\u8BFB\uFF08\u9ED8\u8BA4\uFF09\uFF1B\u603B\u662F=\u5F53\u524D\u4F1A\u8BDD\u7684\u6BCF\u6761\u56DE\u590D\u90FD\u6717\u8BFB\uFF08\u542B\u6253\u5B57\u53D1\u9001\u7684\uFF09\uFF1B\u5173\u95ED=\u4ECE\u4E0D\u6717\u8BFB",
+  showCaptionsLabel: "\u5B57\u5E55\u6D6E\u5C42",
+  descShowCaptions: "\u6717\u8BFB\u65F6\u5728\u53F3\u4E0B\u89D2\u663E\u793A\u5F53\u524D\u53E5\u5B50\u7684\u5B57\u5E55\u6D6E\u5C42",
+  showStatusBarLabel: "\u72B6\u6001\u6761",
+  descShowStatusBar: "\u5728\u8F93\u5165\u6846\u4E0A\u65B9\u663E\u793A\u8BED\u97F3\u72B6\u6001\u6761\uFF08\u6CE2\u5F62\u3001\u8BC6\u522B\u6587\u5B57\u3001\u8BA1\u65F6\u3001\u63D0\u793A\u3001\u9000\u51FA\uFF09\uFF1B\u5173\u95ED\u540E\u72B6\u6001\u53EA\u5728\u9EA6\u514B\u98CE\u6309\u94AE\u4E0A\u663E\u793A",
   descWakeWord: "\u5524\u9192\u8BCD\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5982\u300C\u4F60\u597D\u5C0FD\u300D\uFF09\uFF1A\u8BF4\u51FA\u8BCD\u5934\u624D\u8FDB\u5165\u8BC6\u522B\uFF0C\u907F\u514D\u8BEF\u89E6\u3002\u53EF\u4E0E\u547D\u4EE4\u8FDE\u8BF4\uFF08\u300C\u4F60\u597D\u5C0FD\uFF0C\u5E2E\u6211\u67E5\u5929\u6C14\u300D\u2014\u2014\u8BCD\u5934\u4F1A\u81EA\u52A8\u5265\u6389\u3001\u4E0D\u8FDB\u6D88\u606F\uFF09\uFF1B\u6BCF\u53E5\u65AD\u53E5\u6216\u6253\u65AD\u540E\u9700\u91CD\u8BF4\uFF1B\u4EC5 toggle \u6A21\u5F0F\u751F\u6548\uFF08hold / \u624B\u52A8\u6253\u65AD\u4E0B\u4E0D\u751F\u6548\uFF1Bdetect \u81EA\u52A8\u63A2\u6D4B\u672A\u751F\u6548\u3001\u56DE\u843D manual \u65F6\u540C\u6837\u4E0D\u751F\u6548\u2014\u2014Safari \u7B49\u65E0\u539F\u751F\u56DE\u58F0\u6D88\u9664\u7684\u673A\u5668\u4F1A\u9ED8\u8BA4\u843D\u5230\u8FD9\u4E00\u6863\uFF09\uFF1B\u6717\u8BFB\u671F\u8BF4\u5524\u9192\u8BCD\u4E0D\u89E6\u53D1\uFF08\u6253\u65AD\u4ECD\u6309 VAD \u5F00\u53E3\u5373\u6253\u65AD\uFF09\u3002\u5339\u914D\u5E26\u5BB9\u9519\uFF08\u540C\u97F3\u5B57 / \u524D\u5BFC\u8BED\u6C14\u8BCD\uFF09\uFF0C\u5EFA\u8BAE 3-4 \u5B57\uFF1B\u975E\u4E13\u7528 KWS \u5F15\u64CE\uFF0C\u5608\u6742\u73AF\u5883\u53EF\u80FD\u5EF6\u8FDF\u6216\u8BEF\u6FC0\u6D3B",
   wakePlaceholder: "\u5982\uFF1A\u4F60\u597D\u5C0FD",
   settingsCardDesc: "\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u9759\u97F3\u505C\u987F / \u7A7A\u95F2\u8D85\u65F6 / \u6A21\u578B\u955C\u50CF / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u9006\u6587\u672C\u5F52\u4E00\u5316 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519",
@@ -1950,9 +1961,20 @@ var en = {
   descBargeInSalvage: "When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)",
   descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; requires a default model configured in the host \u2014 otherwise the original text is sent as-is). On = one extra correction round trip per message: usually under 1 second, at most ~10 seconds; at most 10 times per minute \u2014 when voice mode is off or the limit is hit, the original text is sent. Failed or abnormal output also falls back to the original text",
   descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires). Hold-to-talk mode only, during playback",
-  descMode: "Interaction mode (toggle: continuous listen + auto-send / hold: press to talk)",
+  descMode: "Interaction mode (toggle: continuous listen + auto-send / hold: press to talk / once: one utterance, then exit after the reply is read aloud)",
   modeToggle: "Continuous listening",
   modeHold: "Hold to talk",
+  modeOnce: "One-shot",
+  stopReading: "Stop reading",
+  readAloudLabel: "Read replies",
+  readAloudVoice: "Voice mode",
+  readAloudAlways: "Always",
+  readAloudOff: "Off",
+  descReadAloud: "Voice mode = read replies only in voice mode (default); Always = read every reply in the current session, typed ones included; Off = never read aloud",
+  showCaptionsLabel: "Caption overlay",
+  descShowCaptions: "Show a floating caption of the current sentence while reading aloud",
+  showStatusBarLabel: "Status bar",
+  descShowStatusBar: "Show the voice status bar above the composer (waveform, transcript, timer, notices, exit); when off, state shows only on the mic button",
   descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
   settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
@@ -2189,6 +2211,22 @@ function composeDraft(current, tail, addition) {
 }
 function shouldWritePartial(state) {
   return state !== "wake";
+}
+
+// src/mic-gesture.ts
+function isEditingShortcut(combo, mac) {
+  const primary = mac ? combo.meta && !combo.ctrl : combo.ctrl && !combo.meta;
+  return primary && !combo.alt && combo.key.length === 1 && "acvxzy".includes(combo.key);
+}
+function takeToggleSlot(history, now) {
+  while (history.length > 0 && now - history[0] >= 2e3) history.shift();
+  if (history.length >= 2) return false;
+  if (history.length > 0 && now - history[history.length - 1] < 250) return false;
+  history.push(now);
+  return true;
+}
+function onceFinished(o, running, ttsDrained, playing) {
+  return o.sawRun && !running && ttsDrained && !playing;
 }
 
 // src/runtime-boot.ts
@@ -2895,7 +2933,7 @@ var NEXT_ENTRY_FIELDS = [
   { key: "echoGateDb", label: "echoGateDbLabel", fmt: (v) => `${v} ${t("unitDb")}` },
   { key: "autoSend", label: "autoSendLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
   { key: "autoResume", label: "autoResumeLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
-  { key: "mode", label: "modeLabel", fmt: (v) => t(v === "hold" ? "modeHold" : "modeToggle") },
+  { key: "mode", label: "modeLabel", fmt: (v) => t(v === "hold" ? "modeHold" : v === "once" ? "modeOnce" : "modeToggle") },
   { key: "wakeWord", label: "wakeWordLabel", fmt: (v) => v ? t("valueQuoted").replace("{value}", String(v)) : t("valueOff") },
   { key: "toolBeep", label: "toolBeepLabel", fmt: (v) => v ? t("valueOn") : t("valueOff") },
   { key: "captionFontSize", label: "captionFontSizeLabel", fmt: (v) => t(v === 1 ? "captionSizeM" : v === 2 ? "captionSizeL" : v === 3 ? "captionSizeXL" : "captionSizeS") },
@@ -3270,7 +3308,8 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
               value: value.mode,
               options: [
                 { v: "toggle", label: t("modeToggle") },
-                { v: "hold", label: t("modeHold") }
+                { v: "hold", label: t("modeHold") },
+                { v: "once", label: t("modeOnce") }
               ]
             }
           ) }),
@@ -3278,6 +3317,21 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "wakeWord", desc: t("descWakeWord"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { score: scope, field: "wakeWord", value: value.wakeWord ?? "", placeholder: t("wakePlaceholder") }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "toolBeep", desc: t("descToolBeep"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.toolBeep), onChange: (e) => void scope.set("toolBeep", e.target.checked) }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "autoSend", desc: t("descAutoSend"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.autoSend), onChange: (e) => void scope.set("autoSend", e.target.checked) }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "readAloud", desc: t("descReadAloud"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            SegGroup,
+            {
+              score: scope,
+              field: "readAloud",
+              value: value.readAloud ?? "voice",
+              options: [
+                { v: "voice", label: t("readAloudVoice") },
+                { v: "always", label: t("readAloudAlways") },
+                { v: "off", label: t("readAloudOff") }
+              ]
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "showStatusBar", desc: t("descShowStatusBar"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.showStatusBar !== false, onChange: (e) => void scope.set("showStatusBar", e.target.checked) }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "showCaptions", desc: t("descShowCaptions"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.showCaptions !== false, onChange: (e) => void scope.set("showCaptions", e.target.checked) }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "autoResume", desc: t("descAutoResume"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.autoResume), onChange: (e) => void scope.set("autoResume", e.target.checked) }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "captionFontSize", desc: t("descCaptionFontSize"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
             SegGroup,
@@ -3409,7 +3463,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "1dd4ab7";
+var BUILD_TAG = "99baeb7";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3446,20 +3500,40 @@ var ECHO_TAIL_MS = 400;
 var HOLD_CLEAR_FRAMES = 2;
 var WAVE_BARS = 14;
 var BASE_PATH2 = "/voice-mode";
-function getTabId() {
+var SETTINGS_CHANGED_EVENT = "dshvm-settings-changed";
+function displaySettings(c) {
+  return {
+    readAloud: c.readAloud === "always" || c.readAloud === "off" ? c.readAloud : "voice",
+    showCaptions: c.showCaptions !== false,
+    showStatusBar: c.showStatusBar !== false
+  };
+}
+function withChangeEvent(scope) {
+  const wrapped = Object.create(scope);
+  wrapped.set = async (field, value) => {
+    const r = await scope.set(field, value);
+    window.dispatchEvent(new Event(SETTINGS_CHANGED_EVENT));
+    return r;
+  };
+  return wrapped;
+}
+var STOP_READING_LINE = Number.MAX_SAFE_INTEGER;
+function getTabId(fresh = false) {
+  const KEY = "dshvm-tabId";
+  const make = () => typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
   try {
-    const KEY = "dshvm-tabId";
-    let id = sessionStorage.getItem(KEY);
+    let id = fresh ? null : sessionStorage.getItem(KEY);
     if (!id) {
-      id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
+      id = make();
       sessionStorage.setItem(KEY, id);
     }
     return id;
   } catch {
-    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+    return make();
   }
 }
 var TAB_ID = getTabId();
+var BUS_GEN_KEY = "__dshvmBusGen";
 function parseShortcut(s) {
   const parts = (s || "").split("+");
   const mods = { ctrl: false, shift: false, alt: false, meta: false };
@@ -3501,6 +3575,22 @@ function apply(ctx) {
     document.addEventListener("pointerdown", resumeAudio, { passive: true });
     document.addEventListener("keydown", resumeAudio, { passive: true });
   }
+  let activitySlot = false;
+  ctx.slots.inject("conversation.input.activity", () => {
+    activitySlot = true;
+    const dispose = ctx.slots.register(
+      {
+        name: "conversation.input.activity",
+        id: "voice-mode",
+        inject: () => ({ bus, scope })
+      },
+      MicButton
+    );
+    return () => {
+      activitySlot = false;
+      dispose?.();
+    };
+  });
   ctx.slots.inject(
     "conversation.input.right",
     () => ctx.slots.register(
@@ -3508,9 +3598,9 @@ function apply(ctx) {
         name: "conversation.input.right",
         id: "voice-mode",
         order: 80,
-        inject: () => ({ bus })
+        inject: () => ({ bus, scope })
       },
-      MicButton
+      (props) => activitySlot ? null : React.createElement(MicButton, props)
     )
   );
   ctx.slots.inject(
@@ -3538,7 +3628,17 @@ function apply(ctx) {
     )
   );
   const settingsScope = ctx.get?.("settingsScope");
-  const scope = settingsScope ? settingsScope.bind({ namespace: "voice-mode" }) : createHttpScope();
+  const scope = withChangeEvent(settingsScope ? settingsScope.bind({ namespace: "voice-mode" }) : createHttpScope());
+  const refreshDisplay = () => {
+    void fetch(`${location.origin}${BASE_PATH2}/config`).then((r) => r.ok ? r.json() : null).then((c) => {
+      if (c) bus.setUi({ boot: { ...bus.ui.boot, ...displaySettings(c) } });
+    }).catch(() => {
+    });
+  };
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    refreshDisplay();
+    window.addEventListener(SETTINGS_CHANGED_EVENT, refreshDisplay);
+  }
   ctx.slots.inject(
     "settings.plugin.item",
     () => ctx.slots.register(
@@ -3575,6 +3675,8 @@ function createAudioEngine(setUi, onPlayed, onPlaybackRef, onAllPlayed) {
   let fallback = false;
   let ctx = null;
   let duckGain = null;
+  let analyser = null;
+  let levelBuf = null;
   let nextEndAt = 0;
   const activeSrcs = /* @__PURE__ */ new Set();
   let decoding = false;
@@ -3589,7 +3691,15 @@ function createAudioEngine(setUi, onPlayed, onPlaybackRef, onAllPlayed) {
       ctx = new AC();
       duckGain = ctx.createGain();
       duckGain.gain.value = 1;
-      duckGain.connect(ctx.destination);
+      try {
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        duckGain.connect(analyser);
+        analyser.connect(ctx.destination);
+      } catch {
+        analyser = null;
+        duckGain.connect(ctx.destination);
+      }
       void ctx.resume?.();
     } catch {
       ctx = null;
@@ -3721,11 +3831,31 @@ function createAudioEngine(setUi, onPlayed, onPlaybackRef, onAllPlayed) {
       const now = ctx.currentTime;
       duckGain.gain.cancelScheduledValues(now);
       duckGain.gain.setTargetAtTime(1, now, 0.035);
+    },
+    level() {
+      if (!analyser) return 0;
+      if (!levelBuf || levelBuf.length !== analyser.fftSize) levelBuf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(levelBuf);
+      let sum = 0;
+      for (const v of levelBuf) sum += v * v;
+      return Math.min(1, Math.sqrt(sum / levelBuf.length) / 0.2);
     }
   };
 }
 function createVoiceBus(basePath = BASE_PATH2, ctx) {
   let activeSessionId = null;
+  let focusedSessionId = null;
+  let focusOwnerTab = null;
+  const busGen = globalThis[BUS_GEN_KEY] = (globalThis[BUS_GEN_KEY] ?? 0) + 1;
+  const postFocus = (sessionId) => {
+    void fetch(`${location.origin}${basePath}/focus`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId, tabId: TAB_ID }),
+      signal: AbortSignal.timeout(3e3)
+    }).catch(() => {
+    });
+  };
   const DEFAULT_BOOT = {
     basePath: BASE_PATH2,
     silenceMs: 1500,
@@ -3734,6 +3864,9 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     autoSend: true,
     autoResume: false,
     mode: "toggle",
+    readAloud: "voice",
+    showCaptions: true,
+    showStatusBar: true,
     // 批 7O（ADR-0006）：默认 detect（与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐）。
     bargeInMode: "detect",
     echoGateDb: 6,
@@ -3947,6 +4080,26 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
         ui.sseDown = false;
         notify();
       }
+      if (focusedSessionId && (typeof document === "undefined" || document.visibilityState === "visible")) {
+        postFocus(focusedSessionId);
+      }
+    });
+    source.addEventListener("replaced", () => {
+      source?.close();
+      source = null;
+      if (globalThis[BUS_GEN_KEY] !== busGen) {
+        ui.sseDown = true;
+        notify();
+        return;
+      }
+      TAB_ID = getTabId(true);
+      connect();
+    });
+    source.addEventListener("focus", (e) => {
+      try {
+        focusOwnerTab = JSON.parse(e.data).tabId ?? null;
+      } catch {
+      }
     });
     source.addEventListener("error", () => {
       if (!ui.sseDown) {
@@ -3987,8 +4140,22 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("turn", (e) => {
       try {
         const ev = JSON.parse(e.data);
+        if (ev.state === "agent-speaking" && ev.sessionId && rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE) {
+          rejectSeqUpTo.delete(ev.sessionId);
+        }
         if (ev.sessionId === activeSessionId && ev.state) {
           ui.turn = ev.state;
+          if (ev.state === "agent-speaking") ui.ttsDrained = false;
+          notify();
+        }
+      } catch {
+      }
+    });
+    source.addEventListener("tts-idle", (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.sessionId === activeSessionId && !ui.ttsDrained) {
+          ui.ttsDrained = true;
           notify();
         }
       } catch {
@@ -4080,7 +4247,14 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
   let curBytes = 0;
   let curChunkCount = 0;
   audioListeners.add((frame) => {
-    if (frame.sessionId !== activeSessionId) return;
+    if (frame.sessionId === activeSessionId && ui.ttsDrained) {
+      ui.ttsDrained = false;
+      notify();
+    }
+    const readAloud = ui.boot.readAloud ?? "voice";
+    if (readAloud === "off") return;
+    const alwaysHere = readAloud === "always" && frame.sessionId === focusedSessionId && focusOwnerTab === TAB_ID;
+    if (frame.sessionId !== activeSessionId && !alwaysHere) return;
     const rejectLine = rejectSeqUpTo.get(frame.sessionId);
     if (rejectLine !== void 0 && frame.sentenceId <= rejectLine) return;
     if (backchannelHoldUntil && Date.now() < backchannelHoldUntil) {
@@ -4140,7 +4314,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     curChunkCount += 1;
   });
   const doSkipAudio = (sidArg) => {
-    const sid = sidArg ?? activeSessionId;
+    const sid = sidArg ?? activeSessionId ?? focusedSessionId;
     if (sid) {
       rejectSeqUpTo.set(sid, Math.max(lastFinalSeq.get(sid) ?? -1, curSentenceId ?? -1));
     }
@@ -4265,6 +4439,32 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     resetTelemetry,
     warmAudio() {
       engine.warm();
+    },
+    playbackLevel() {
+      return engine.level();
+    },
+    setFocusedSession(sessionId) {
+      if (sessionId === null) {
+        if (focusedSessionId === null) return;
+        focusedSessionId = null;
+        if (focusOwnerTab === TAB_ID) postFocus(null);
+        return;
+      }
+      focusedSessionId = sessionId;
+      if (typeof document === "undefined" || document.visibilityState === "visible") postFocus(sessionId);
+    },
+    stopReading() {
+      const sid = activeSessionId ?? focusedSessionId;
+      doSkipAudio(sid);
+      if (!sid) return;
+      rejectSeqUpTo.set(sid, STOP_READING_LINE);
+      void fetch(`${location.origin}${basePath}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId: sid, keepAsr: true }),
+        signal: AbortSignal.timeout(3e3)
+      }).catch(() => {
+      });
     }
   };
 }
@@ -4291,12 +4491,124 @@ html.dshvm-holding, html.dshvm-holding * {
 }
 /* \u6279 3\uFF1A\u5B57\u5E55\u4E2D\u6587\u957F\u8BCD/URL \u6362\u884C\uFF08\u5916\u5C42 maxHeight:30vh + overflow:hidden \u63A7\u5236\u9AD8\u5EA6\u4E0D\u6EA2\u51FA\uFF09\u3002 */
 .dshvm-caption { word-break: break-word; overflow-wrap: anywhere; }
+/* \u9EA6\u514B\u98CE\u6309\u94AE\uFF08PR #16 by dyguests\uFF09\uFF1A\u72B6\u6001\u5168\u5728\u6309\u94AE\u4E0A\u2014\u2014\u989C\u8272\u533A\u5206\u6A21\u5F0F\uFF0C\u7AD6\u6761\u8DDF\u968F\u7535\u5E73\uFF0C
+   \u7B49\u5F85\u8F6C\u5708\u3001\u6536\u5C3E\u5BF9\u52FE\u3001\u53F3\u4E0A\u6A59\u70B9=\u68C0\u6D4B\u5230\u8BF4\u8BDD\u3001\u5DE6\u4E0A\u7EA2\u70B9=\u51FA\u9519\u3002\u989C\u8272\u8D70 dsw \u53D8\u91CF\uFF0C\u65E7\u5BBF\u4E3B\u65E0\u53D8\u91CF\u65F6\u7528\u515C\u5E95\u8272\u3002 */
+.dshvm-mic {
+  position: relative; flex: none; width: 34px; height: 34px; padding: 0;
+  display: grid; place-items: center; border: none; border-radius: 999px;
+  background: transparent; color: var(--dsw-alias-label-secondary, #8b949e); cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.dshvm-mic:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(139,148,158,.14)); }
+.dshvm-mic:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #58a6ff); outline-offset: -2px; }
+.dshvm-mic svg { display: block; }
+.dshvm-mic[data-state="pending"] { --c: var(--dsw-alias-state-business-primary, #58a6ff); }
+.dshvm-mic[data-state="on"] { --c: var(--dsw-alias-state-success-primary, #2ea043); }
+.dshvm-mic[data-state="hold"] { --c: var(--dsw-alias-state-business-primary, #58a6ff); }
+.dshvm-mic[data-state="holding"] { --c: var(--dsw-alias-state-error-primary, #f85149); }
+.dshvm-mic[data-state="reading"] { --c: var(--dsw-alias-state-business-primary, #58a6ff); }
+.dshvm-mic[data-state="waiting"], .dshvm-mic[data-state="ending"] { --c: var(--dsw-alias-label-tertiary, #8b949e); }
+.dshvm-mic[data-state]:not([data-state="off"]) { color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent); }
+.dshvm-mic[data-state="on"], .dshvm-mic[data-state="reading"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 10%, transparent); }
+.dshvm-mic[data-state]:not([data-state="off"]):hover { background: color-mix(in srgb, var(--c) 20%, transparent); }
+.dshvm-eq { display: inline-flex; align-items: center; justify-content: center; gap: 2px; width: 16px; height: 16px; pointer-events: none; }
+.dshvm-eq i { display: block; width: 3px; border-radius: 2px; background: currentColor; }
+.dshvm-eq-out { gap: 1.5px; }
+.dshvm-eq-out i { width: 2px; }
+.dshvm-mic-dot { position: absolute; top: 0; width: 7px; height: 7px; border-radius: 999px; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--dsw-specific-input-major, transparent); }
+.dshvm-mic-dot[data-kind="vad"] { right: 0; background: var(--dsw-alias-state-warn-primary, #d29922); }
+.dshvm-mic-dot[data-kind="error"] { left: 0; background: var(--dsw-alias-state-error-primary, #f85149); }
+.dshvm-mic-timer { position: absolute; left: 50%; top: calc(100% + 2px); transform: translateX(-50%); padding: 0 3px; border-radius: 4px;
+  background: var(--dsw-specific-input-major, transparent); font-size: 9.5px; line-height: 12px; color: var(--dsw-alias-label-tertiary, #8b949e);
+  font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.dshvm-spin { animation: dshvm-spin 0.9s linear infinite; }
+.dshvm-menu { display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-3, #fff); border: 1px solid var(--dsw-alias-border-l2, rgba(139,148,158,.35));
+  box-shadow: 0 8px 24px rgba(15, 17, 21, 0.14); color: var(--dsw-alias-label-primary, inherit);
+  font-family: inherit; font-size: 12px; animation: dshvm-fadein 0.12s ease; }
+.dshvm-menu-label { padding: 2px 8px 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b949e); }
+.dshvm-menu-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 5px 8px;
+  border: none; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 12px; text-align: left; }
+.dshvm-menu-item:hover, .dshvm-menu-item:focus-visible { background: var(--dsw-alias-interactive-bg-hover, rgba(139,148,158,.14)); outline: none; }
+.dshvm-menu-check { color: var(--dsw-alias-state-business-primary, #58a6ff); font-size: 11px; }
+.dshvm-menu-sep { height: 1px; margin: 4px 2px; background: var(--dsw-alias-border-l1, rgba(139,148,158,.25)); }
+@media (prefers-reduced-motion: reduce) { .dshvm-spin, .dshvm-menu { animation: none; } }
 `;
     document.head.appendChild(el);
   }, []);
 }
+var IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+var ONCE_SETTLE_MS = 1200;
+var ONCE_NO_START_MS = 3e4;
+var ONCE_STALL_MS = 1e4;
+function MicMenu({ scope, anchor, onClose }) {
+  const [snap, setSnap] = (0, import_react3.useState)(() => scope.getSnapshot());
+  (0, import_react3.useEffect)(() => scope.subscribe(() => setSnap({ ...scope.getSnapshot() })), [scope]);
+  const menuRef = (0, import_react3.useRef)(null);
+  (0, import_react3.useEffect)(() => {
+    menuRef.current?.querySelector("button")?.focus();
+    const onDown = (e) => {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      onClose(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose(true);
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault();
+      const items = Array.from(menuRef.current?.querySelectorAll("button") ?? []);
+      const i = items.indexOf(document.activeElement);
+      items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [onClose]);
+  const v = snap.value ?? {};
+  const width = 208;
+  const r = anchor?.getBoundingClientRect();
+  const below = !r || r.top < 340;
+  const pos = {
+    position: "fixed",
+    zIndex: 9999,
+    width,
+    left: r ? Math.max(8, Math.min(window.innerWidth - width - 8, Math.round(r.right - width))) : 8,
+    ...below ? { top: r ? Math.round(r.bottom + 8) : 96 } : { bottom: Math.round(window.innerHeight - r.top + 8) }
+  };
+  const item = (role, checked, label, onPick) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", role, "aria-checked": checked, className: "dshvm-menu-item", onClick: onPick, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: label }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-menu-check", children: checked ? "\u2713" : "" })
+  ] }, label);
+  const set = (field, value) => void scope.set(field, value);
+  const mode = v.mode === "hold" || v.mode === "once" ? v.mode : "toggle";
+  const read = v.readAloud === "always" || v.readAloud === "off" ? v.readAloud : "voice";
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { ref: menuRef, className: "dshvm-menu", role: "menu", "aria-label": t("stateVoiceMode"), style: pos, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshvm-menu-label", children: t("modeLabel") }),
+    ["toggle", "hold", "once"].map(
+      (m) => item("menuitemradio", mode === m, t(m === "toggle" ? "modeToggle" : m === "hold" ? "modeHold" : "modeOnce"), () => set("mode", m))
+    ),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshvm-menu-sep" }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshvm-menu-label", children: t("readAloudLabel") }),
+    ["voice", "always", "off"].map(
+      (m) => item("menuitemradio", read === m, t(m === "voice" ? "readAloudVoice" : m === "always" ? "readAloudAlways" : "readAloudOff"), () => set("readAloud", m))
+    ),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshvm-menu-sep" }),
+    item("menuitemcheckbox", v.showCaptions !== false, t("showCaptionsLabel"), () => set("showCaptions", v.showCaptions === false)),
+    item("menuitemcheckbox", v.showStatusBar !== false, t("showStatusBarLabel"), () => set("showStatusBar", v.showStatusBar === false)),
+    item("menuitemcheckbox", v.autoSend !== false, t("autoSendLabel"), () => set("autoSend", v.autoSend === false))
+  ] });
+}
 function MicButton({
   bus,
+  scope,
   sessionId,
   useSession,
   useInput,
@@ -4321,6 +4633,10 @@ function MicButton({
   const manualHoldRef = (0, import_react3.useRef)(false);
   const breakRef = (0, import_react3.useRef)(null);
   const pausedForHiddenRef = (0, import_react3.useRef)(false);
+  const onceRef = (0, import_react3.useRef)(null);
+  const [onceWaiting, setOnceWaiting] = (0, import_react3.useState)(false);
+  const [onceEnding, setOnceEnding] = (0, import_react3.useState)(false);
+  const toggleHistRef = (0, import_react3.useRef)([]);
   const bootNow = () => bus.ui.boot ?? {
     basePath: "/voice-mode",
     silenceMs: 1500,
@@ -4329,6 +4645,9 @@ function MicButton({
     autoSend: true,
     autoResume: false,
     mode: "toggle",
+    readAloud: "voice",
+    showCaptions: true,
+    showStatusBar: true,
     // 批 7O（ADR-0006）：bootNow 兜底默认与 VOICE_SETTINGS_DEFAULTS 对齐为 detect。
     bargeInMode: "detect",
     echoGateDb: 6,
@@ -4351,7 +4670,7 @@ function MicButton({
   const uiKeyRef = (0, import_react3.useRef)("");
   (0, import_react3.useEffect)(
     () => bus.subscribe(({ active, ui: u }) => {
-      const key = `${active}|${u.state}|${u.error ?? ""}|${u.notice ?? ""}|${u.mode}|${u.wakeWord}|${u.ttsNotice ?? ""}`;
+      const key = `${active}|${u.state}|${u.error ?? ""}|${u.notice ?? ""}|${u.mode}|${u.wakeWord}|${u.ttsNotice ?? ""}|${u.playing}|${u.turn}|${u.sseDown}|${u.idleWarn}|${u.boot?.showStatusBar}`;
       if (key === uiKeyRef.current) return;
       uiKeyRef.current = key;
       bumpUi((t3) => t3 + 1);
@@ -4375,7 +4694,8 @@ function MicButton({
         idleTimeoutMinutes: c.idleTimeoutMinutes ?? cur.idleTimeoutMinutes,
         autoSend: c.autoSend ?? cur.autoSend,
         autoResume: c.autoResume === true,
-        mode: c.mode === "hold" ? "hold" : "toggle",
+        mode: c.mode === "hold" || c.mode === "once" ? c.mode : "toggle",
+        ...displaySettings(c),
         bargeInMode: c.bargeInMode === "manual" ? "manual" : c.bargeInMode === "detect" ? "detect" : "auto",
         echoGateDb: typeof c.echoGateDb === "number" ? Math.min(12, Math.max(3, c.echoGateDb)) : cur.echoGateDb,
         shortcut: typeof c.shortcut === "string" ? c.shortcut : cur.shortcut,
@@ -4469,6 +4789,7 @@ function MicButton({
         isSpeechFalseRun = 0;
         submitInFlightRef.current = false;
         correctCycleRef.current++;
+        clearOnce();
         breakRef.current = null;
         manualHoldRef.current = false;
         holdCtrlRef.current = false;
@@ -4530,6 +4851,7 @@ function MicButton({
     }
     const runSubmit = (submitText) => {
       submitInFlightRef.current = true;
+      if (bootNow().mode === "once") beginOnceWait();
       const snapshot = submitText.trim() || draftSnapshot;
       let wroteBack = false;
       if (snapshot !== draftSnapshot && typeof actions?.setDraft === "function") {
@@ -4602,13 +4924,71 @@ function MicButton({
       const eng = engineRef.current;
       if (eng && (eng.state === "speech" || eng.holding)) return;
       if (bus.ui.playing) return;
-      if (bootNow().autoSend === false) return;
+      if (bootNow().autoSend === false) {
+        if (bootNow().mode === "once") void exitModeRef.current("manual");
+        return;
+      }
       submitDraftNow();
     }, AUTO_SEND_EXTRA_MS);
+  };
+  const clearOnce = () => {
+    const o = onceRef.current;
+    if (!o) return;
+    onceRef.current = null;
+    clearTimeout(o.noStart);
+    if (o.settle) clearTimeout(o.settle);
+    if (o.stall) clearTimeout(o.stall);
+    setOnceWaiting(false);
+    setOnceEnding(false);
+  };
+  const checkOnce = () => {
+    const o = onceRef.current;
+    if (!o) return;
+    const running = useSession ? runningRef.current : bus.ui.turn === "agent-speaking";
+    if (running) o.sawRun = true;
+    const quiet = o.sawRun && !running && !bus.ui.playing;
+    const done = onceFinished(o, running, bus.ui.ttsDrained === true, bus.ui.playing);
+    if (done && !o.settle) {
+      setOnceEnding(true);
+      o.settle = setTimeout(() => {
+        if (onceRef.current === o) void exitModeRef.current("manual");
+      }, ONCE_SETTLE_MS);
+    } else if (!done && o.settle) {
+      setOnceEnding(false);
+      clearTimeout(o.settle);
+      o.settle = null;
+    }
+    if (quiet && !o.stall) {
+      o.stall = setTimeout(() => {
+        if (onceRef.current === o) void exitModeRef.current("manual");
+      }, ONCE_STALL_MS);
+    } else if (!quiet && o.stall) {
+      clearTimeout(o.stall);
+      o.stall = null;
+    }
+  };
+  const beginOnceWait = () => {
+    if (onceRef.current || localRef.current !== "on") return;
+    cancelAutoSend();
+    clearIdle();
+    const o = {
+      sawRun: false,
+      settle: null,
+      stall: null,
+      noStart: setTimeout(() => {
+        if (onceRef.current === o && !o.sawRun) void exitModeRef.current("manual");
+      }, ONCE_NO_START_MS)
+    };
+    onceRef.current = o;
+    setOnceWaiting(true);
+    void engineRef.current?.stop();
+    bus.setUi({ partial: "", levels: [], isSpeech: void 0 });
+    checkOnce();
   };
   const exitMode = async (reason) => {
     if (localRef.current === "off") return;
     setLocalMode("off");
+    clearOnce();
     clearIdle();
     cancelPendingSubmit();
     cancelAutoSend();
@@ -4704,7 +5084,8 @@ function MicButton({
         {
           silenceMs,
           basePath,
-          mode: cfg.mode,
+          // once 的采音/断句/唤醒词与 toggle 完全一致，区别只在定稿后的收尾（见 onSegment）
+          mode: cfg.mode === "hold" ? "hold" : "toggle",
           wakeWord: cfg.wakeWord,
           echoGateDb: cfg.echoGateDb,
           // 批 7N（ADR-0006）：打断方式透传——manual 时 handleAudio 仅在 holdActive 期间入流。
@@ -4843,7 +5224,7 @@ function MicButton({
       engine.onState((s) => {
         bus.setUi({ state: s });
         if (s === "speech") cancelAutoSend();
-        if (s === "idle") resetIdle();
+        if (s === "idle" && !onceRef.current) resetIdle();
       });
       engine.onError((key) => {
         bus.setUi({ error: t(key) });
@@ -4869,7 +5250,7 @@ function MicButton({
         bus.setUi({ levels: next });
       });
       engine.onPartial((text) => {
-        if (engineRef.current !== engine) return;
+        if (engineRef.current !== engine || onceRef.current) return;
         bus.setUi({ partial: text });
         if (!text) return;
         if (submitInFlightRef.current) {
@@ -4889,6 +5270,7 @@ function MicButton({
         }
       });
       engine.onSegment((text, meta) => {
+        if (onceRef.current) return;
         resetIdle();
         submitInFlightRef.current = false;
         bus.setUi({ partial: "" });
@@ -4912,7 +5294,7 @@ function MicButton({
         }
         if (bootNow().mode === "hold") return;
         if (bus.ui.playing) return;
-        if (bootNow().autoSend === false) return;
+        if (bootNow().autoSend === false && bootNow().mode !== "once") return;
         scheduleAutoSend();
       });
       bus.setUi({ state: "idle", partial: "", levels: [], botLevels: [], error: null, model: null, ttsNotice: null });
@@ -4949,11 +5331,13 @@ function MicButton({
       if (sid2) void bus.exit(sid2);
     }
   };
-  const toggleGuardRef = (0, import_react3.useRef)(0);
+  const readingOutside = () => localRef.current === "off" && bus.ui.playing;
   const toggle = () => {
-    const now = Date.now();
-    if (now - toggleGuardRef.current < 2e3) return;
-    toggleGuardRef.current = now;
+    if (readingOutside()) {
+      bus.stopReading();
+      return;
+    }
+    if (!takeToggleSlot(toggleHistRef.current, Date.now())) return;
     if (localRef.current === "on") void exitModeRef.current("manual");
     else if (localRef.current === "off") void enterMode();
   };
@@ -4998,11 +5382,26 @@ function MicButton({
   const runningSel = useSession ? useSession((s) => s === void 0 ? void 0 : s.running) : void 0;
   (0, import_react3.useEffect)(() => {
     runningRef.current = runningSel === true;
+    checkOnce();
   }, [runningSel]);
+  (0, import_react3.useEffect)(() => bus.subscribe(() => checkOnce()), [bus]);
+  (0, import_react3.useEffect)(() => {
+    if (!sessionId) return;
+    bus.setFocusedSession(sessionId);
+    const onVis = () => {
+      if (document.visibilityState === "visible") bus.setFocusedSession(sessionId);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      bus.setFocusedSession(null);
+    };
+  }, [bus, sessionId]);
   (0, import_react3.useEffect)(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      clearOnce();
       clearIdle();
       cancelPendingSubmit();
       cancelAutoSend();
@@ -5060,7 +5459,7 @@ function MicButton({
       if (combo && !e.repeat && (e.key.toLowerCase() === combo.key || codeKey === combo.key) && e.ctrlKey === combo.ctrl && e.shiftKey === combo.shift && e.altKey === combo.alt && e.metaKey === combo.meta) {
         const el = e.target;
         const editable = el instanceof HTMLElement && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
-        if (!editable && !e.isComposing) {
+        if (!e.isComposing && !(editable && isEditingShortcut(combo, IS_MAC))) {
           e.preventDefault();
           cancelCtrl();
           toggleRef.current();
@@ -5068,7 +5467,7 @@ function MicButton({
         return;
       }
       const eng = engineRef.current;
-      if (e.key === "Control" && !e.shiftKey && !e.altKey && !e.metaKey && !e.repeat && eng) {
+      if (e.key === "Control" && !e.shiftKey && !e.altKey && !e.metaKey && !e.repeat && eng && !onceRef.current) {
         ctrlHoldStart = Date.now();
         otherKeyDuringCtrl = false;
         if (bootNow().mode === "hold") {
@@ -5140,7 +5539,7 @@ function MicButton({
     };
     const onVisibility = () => {
       if (document.hidden) {
-        if (localRef.current === "on" && engineRef.current) {
+        if (localRef.current === "on" && engineRef.current && !onceRef.current) {
           if (bootNow().mode === "hold") {
             engineRef.current?.endHeld(true);
             holdCtrlRef.current = false;
@@ -5188,7 +5587,9 @@ function MicButton({
   const phaseRef = (0, import_react3.useRef)("");
   phaseRef.current = livePhase;
   const [holding, setHolding] = (0, import_react3.useState)(false);
-  const label = on ? busy ? (
+  const reading = local === "off" && bus.ui.playing;
+  const showTurn = onceWaiting || bootNow().showStatusBar === false && bus.ui.state !== "speech" && (bus.ui.playing || bus.ui.turn === "agent-speaking");
+  const label = on && showTurn ? bus.ui.playing ? t("reading") : t("thinking") : reading ? t("stopReading") : on ? busy ? (
     // UX：loading-model 是加载/下载模型而非识别——「识别中…」与状态不符。
     bus.ui.state === "loading-model" ? t("buttonLoading") : t("recognizing")
   ) : holdMode ? holding ? t("releaseToSend") : t("holdToTalk") : bus.ui.state === "wake" ? t("sayWake").replace("{wake}", bus.ui.wakeWord || t("wakeWord")) : (
@@ -5267,7 +5668,7 @@ function MicButton({
           }, 250);
         }
       }
-    } else if (localRef.current === "on" && bus.ui.playing) {
+    } else if (localRef.current === "on" && bus.ui.playing && !onceRef.current) {
       toggleHoldRef.current = true;
       setHolding(true);
       const eng = engineRef.current;
@@ -5311,9 +5712,11 @@ function MicButton({
       return;
     }
     if (ms < 250) {
-      const now = Date.now();
-      if (now - toggleGuardRef.current < 2e3) return;
-      toggleGuardRef.current = now;
+      if (readingOutside()) {
+        bus.stopReading();
+        return;
+      }
+      if (!takeToggleSlot(toggleHistRef.current, Date.now())) return;
       if (localRef.current === "on") {
         engineRef.current?.endHeld(true);
         void exitModeRef.current("manual");
@@ -5331,14 +5734,55 @@ function MicButton({
     setHolding(false);
     engineRef.current?.endHeld(true);
   };
-  const micHint = bus.activeSessionId !== sessionId ? bus.ui.error ?? bus.ui.notice ?? "" : "";
+  const statusBarShown = bootNow().showStatusBar !== false;
+  const micHint = bus.activeSessionId !== sessionId ? bus.ui.error ?? bus.ui.notice ?? "" : statusBarShown ? "" : bus.ui.error ?? (bus.ui.sseDown ? t("sseReconnect") : null) ?? bus.ui.notice ?? (bus.ui.idleWarn ? t("idleWarn30s") : null) ?? bus.ui.ttsNotice ?? "";
+  const visual = holding ? "holding" : bus.ui.playing ? "reading" : on && onceEnding ? "ending" : on && onceWaiting ? "waiting" : on ? holdMode ? "hold" : "on" : local === "pending" ? "pending" : "off";
+  const eqKind = visual === "reading" ? "out" : visual === "on" || visual === "hold" || visual === "holding" ? "in" : null;
+  (0, import_react3.useEffect)(() => {
+    const el = btnRef.current;
+    if (!el || !eqKind) return;
+    const bars = Array.from(el.querySelectorAll(".dshvm-eq i"));
+    const base = eqKind === "out" ? [6, 10, 14, 10, 6] : [6, 12, 8];
+    const paint = (lv) => bars.forEach((b, i) => b.style.height = `${Math.max(3, base[i] * (0.35 + 0.65 * lv)).toFixed(1)}px`);
+    if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      paint(1);
+      return;
+    }
+    let smooth = 0;
+    let raf = 0;
+    const tick = () => {
+      const raw = eqKind === "out" ? bus.playbackLevel() : bus.ui.levels[bus.ui.levels.length - 1] ?? 0;
+      smooth = Math.max(Math.min(1, Math.max(0, raw)), smooth * 0.82);
+      paint(smooth);
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, [eqKind, bus]);
+  const showTimer = on && !statusBarShown && !onceWaiting;
+  const [elapsed, setElapsed] = (0, import_react3.useState)(0);
+  (0, import_react3.useEffect)(() => {
+    setElapsed(0);
+    if (!showTimer) return;
+    const id = setInterval(() => setElapsed((n) => n + 1), 1e3);
+    return () => clearInterval(id);
+  }, [showTimer]);
+  const [menuOpen, setMenuOpen] = (0, import_react3.useState)(false);
+  const closeMenu = React.useCallback((refocus) => {
+    setMenuOpen(false);
+    if (refocus) btnRef.current?.focus();
+  }, []);
+  const title = bus.ui.error ? String(bus.ui.error) : reading ? t("stopReading") : on ? holdMode ? t("titleHold") : t("titleToggle") : t("titleEnter");
   return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
     /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
       "button",
       {
+        type: "button",
+        className: "dshvm-mic",
+        "data-state": visual,
         onClick: (e) => {
           if (Date.now() < suppressClickUntilRef.current) return;
-          if (holdMode) {
+          if (holdMode && !readingOutside()) {
             if (e.detail !== 0) return;
           }
           toggle();
@@ -5347,45 +5791,26 @@ function MicButton({
         onPointerMove,
         onPointerUp,
         onPointerCancel,
-        onContextMenu: (e) => e.preventDefault(),
+        onContextMenu: (e) => {
+          e.preventDefault();
+          const pt = e.nativeEvent.pointerType;
+          if (scope && pt !== "touch" && pt !== "pen") setMenuOpen(true);
+        },
         ref: btnRef,
         "data-dshvm": "mic",
-        "aria-label": on ? t("ariaActive") : t("ariaEnter"),
+        "aria-label": reading ? t("stopReading") : on ? `${t("ariaActive")} \xB7 ${label}` : local === "pending" ? label : t("ariaEnter"),
         "aria-pressed": on,
-        title: on ? holdMode ? t("titleHold") : t("titleToggle") : t("titleEnter"),
-        style: {
-          border: holding ? "1px solid rgba(248, 81, 73, 0.6)" : on ? holdMode ? "1px solid rgba(88, 166, 255, 0.45)" : "1px solid rgba(63, 185, 80, 0.45)" : "1px solid rgba(139, 148, 158, 0.35)",
-          background: holding ? "rgba(248, 81, 73, 0.2)" : on ? holdMode ? "rgba(88, 166, 255, 0.16)" : "rgba(63, 185, 80, 0.16)" : local === "pending" ? "rgba(88, 166, 255, 0.14)" : "rgba(139, 148, 158, 0.08)",
-          cursor: "pointer",
-          padding: "5px 10px",
-          borderRadius: 8,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          fontSize: 12,
-          fontFamily: "system-ui, sans-serif",
-          color: holding ? "#f85149" : on ? holdMode ? "#58a6ff" : "#2ea043" : local === "pending" ? "#58a6ff" : "#8b949e",
-          // 批 H 任务 3：toggle 模式「语音中」绿字加深（#3fb950 → #2ea043）+ fontWeight:600 双保险，
-          // 浅色主题下与浅绿底 (rgba 63,185,80,.16) 对比度 ≥ 4.5:1（WCAG AA 文本级）。
-          fontWeight: on && !holdMode ? 600 : void 0,
-          transition: "background 0.15s ease, color 0.2s ease, border-color 0.15s ease",
-          touchAction: "none",
-          // 触摸设备上让 pointer 事件独占（滑出取消可用）
-          userSelect: "none",
-          WebkitUserSelect: "none",
-          // iOS Safari 前缀，防长按选中文字
-          WebkitTouchCallout: "none"
-          // iOS 长按弹出「拷贝/选择」菜单
-        },
+        "aria-haspopup": scope ? "menu" : void 0,
+        "aria-expanded": scope ? menuOpen : void 0,
+        title,
         children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-              "path",
-              {
-                fill: "currentColor",
-                d: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"
-              }
-            ),
+          visual !== "waiting" && bus.ui.isSpeech === true && on && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-mic-dot", "data-kind": "vad", title: t("vadDetected") }),
+          bus.ui.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-mic-dot", "data-kind": "error" }),
+          visual === "waiting" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", className: "dshvm-spin", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("circle", { cx: 12, cy: 12, r: 8, fill: "none", stroke: "currentColor", strokeWidth: 2, opacity: 0.25 }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M12 4a8 8 0 0 1 8 8", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" })
+          ] }) : visual === "ending" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M5.5 12.5l4.2 4.2 8.8-8.8", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }) }) : eqKind ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: eqKind === "out" ? "dshvm-eq dshvm-eq-out" : "dshvm-eq", "aria-hidden": "true", children: (eqKind === "out" ? [6, 10, 14, 10, 6] : [6, 12, 8]).map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: h } }, i)) }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "currentColor", d: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
               "path",
               {
@@ -5394,10 +5819,15 @@ function MicButton({
               }
             )
           ] }),
-          label
+          showTimer && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dshvm-mic-timer", "aria-hidden": "true", children: [
+            String(Math.floor(elapsed / 60)).padStart(2, "0"),
+            ":",
+            String(elapsed % 60).padStart(2, "0")
+          ] })
         ]
       }
     ),
+    menuOpen && scope && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(MicMenu, { scope, anchor: btnRef.current, onClose: closeMenu }),
     micHint && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
       "span",
       {
@@ -5407,7 +5837,7 @@ function MicButton({
         title: micHint,
         style: {
           fontSize: 11,
-          color: "#f85149",
+          color: "var(--dsw-alias-state-error-primary, #f85149)",
           maxWidth: 240,
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -5462,7 +5892,7 @@ function VoiceStatusBar({ bus, sessionId }) {
     return () => clearInterval(id);
   }, [b.ui.state]);
   const isActive = b.active === sessionId;
-  if (!isActive) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
+  if (!isActive || b.ui.boot?.showStatusBar === false) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   const stateText = b.ui.state === "loading-model" ? t("loadingModel") : b.ui.state === "transcribing" ? transcribingSec >= 2 ? t("recognizingSec").replace("{sec}", String(transcribingSec)) : t("recognizing") : b.ui.state === "wake" ? t("sayWake").replace("{wake}", b.ui.wakeWord || t("wakeWord")) : b.ui.state === "speech" ? b.ui.mode === "hold" ? t("holdDots") : t("listening") : b.ui.playing ? t("reading") : b.ui.turn === "agent-speaking" ? t("thinking") : b.ui.mode === "hold" ? t("barHold") : t("barListening");
   const bars = Array.from({ length: WAVE_BARS }, (_, i) => b.ui.levels[i] ?? 0);
   const botBars = Array.from({ length: WAVE_BARS }, (_, i) => b.ui.botLevels[i] ?? 0);
@@ -5685,7 +6115,7 @@ function VoiceOverlay({ bus }) {
   (0, import_react3.useEffect)(() => {
     return bus.subscribe(setB);
   }, [bus]);
-  if (!b.ui.playing) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
+  if (!b.ui.playing || b.ui.boot?.showCaptions === false) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
     "div",
     {

@@ -6,6 +6,7 @@
 # 用法：bash scripts/smoke-runtime.sh <dsh-core-bin.js> [port]
 #   dsh-core-bin.js：目标 dsh 的 lib/bin.js 绝对路径（0.1.1 与 0.1.2 各自准备一份）。
 #   port：默认 3120（避免与线上 3018 冲突）。
+#   DSHVM_SHOT=<目录>：客户端冒烟时把右键菜单截图存到该目录（人工核对视觉）。
 set -euo pipefail
 
 BIN="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"

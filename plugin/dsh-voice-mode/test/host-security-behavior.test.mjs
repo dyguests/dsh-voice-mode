@@ -399,6 +399,88 @@ await t('不同会话独立桶（ghost-other 不受 ghost-rate 限流影响）',
   assert.equal(res.statusCode, 403, `独立桶应放行到会话层（status=${res.statusCode}）`)
 })
 
+// ---------------------------------------------------------------- ⑦ /focus + SSE 去重/上限（PR #16 移植）
+console.log('⑦ /focus 焦点上报 + SSE 同标签页去重 / 连接上限')
+
+function sseRes() {
+  const r = makeRes()
+  r.chunks = []
+  r.ended = false
+  r.write = (c) => {
+    r.chunks.push(String(c))
+    return true
+  }
+  const end0 = r.end.bind(r)
+  r.end = (b) => {
+    r.ended = true
+    end0(b)
+  }
+  r.events = () => r.chunks.filter((c) => c.startsWith('event: ')).map((c) => c.split('\n')[0].slice(7))
+  return r
+}
+const openStream = (tabId) => {
+  const res = sseRes()
+  routes.get('/voice-mode/stream')(makeReq({ method: 'GET', url: `/voice-mode/stream?tabId=${tabId}` }), res)
+  return res
+}
+const postFocus = (payload, extra = {}) =>
+  awaitRes(get('/voice-mode/focus', makeReq({ url: '/voice-mode/focus', body: JSON.stringify(payload), ...extra })))
+const focusOf = (res) => JSON.parse(res.body)
+
+const watcher = openStream('tab-W')
+await t('SSE 上线即下发 mode + focus（新标签页立刻知道焦点归属）', () => {
+  assert.equal(watcher.statusCode, 200)
+  assert.deepEqual(watcher.events().slice(0, 2), ['mode', 'focus'])
+})
+
+await t('/focus 入参：缺 tabId / sessionId 非字符串非 null → 400', async () => {
+  assert.equal((await postFocus({ sessionId: 's1' })).statusCode, 400)
+  assert.equal((await postFocus({ sessionId: 42, tabId: 'A' })).statusCode, 400)
+  assert.equal((await postFocus({ sessionId: 'x'.repeat(129), tabId: 'A' })).statusCode, 400)
+})
+
+await t('/focus 跨站 Origin → 403', async () => {
+  const r = await postFocus({ sessionId: 's1', tabId: 'A' }, { origin: 'http://evil.example' })
+  assert.equal(r.statusCode, 403)
+})
+
+await t('/focus：上报即成为焦点并广播', async () => {
+  const before = watcher.events().length
+  const r = await postFocus({ sessionId: 's1', tabId: 'A' })
+  assert.equal(r.statusCode, 200)
+  assert.deepEqual(focusOf(r), { ok: true, sessionId: 's1', tabId: 'A' })
+  assert.ok(watcher.events().slice(before).includes('focus'), '焦点变化未广播')
+})
+
+await t('/focus：别的标签页离开会话（null）不清掉当前焦点', async () => {
+  const r = await postFocus({ sessionId: null, tabId: 'B' })
+  assert.deepEqual(focusOf(r), { ok: true, sessionId: 's1', tabId: 'A' })
+})
+
+await t('/focus：焦点标签页自己离开 → 清空', async () => {
+  const r = await postFocus({ sessionId: null, tabId: 'A' })
+  assert.deepEqual(focusOf(r), { ok: true, sessionId: null, tabId: null })
+})
+
+await t('SSE 同 tabId 重连：旧连接收到 replaced 并被关闭（不再互相顶替）', () => {
+  const a1 = openStream('tab-A')
+  const a2 = openStream('tab-A')
+  assert.ok(a1.events().includes('replaced'), '旧连接没收到 replaced')
+  assert.equal(a1.ended, true, '旧连接未关闭')
+  assert.equal(a2.statusCode, 200)
+  assert.equal(a2.ended, false)
+})
+
+await t('SSE 上限 8：第 9 个不同标签页 429；已有标签页重连不受上限影响', () => {
+  // 现存：tab-W、tab-A（a2）→ 再开 6 个 = 8
+  for (let i = 0; i < 6; i++) assert.equal(openStream(`tab-${i}`).statusCode, 200)
+  const ninth = openStream('tab-overflow')
+  assert.equal(ninth.statusCode, 429)
+  assert.equal(bodyCode(ninth), 'too_many_streams')
+  const again = openStream('tab-0')
+  assert.equal(again.statusCode, 200, '同标签页重连应先去重再判上限')
+})
+
 rmSync(tmp, { recursive: true, force: true })
 console.log(`\nhost-security-behavior：${passed} 项通过`)
 process.exit(0)

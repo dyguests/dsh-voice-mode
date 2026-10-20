@@ -12,12 +12,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/qishuilalala/dsh-voice-mode?style=flat-square&color=blue" alt="License: MIT"></a>
   <a href="https://github.com/qishuilalala/dsh-voice-mode/releases"><img src="https://img.shields.io/github/v/release/qishuilalala/dsh-voice-mode?style=flat-square&color=brightgreen&include_prereleases" alt="Latest release"></a>
   <a href="https://www.npmjs.com/package/dsh-voice-mode"><img src="https://img.shields.io/npm/v/dsh-voice-mode?style=flat-square&color=orange" alt="npm version"></a>
-  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-624%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 624 passing"></a>
+  <a href="docs/rules/STATE.md"><img src="https://img.shields.io/badge/tests-647%20%E2%9C%93-2ea043?style=flat-square" alt="Tests: 647 passing"></a>
 </p>
 
 ![dsh-voice-mode 全双工语音对话](assets/hero-banner.png)
 
-> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-rc.2，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§20）。624 项测试全绿（51 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
+> **Full-duplex voice mode for DeepSeek Harness** —— 在会话内用语音完成整轮对话：说话时**边说边出字**、停顿后自动发送；回复**按句朗读**并跟随实时字幕；朗读中**开口即打断**。识别在本地推理、无需 API Key；朗读默认 Edge 云端（快且自然），本地 VITS / Kokoro 可选（隐私优先）。兼容 dsh 0.1.1-rc.2 起全版本（已验证至 0.2.1-rc.2，含官方桌面端等价的 Electron 宿主，完整矩阵见 [docs/compat-contract.md](docs/compat-contract.md) §10–§20）。647 项测试全绿（52 套件）；当前版本见上方 npm 徽章与 [Releases](https://github.com/qishuilalala/dsh-voice-mode/releases)。
 
 ---
 
@@ -56,6 +56,10 @@
 ## 🎬 Demo
 
 ![语音模式真实录制：流式转写 → 自动发送 → 按句朗读 + 实时字幕](plugin/dsh-voice-mode/assets/demo-voice-flow.gif)
+
+**麦克风按钮即状态面板**（[@dyguests](https://github.com/dyguests) 贡献，PR #16）：聆听时绿色竖条随音量跳动、朗读时蓝色竖条、「说完就关」等回复时转圈、收尾对勾；右键可切换交互模式 / 朗读范围 / 字幕 / 状态条 / 自动发送。在右键菜单关掉状态条与字幕后，语音 UI 全部收进按钮（下图即此形态）：
+
+![真实录制：语音输入全部收拢到右下角麦克风按钮](plugin/dsh-voice-mode/assets/demo-compact-ui.gif)
 
 > 上图为**当前界面的真实录制**（由 `screenshots/scripts/capture-demo.mjs` 驱动真实链路产出，非 UI 摆拍；UI 持续演进，以实际界面为准）。设置面板见 [使用说明](plugin/dsh-voice-mode/README.md)。
 
@@ -205,7 +209,7 @@ flowchart LR
 | [完整使用说明（中文）](plugin/dsh-voice-mode/README.md) | 功能 / 手势 / 设置 / 配置 / 已知限制 / 故障排查 |
 | [English docs](plugin/dsh-voice-mode/README.en.md) | Same, in English |
 | [docs/ 索引](docs/README.md) | 架构决策 / 实施计划 / 真机验收 / 规则 / 调研 / 竞品 |
-| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 624 项） |
+| [60 天迭代博客](blog/2026-09-15-eleven-batches-evolution.md) | 从 91 到 254 项测试的故事（现为 647 项） |
 | [CHANGELOG.md](CHANGELOG.md) | Keep a Changelog 格式 |
 | [RELEASE-NOTES.md](RELEASE-NOTES.md) | 60 天时间线 |
 

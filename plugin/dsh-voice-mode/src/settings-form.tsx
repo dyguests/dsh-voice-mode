@@ -609,7 +609,7 @@ const NEXT_ENTRY_FIELDS: { key: string; label: string; fmt?: (v: unknown) => str
   { key: 'echoGateDb', label: 'echoGateDbLabel', fmt: (v) => `${v} ${tr('unitDb')}` },
   { key: 'autoSend', label: 'autoSendLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
   { key: 'autoResume', label: 'autoResumeLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
-  { key: 'mode', label: 'modeLabel', fmt: (v) => tr(v === 'hold' ? 'modeHold' : 'modeToggle') },
+  { key: 'mode', label: 'modeLabel', fmt: (v) => tr(v === 'hold' ? 'modeHold' : v === 'once' ? 'modeOnce' : 'modeToggle') },
   { key: 'wakeWord', label: 'wakeWordLabel', fmt: (v) => (v ? tr('valueQuoted').replace('{value}', String(v)) : tr('valueOff')) },
   { key: 'toolBeep', label: 'toolBeepLabel', fmt: (v) => (v ? tr('valueOn') : tr('valueOff')) },
   { key: 'captionFontSize', label: 'captionFontSizeLabel', fmt: (v) => tr(v === 1 ? 'captionSizeM' : v === 2 ? 'captionSizeL' : v === 3 ? 'captionSizeXL' : 'captionSizeS') },
@@ -1097,6 +1097,7 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
                 options={[
                   { v: 'toggle', label: tr('modeToggle') },
                   { v: 'hold', label: tr('modeHold') },
+                  { v: 'once', label: tr('modeOnce') },
                 ]}
               />
             </Row>
@@ -1111,6 +1112,24 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
             </Row>
             <Row name="autoSend" desc={tr('descAutoSend')}>
               <input type="checkbox" checked={Boolean(value.autoSend)} onChange={(e) => void scope.set('autoSend', e.target.checked)} />
+            </Row>
+            <Row name="readAloud" desc={tr('descReadAloud')}>
+              <SegGroup
+                score={scope}
+                field="readAloud"
+                value={value.readAloud ?? 'voice'}
+                options={[
+                  { v: 'voice', label: tr('readAloudVoice') },
+                  { v: 'always', label: tr('readAloudAlways') },
+                  { v: 'off', label: tr('readAloudOff') },
+                ]}
+              />
+            </Row>
+            <Row name="showStatusBar" desc={tr('descShowStatusBar')}>
+              <input type="checkbox" checked={value.showStatusBar !== false} onChange={(e) => void scope.set('showStatusBar', e.target.checked)} />
+            </Row>
+            <Row name="showCaptions" desc={tr('descShowCaptions')}>
+              <input type="checkbox" checked={value.showCaptions !== false} onChange={(e) => void scope.set('showCaptions', e.target.checked)} />
             </Row>
             <Row name="autoResume" desc={tr('descAutoResume')}>
               <input type="checkbox" checked={Boolean(value.autoResume)} onChange={(e) => void scope.set('autoResume', e.target.checked)} />

@@ -1183,6 +1183,9 @@ var TtsQueue = class {
   onError;
   /** 单句合成重试耗尽被跳过通知（每句一次；此前是静默丢句——真机「回复偶尔不朗读」根因之一）。 */
   onSkip;
+  /** 某会话队列跑空（无在途、无积压）：「说完就关」据此判定朗读真正结束——客户端只能看到
+   *  句间的播放空档，分不清「后面还有句子在合成」与「已全部读完」。 */
+  onIdle;
   /**
    * M7②（Issue #15 R11）：退避重启计时器句柄集。
    *
@@ -1219,6 +1222,12 @@ var TtsQueue = class {
     this.engine = options.engine;
     this.onError = options.onError;
     this.onSkip = options.onSkip;
+    this.onIdle = options.onIdle;
+  }
+  /** 该会话当前无在途合成、无积压（未建队列也算空闲）。 */
+  isIdle(sessionId) {
+    const q = this.queues.get(sessionId);
+    return !q || !q.busy && q.pending.length === 0;
   }
   /** 当前引擎音频 MIME（/preview 的 Content-Type 也用它）。 */
   get mime() {
@@ -1400,7 +1409,12 @@ var TtsQueue = class {
       q.busy = false;
       if (this.queues.get(sessionId) !== q) return;
       if (this.closed) return;
-      if (q.pending.length > 0) {
+      if (q.pending.length === 0) {
+        try {
+          this.onIdle?.(sessionId);
+        } catch {
+        }
+      } else {
         const delay = q.errorNotified ? q.backoff : 0;
         q.backoff = Math.min(8e3, delay + 1e3);
         if (delay > 0) {
@@ -2205,9 +2219,20 @@ var en = {
   descBargeInSalvage: "When you speak to interrupt while the agent is reading aloud, keep what you said from speech onset to break confirmation and merge it into recognition (fixes swallowed break-in speech; off = discard pre-break audio; recommended off only on speakers without echo cancellation)",
   descLlmCorrect: "Before sending, run one LLM pass over the whole transcribed text (typos/homophones/punctuation only, meaning preserved; requires a default model configured in the host \u2014 otherwise the original text is sent as-is). On = one extra correction round trip per message: usually under 1 second, at most ~10 seconds; at most 10 times per minute \u2014 when voice mode is off or the limit is hit, the original text is sent. Failed or abnormal output also falls back to the original text",
   descYieldMs: "How long (ms) to drop frames after a yield trigger (500-3000, default 1500; within the window the existing hardBreak takes over if the user really wants to speak; auto-resume after the window expires). Hold-to-talk mode only, during playback",
-  descMode: "Interaction mode (toggle: continuous listen + auto-send / hold: press to talk)",
+  descMode: "Interaction mode (toggle: continuous listen + auto-send / hold: press to talk / once: one utterance, then exit after the reply is read aloud)",
   modeToggle: "Continuous listening",
   modeHold: "Hold to talk",
+  modeOnce: "One-shot",
+  stopReading: "Stop reading",
+  readAloudLabel: "Read replies",
+  readAloudVoice: "Voice mode",
+  readAloudAlways: "Always",
+  readAloudOff: "Off",
+  descReadAloud: "Voice mode = read replies only in voice mode (default); Always = read every reply in the current session, typed ones included; Off = never read aloud",
+  showCaptionsLabel: "Caption overlay",
+  descShowCaptions: "Show a floating caption of the current sentence while reading aloud",
+  showStatusBarLabel: "Status bar",
+  descShowStatusBar: "Show the voice status bar above the composer (waveform, transcript, timer, notices, exit); when off, state shows only on the mic button",
   descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
   settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
@@ -2533,6 +2558,9 @@ var VOICE_SETTINGS_DEFAULTS = {
   autoSend: true,
   autoResume: false,
   mode: "toggle",
+  readAloud: "voice",
+  showCaptions: true,
+  showStatusBar: true,
   // 批 7O（ADR-0006）：bargeInMode 默认 'auto' → 'detect'（I10 豁免：ADR-0006 已 accepted 拍板，
   // 老用户显式 auto 不受影响，新用户/未调过的用户开箱即对）。
   bargeInMode: "detect",
@@ -2568,6 +2596,9 @@ var DESC = {
   autoSend: en.descAutoSend,
   autoResume: en.descAutoResume,
   mode: en.descMode,
+  readAloud: en.descReadAloud,
+  showCaptions: en.descShowCaptions,
+  showStatusBar: en.descShowStatusBar,
   bargeInMode: en.descBargeIn,
   echoGateDb: en.descEchoGate,
   shortcut: en.descShortcut,
@@ -2605,7 +2636,10 @@ function createVoiceSettingsSchema(defs) {
     autoSend: z.boolean().default(d.autoSend).description(DESC.autoSend),
     // 批 7N 重做 5/5：与 strings.ts descAutoResume 同步——明确「下次进入语音会话即生效」。
     autoResume: z.boolean().default(d.autoResume).description(DESC.autoResume),
-    mode: z.union([z.const("toggle"), z.const("hold")]).default(d.mode).description(DESC.mode),
+    mode: z.union([z.const("toggle"), z.const("hold"), z.const("once")]).default(d.mode).description(DESC.mode),
+    readAloud: z.union([z.const("voice"), z.const("always"), z.const("off")]).default(d.readAloud).description(DESC.readAloud),
+    showCaptions: z.boolean().default(d.showCaptions).description(DESC.showCaptions),
+    showStatusBar: z.boolean().default(d.showStatusBar).description(DESC.showStatusBar),
     bargeInMode: z.union([z.const("auto"), z.const("manual"), z.const("detect")]).default(d.bargeInMode).description(DESC.bargeInMode),
     echoGateDb: z.number().min(3).max(12).default(d.echoGateDb).description(
       DESC.echoGateDb
@@ -2664,7 +2698,10 @@ var Config = z.object({
   // 本插件自带 settings-form 设置面板 + /voice-mode/config，不受影响）。
   autoSend: z.boolean().default(true),
   autoResume: z.boolean().default(false),
-  mode: z.union([z.const("toggle"), z.const("hold")]).default("toggle"),
+  mode: z.union([z.const("toggle"), z.const("hold"), z.const("once")]).default("toggle"),
+  readAloud: z.union([z.const("voice"), z.const("always"), z.const("off")]).default("voice"),
+  showCaptions: z.boolean().default(true),
+  showStatusBar: z.boolean().default(true),
   bargeInMode: z.union([z.const("auto"), z.const("manual"), z.const("detect")]).default("detect"),
   // I3 + M7（zod 界）：echoGateDb / yieldMs 与 settings schema 同界（3-12 dB / 500-3000ms）。
   // client 与 NumberField 虽会 clamp，但那只是 UI 兜底——Config 层无界时 YAML 手滑
@@ -2699,6 +2736,9 @@ function voiceSettingsFromConfig(config) {
     autoSend,
     autoResume,
     mode,
+    readAloud,
+    showCaptions,
+    showStatusBar,
     bargeInMode,
     echoGateDb,
     shortcut,
@@ -2726,6 +2766,9 @@ function voiceSettingsFromConfig(config) {
     autoSend,
     autoResume,
     mode,
+    readAloud,
+    showCaptions,
+    showStatusBar,
     bargeInMode,
     echoGateDb,
     shortcut,
@@ -2744,6 +2787,8 @@ function voiceSettingsFromConfig(config) {
 }
 function apply(ctx, config) {
   let activeVoiceSession = null;
+  let focusedSessionId = null;
+  let focusedTabId = null;
   let activeTabId = null;
   let activeVoiceLang = "zh";
   let ownerYieldTimer = null;
@@ -2924,7 +2969,8 @@ function apply(ctx, config) {
     onError: (sessionId) => broadcast("tts-error", { sessionId }),
     // 单句重试耗尽被跳过：显式下行（客户端提示 + 诊断），不再静默丢句。
     // streak = 连续被跳过的句数：客户端据此区分偶发抖动与「云端整体不可用」（如服务端拒绝握手）。
-    onSkip: (sessionId, text, streak) => broadcast("tts-skip", { sessionId, text: text.slice(0, 80), streak })
+    onSkip: (sessionId, text, streak) => broadcast("tts-skip", { sessionId, text: text.slice(0, 80), streak }),
+    onIdle: (sessionId) => broadcast("tts-idle", { sessionId })
   });
   queue.updateVoice(vset.voice, vset.rate);
   const unsubscribe = queue.subscribe((frame) => broadcast("audio", frame));
@@ -2991,7 +3037,8 @@ function apply(ctx, config) {
     const rawSessionId = options.sessionId;
     if (!config.enabled || rawSessionId === void 0 || options.purpose !== void 0) return next();
     const sessionId = rawSessionId;
-    if (activeVoiceSession !== sessionId) return next();
+    const alwaysRead = vset.readAloud === "always" && focusedSessionId === sessionId;
+    if (activeVoiceSession !== sessionId && !alwaysRead) return next();
     const gen = (turnGen.get(sessionId) ?? 0) + 1;
     turnGen.set(sessionId, gen);
     return tapActiveStream(
@@ -3000,8 +3047,11 @@ function apply(ctx, config) {
       queue,
       broadcast,
       (state) => {
-        if ((turnGen.get(sessionId) ?? 0) === gen) setTurn(sessionId, state);
-      }
+        if ((turnGen.get(sessionId) ?? 0) !== gen) return;
+        setTurn(sessionId, state);
+        if (state === "listening" && queue.isIdle(sessionId)) broadcast("tts-idle", { sessionId });
+      },
+      vset.readAloud !== "off"
     );
   });
   const base = BASE_PATH;
@@ -3038,6 +3088,9 @@ function apply(ctx, config) {
           autoSend: vset.autoSend,
           autoResume: vset.autoResume,
           mode: vset.mode,
+          readAloud: vset.readAloud,
+          showCaptions: vset.showCaptions,
+          showStatusBar: vset.showStatusBar,
           bargeInMode: vset.bargeInMode,
           echoGateDb: vset.echoGateDb,
           shortcut: vset.shortcut,
@@ -3419,13 +3472,13 @@ function apply(ctx, config) {
             keepAsr = parsed.keepAsr === true;
           } catch {
           }
-          if (sessionId && sessionId === activeVoiceSession) {
+          if (sessionId && (sessionId === activeVoiceSession || sessionId === focusedSessionId)) {
             if (!limiter.hit(`cancel:${sessionId}`, 2, 1e3)) {
               respondJson2(res, 429, { code: "rate_limited", error: "rate limited" });
               return;
             }
             queue.cancel(sessionId);
-            if (!keepAsr) asr.reset(sessionId);
+            if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId);
           }
           respondJson2(res, 200, { ok: true });
         });
@@ -3496,11 +3549,11 @@ function apply(ctx, config) {
           let mode;
           try {
             const parsed = JSON.parse(body || "{}");
-            mode = parsed.mode === "toggle" || parsed.mode === "hold" ? parsed.mode : void 0;
+            mode = parsed.mode === "toggle" || parsed.mode === "hold" || parsed.mode === "once" ? parsed.mode : void 0;
           } catch {
           }
           if (!mode) {
-            respondJson2(res, 400, { code: "bad_request", error: "mode must be toggle or hold" });
+            respondJson2(res, 400, { code: "bad_request", error: "mode must be toggle, hold or once" });
             return;
           }
           const persistMode = settingsScopeRef ? settingsScopeRef.update({ mode }) : persistSettings({ mode });
@@ -3517,14 +3570,43 @@ function apply(ctx, config) {
   ctx.effect(
     () => ctx.webServer.register({
       kind: "exact",
+      path: `${base}/focus`,
+      handler: (req, res) => {
+        if (denyNonLoopback(req, res)) return;
+        if (denyCrossOrigin(req, res)) return;
+        collectBody(req, res, MAX_JSON_BODY, (body) => {
+          let parsed = {};
+          try {
+            parsed = JSON.parse(body || "{}");
+          } catch {
+          }
+          const { sessionId, tabId } = parsed;
+          const validTab = typeof tabId === "string" && tabId.length > 0 && tabId.length <= 64;
+          const validSid = typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 128;
+          if (!validTab || !(validSid || sessionId === null)) {
+            respondJson2(res, 400, { code: "bad_request", error: "expected {sessionId: string|null, tabId: string}" });
+            return;
+          }
+          if (validSid) {
+            focusedSessionId = sessionId;
+            focusedTabId = tabId;
+          } else if (tabId === focusedTabId) {
+            focusedSessionId = null;
+            focusedTabId = null;
+          }
+          broadcast("focus", { sessionId: focusedSessionId, tabId: focusedTabId });
+          respondJson2(res, 200, { ok: true, sessionId: focusedSessionId, tabId: focusedTabId });
+        });
+      }
+    })
+  );
+  ctx.effect(
+    () => ctx.webServer.register({
+      kind: "exact",
       path: `${base}/stream`,
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
         if (denyCrossOrigin(req, res)) return;
-        if (sseClients.size >= 4) {
-          respondJson2(res, 429, { code: "too_many_streams", error: "too many streams" });
-          return;
-        }
         let tabId = null;
         try {
           const u = new URL(req.url ?? "/", "http://localhost");
@@ -3532,6 +3614,21 @@ function apply(ctx, config) {
         } catch {
         }
         if (tabId !== null && tabId.length > 64) tabId = null;
+        if (tabId !== null) {
+          for (const old of sseClients) {
+            if (old.tabId !== tabId) continue;
+            sseClients.delete(old);
+            try {
+              old.send("replaced", {});
+            } catch {
+            }
+            old.end();
+          }
+        }
+        if (sseClients.size >= 8) {
+          respondJson2(res, 429, { code: "too_many_streams", error: "too many streams" });
+          return;
+        }
         res.writeHead(200, {
           "content-type": "text/event-stream; charset=utf-8",
           "cache-control": "no-cache, no-transform",
@@ -3544,7 +3641,13 @@ data: ${JSON.stringify(payload)}
 
 `);
         };
-        const client = { tabId, send };
+        const end = () => {
+          try {
+            res.end();
+          } catch {
+          }
+        };
+        const client = { tabId, send, end };
         sseClients.add(client);
         if (tabId !== null) latestConnByTab.set(tabId, client);
         if (tabId !== null && tabId === activeTabId && ownerYieldTimer) {
@@ -3552,10 +3655,12 @@ data: ${JSON.stringify(payload)}
           ownerYieldTimer = null;
         }
         send("mode", { active: activeVoiceSession, ownerTabId: activeTabId });
+        send("focus", { sessionId: focusedSessionId, tabId: focusedTabId });
         const heartbeat = setInterval(() => {
           try {
             res.write(": hb\n");
           } catch {
+            cleanup();
           }
         }, 25e3);
         let cleaned = false;
@@ -3608,7 +3713,7 @@ function collectBody(req, res, maxBytes, onBody) {
   req.on("error", () => {
   });
 }
-async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn) {
+async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn, speak = true) {
   const segmenter = new SentenceSegmenter();
   let firstTokenBroadcast = false;
   let firstSentenceBroadcast = false;
@@ -3618,7 +3723,7 @@ async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn) {
     if (flushed) return;
     flushed = true;
     for (const s of segmenter.flush()) {
-      queue.enqueue(sessionId, s);
+      if (speak) queue.enqueue(sessionId, s);
     }
   };
   try {
@@ -3634,7 +3739,7 @@ async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn) {
             firstSentenceBroadcast = true;
             broadcast("latency", { sessionId, stage: "first-sentence-text" });
           }
-          queue.enqueue(sessionId, s);
+          if (speak) queue.enqueue(sessionId, s);
         }
       }
       if (chunk.type === "tool-call-delta" && chunk.name) {

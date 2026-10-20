@@ -490,4 +490,24 @@ await t('R14 探针 A：在途合成被 close 打回后，catch 不得再建 ret
   assert.equal(mid, before, `close 后新增 ${mid - before} 个 ref'd Timeout——catch 在 clear 之后又建了 retrySleep timer（违背 close() 自述不变式）`)
 })
 
+await t('PR #16 once：队列排空才 onIdle（每批一次）；isIdle 反映在途/积压', async () => {
+  let release
+  const gate = new Promise((r) => (release = r))
+  const idles = []
+  const q = new TtsQueue({ engine: makeEngine('a', gate), onIdle: (sid) => idles.push(sid) })
+  const frames = []
+  q.subscribe((f) => frames.push(f))
+  assert.equal(q.isIdle('s1'), true, '从未入队的会话应视为空闲')
+  q.enqueue('s1', '一')
+  q.enqueue('s1', '二')
+  assert.equal(q.isIdle('s1'), false, '有在途合成时不应空闲')
+  release()
+  await waitFrames(frames, 4)
+  const t0 = Date.now()
+  while (idles.length === 0 && Date.now() - t0 < 2000) await sleep(5)
+  assert.deepEqual(idles, ['s1'], '两句播完只应 onIdle 一次')
+  assert.equal(q.isIdle('s1'), true)
+  await q.close()
+})
+
 console.log(`\ntts-queue-engine：${passed} 项通过`)
