@@ -1590,6 +1590,12 @@ var zh = {
   toolBeepLabel: "\u5DE5\u5177\u63D0\u793A\u97F3",
   autoSendLabel: "\u81EA\u52A8\u53D1\u9001",
   readAloudLabel: "\u6717\u8BFB\u56DE\u590D",
+  uiLayoutLabel: "\u754C\u9762\u5E03\u5C40",
+  uiCompact: "\u6536\u8FDB\u6309\u94AE",
+  uiBar: "\u9876\u90E8\u72B6\u6001\u6761",
+  descUiLayout: "\u6536\u8FDB\u6309\u94AE=\u6240\u6709\u72B6\u6001\u90FD\u5728\u9EA6\u514B\u98CE\u6309\u94AE\u4E0A\uFF1B\u9876\u90E8\u72B6\u6001\u6761=\u5728\u8F93\u5165\u6846\u4E0A\u65B9\u5355\u72EC\u663E\u793A\u4E00\u6761",
+  captionsLabel: "\u5B57\u5E55\u6D6E\u5C42",
+  descShowCaptions: "\u6717\u8BFB\u65F6\u5728\u53F3\u4E0B\u89D2\u663E\u793A\u5F53\u524D\u53E5\u5B50\u7684\u5B57\u5E55\u6D6E\u5C42",
   readAloudVoice: "\u8BED\u97F3\u6A21\u5F0F",
   readAloudAlways: "\u603B\u662F",
   readAloudOff: "\u5173\u95ED",
@@ -1825,6 +1831,12 @@ var en = {
   toolBeepLabel: "Tool-call beep",
   autoSendLabel: "Auto-send",
   readAloudLabel: "Read replies",
+  uiLayoutLabel: "UI layout",
+  uiCompact: "In the button",
+  uiBar: "Status bar",
+  descUiLayout: "In the button = all state lives on the mic button; Status bar = a separate bar above the composer",
+  captionsLabel: "Caption overlay",
+  descShowCaptions: "Show a floating caption while reading aloud",
   readAloudVoice: "Voice mode",
   readAloudAlways: "Always",
   readAloudOff: "Off",
@@ -3023,6 +3035,7 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
             }
           }
         ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "showCaptions", desc: t("descShowCaptions"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.showCaptions === true, onChange: (e) => { void scope.set("showCaptions", e.target.checked); try { window.dispatchEvent(new Event("dshvm-settings-changed")); } catch {} } }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "autoResume", desc: t("descAutoResume"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.autoResume), onChange: (e) => void scope.set("autoResume", e.target.checked) }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "captionFontSize", desc: t("descCaptionFontSize"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
           SegGroup,
@@ -3239,6 +3252,19 @@ function apply(ctx) {
         inject: () => ({ bus })
       },
       MicButton
+    )
+  );
+  // 可选：朗读时的字幕浮层。
+  ctx.slots.inject(
+    "shell.overlay",
+    () => ctx.slots.register(
+      {
+        name: "shell.overlay",
+        id: "voice-mode-overlay",
+        order: 100,
+        inject: () => ({ bus })
+      },
+      VoiceOverlay
     )
   );
   // 状态条与字幕浮层已收进麦克风按钮（不再在输入框上方铺一条）。
@@ -3462,6 +3488,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     autoSend: true,
     autoResume: false,
     readAloud: "voice",
+    showCaptions: false,
     mode: "toggle",
     // 批 7O（ADR-0006）：默认 detect（与 src/index.ts VOICE_SETTINGS_DEFAULTS 对齐）。
     bargeInMode: "detect",
@@ -4201,6 +4228,7 @@ function MicButton({
     autoSend: true,
     autoResume: false,
     readAloud: "voice",
+    showCaptions: false,
     mode: "toggle",
     // 批 7O（ADR-0006）：bootNow 兜底默认与 VOICE_SETTINGS_DEFAULTS 对齐为 detect。
     bargeInMode: "detect",
@@ -4242,6 +4270,7 @@ function MicButton({
         autoSend: c.autoSend ?? cur.autoSend,
         autoResume: c.autoResume === true,
         readAloud: c.readAloud === "always" ? "always" : c.readAloud === "off" ? "off" : "voice",
+        showCaptions: c.showCaptions === true,
         mode: c.mode === "hold" ? "hold" : c.mode === "once" ? "once" : "toggle",
         bargeInMode: c.bargeInMode === "manual" ? "manual" : c.bargeInMode === "detect" ? "detect" : "auto",
         echoGateDb: typeof c.echoGateDb === "number" ? Math.min(12, Math.max(3, c.echoGateDb)) : cur.echoGateDb,
@@ -5339,6 +5368,7 @@ function MicButton({
   const boot = bootNow();
   const readMode = boot.readAloud ?? "voice";
   const check = "✓";
+  const compactUi = true;
   // 实时音量：取最新一帧并做衷减，避免钻环抖动；没有声音时自然回落。
   // 等待回复期间不应显示「录入中」：已发送、或正在生成回复时用中性状态。
   const waitingForReply = !bus.ui.playing && (oncePending || awaitingReply || bus.ui.turn === "agent-speaking" || livePhase === "submitting" || livePhase === "adjudicating");
@@ -5403,20 +5433,24 @@ function MicButton({
       "aria-pressed": on,
       title: bus.ui.error ? String(bus.ui.error) : readingState ? t("stopReading") : on ? holdMode ? scText(t("titleHold")) : scText(t("titleToggle")) : scText(t("titleEnter")),
       children: [
-        bus.ui.isSpeech === true && !waitingForReply && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-mic-vad", title: t("vadDetected") }),
+        compactUi && bus.ui.isSpeech === true && !waitingForReply && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-mic-vad", title: t("vadDetected") }),
         bus.ui.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-mic-error", title: String(bus.ui.error) }),
         waitingForReply && !endingSession && !readingState ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", className: "dshvm-spin", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("circle", { cx: 12, cy: 12, r: 8, fill: "none", stroke: "currentColor", strokeWidth: 2, opacity: 0.25 }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M12 4a8 8 0 0 1 8 8", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" })
         ] }) : endingSession ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M5.5 12.5l4.2 4.2 8.8-8.8", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" })
-        ] }) : readingState ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { ref: readEqRef, className: "dshvm-eq dshvm-eq-out", "aria-hidden": "true", children: [
+        ] }) : readingState && compactUi ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { ref: readEqRef, className: "dshvm-eq dshvm-eq-out", "aria-hidden": "true", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 6 } }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 10 } }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 14 } }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 10 } }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 6 } })
-        ] }) : on && !waitingForReply && !endingSession ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { ref: eqRef, className: "dshvm-eq", "aria-hidden": "true", children: [
+        ] }) : readingState ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { viewBox: "0 0 24 24", width: 16, height: 16, "aria-hidden": "true", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "currentColor", d: "M11.6 4.1 7.2 8H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h3.2l4.4 3.9c.6.6 1.6.1 1.6-.7V4.8c0-.8-1-1.3-1.6-.7Z" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", d: "M16 9.2a4.2 4.2 0 0 1 0 5.6" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", d: "M18.8 6.5a8 8 0 0 1 0 11" })
+        ] }) : compactUi && on && !waitingForReply && !endingSession ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { ref: eqRef, className: "dshvm-eq", "aria-hidden": "true", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 6 } }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 12 } }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { height: 8 } })
@@ -5424,7 +5458,7 @@ function MicButton({
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "currentColor", d: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z" }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { fill: "currentColor", d: "M17.3 11a.9.9 0 0 0-1.8 0 3.5 3.5 0 0 1-7 0 .9.9 0 0 0-1.8 0 5.3 5.3 0 0 0 4.4 5.2v1.9h-1.7a.9.9 0 0 0 0 1.8h5.2a.9.9 0 0 0 0-1.8h-1.7v-1.9A5.3 5.3 0 0 0 17.3 11Z" })
         ] }),
-        local === "on" && recording && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", {
+        local === "on" && recording && compactUi && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", {
           className: "dshvm-mic-timer",
           children: [String(Math.floor(elapsedSec / 60)).padStart(2, "0"), ":", String(elapsedSec % 60).padStart(2, "0")]
         })
@@ -5479,6 +5513,20 @@ function MicButton({
           "button",
           {
             role: "menuitemcheckbox",
+            "aria-checked": boot.showCaptions === true,
+            className: "dshvm-menu-item",
+            onClick: () => void patchSettings({ showCaptions: boot.showCaptions !== true }),
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: t("captionsLabel") }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshvm-menu-check", children: boot.showCaptions === true ? check : "" })
+            ]
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshvm-menu-sep" }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+          "button",
+          {
+            role: "menuitemcheckbox",
             "aria-checked": Boolean(boot.autoSend),
             className: "dshvm-menu-item",
             onClick: () => void patchSettings({ autoSend: !boot.autoSend }),
@@ -5495,6 +5543,8 @@ function MicButton({
 }
 function VoiceStatusBar({ bus, sessionId }) {
   useLang();
+  // 默认「收进按钮」时不渲染状态条。
+  if ((bus.ui.boot?.uiLayout ?? "compact") !== "bar") return (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   // \u72B6\u6001\u6761\u6837\u5F0F\u4E0E\u9EA6\u514B\u98CE\u6309\u94AE\u540C\u5C5E\u4E00\u4EFD\u6CE8\u5165\u7684 CSS\uFF08\u5E42\u7B49\uFF0C\u53EA\u6CE8\u5165\u4E00\u6B21\uFF09\u3002
   useVoiceCss();
   const [b, setB] = (0, import_react3.useState)(() => ({ active: bus.activeSessionId, ui: bus.ui }));
@@ -5676,9 +5726,8 @@ function VoiceOverlay({ bus }) {
     return bus.subscribe(setB);
   }, [bus]);
   if (!b.ui.playing) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
-  // 语音模式里不弹浮层：回复本身就在屏幕上，状态条已有「停止朗读」；
-  // 只有不在语音模式（朗读设为「总是」）时才需要字幕浮层提供停止入口。
-  if (b.active) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
+  // 字幕浮层开关（默认开）；关掉时完全不弹。
+  if (b.ui.boot?.showCaptions !== true) return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, {});
   return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
     "div",
     {
