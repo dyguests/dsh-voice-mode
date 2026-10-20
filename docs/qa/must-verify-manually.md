@@ -1,7 +1,7 @@
 # 必须人工复核最小清单
 
 > **定位**：AI 已自动验证全部 `npm test`（数字以 `npm test` 实测与 `docs/qa/TEST-SYSTEM.md` 为准，不在此处维护）；本清单只列**必须真机/人工**才能确认的少数项。
-> **基线**：HEAD = `bb42829`（Issue #15 R9 收口——一级自动探测行为锁（barge-in-detect-behavior 5 项）+ADR-0006 假断言勘误+全 ADR 行号终态（STATE Q1 关闭）批；含 lib/client.js 与 package.json，属代码+lib 批；本基线随收口批滚动更新，**现行约定取代码+lib 批——docs-only 提交不滚动基线**）；**完整 4 项必过**＝精简自原 21 项 + 批 7N 新增 manual 项（批 1 热词 / 批 2 锁语种已砍，详见 `real-machine-acceptance-checklist.md` 头部删项说明 + `docs/competitive/backlog.md`「已落地对照区」节）。
+> **基线**：HEAD = `c4e2c3a`（Issue #15 R11 最终收口——dispose 懒重建泄漏两处代码修+注释如实化（needsRespawn 死逻辑待决登记）+锚点口径落盘+M7 两处行为回归测试；含 lib/client.js 与 lib/index.js，属代码+lib 批；本基线随收口批滚动更新，**现行约定取代码+lib 批——docs-only 提交不滚动基线**）；**完整 4 项必过**＝精简自原 21 项 + 批 7N 新增 manual 项（批 1 热词 / 批 2 锁语种已砍，详见 `real-machine-acceptance-checklist.md` 头部删项说明 + `docs/competitive/backlog.md`「已落地对照区」节）。
 > **纪律**：每项单点验证；失败即停发版，回滚对应 commit。
 > **批 7M 🔴 砍 + 批 7N 🟡 重做 落地注记（2026-09-16）**：4 项砍除（`recognitionLanguage` / `asrHotwords`+`asrHotwordsScore`+模块 / `docs/qa/user-experience-flow.md`）+ 5 项重做（`bargeInMode='manual'` 接通 / echoGateDb+autoResume 描述对齐 / 端到端补测 3 项 / ADR-0003+0004 重命名 / autoResume 文案统一）；本清单「4 项必过」已对齐砍后 src/ 现状。
 
@@ -77,5 +77,5 @@
 
 - 完整体验验收 → `real-machine-acceptance-checklist.md`（批 2/3/5 三阶段，批 7M 砍 4 项后精简）
 - 不变量定义 → `docs/rules/STATE.md` 与 `docs/adr/`
-- 基线 HEAD = `bb42829`（Issue #15 R9 收口——一级自动探测行为锁（barge-in-detect-behavior 5 项）+ADR-0006 假断言勘误+全 ADR 行号终态（STATE Q1 关闭）批；含 lib/client.js 与 package.json，属代码+lib 批；本基线随收口批滚动更新，现行约定取代码+lib 批、docs-only 提交不滚动基线）。历史基线陈述保留备查：`7997b4a`（R8 收口）/ `77cb212`（R6 收口）/ `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）/ `5e2d34f`（批 7O 代码块收口）/ `0b63a13`（块 3 HEAD）——`git diff 5e2d34f..HEAD -- src/ lib/` **已非空**（Issue #15 八批代码改动全部在内），旧「应为空」口径作废
+- 基线 HEAD = `c4e2c3a`（Issue #15 R11 最终收口——dispose 懒重建泄漏两处代码修+注释如实化（needsRespawn 死逻辑待决登记）+锚点口径落盘+M7 两处行为回归测试；含 lib/client.js 与 lib/index.js，属代码+lib 批；本基线随收口批滚动更新，现行约定取代码+lib 批、docs-only 提交不滚动基线）。历史基线陈述保留备查：`bb42829`（R9 收口）/ `7997b4a`（R8 收口）/ `77cb212`（R6 收口）/ `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）/ `5e2d34f`（批 7O 代码块收口）/ `0b63a13`（块 3 HEAD）——`git diff 5e2d34f..HEAD -- src/ lib/` **已非空**（Issue #15 八批代码改动全部在内），旧「应为空」口径作废
 - 批 7M + 批 7N 完成状态 → `docs/rules/STATE.md` 批次进度表 + `docs/competitive/backlog.md`「已落地对照区」节
