@@ -1,0 +1,16 @@
+README.md
+  h_3553f4e32d4a9f 60-64
+plugin/dsh-voice-mode/README.md
+  h_3553f4e32d4a9f 18-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c225da507baa0d58c8208d15f5e046eab049bad",
+  "prompts": {},
+  "humans": {
+    "h_3553f4e32d4a9f": {
+      "author": "fanhl <dyguests@qq.com>"
+    }
+  }
+}
