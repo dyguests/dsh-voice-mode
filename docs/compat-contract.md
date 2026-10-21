@@ -573,7 +573,7 @@ class AgentDefaultModelConfig extends Service {
 
 用户反馈英文界面里设置卡片中英混杂。用 TypeScript AST 扫描全部源码的中文字面量/JSX 文本（排除注释），归纳出**六类根因**，均系「文案绕过词典 / 两份数据漂移 / 把 host 的话当 UI 文案」：
 
-1. 字段标题硬编码中文：`settings-form.tsx` 的 `FIELD_LABELS`（词典里的 `*Label` 键标注「未对外使用」，en 还是 `ITN` 这类 stub）。**现态：`FIELD_LABELS` 已随整合批删除**（`src/strings.ts` 注释登记「整合批已删 FIELD_LABELS，`*Label` 键现为行标题唯一真源」），全仓 0 命中——本条**已不成立**，勿再当作现存根因。
+1. 字段标题硬编码中文：`settings-form.tsx` 的 `FIELD_LABELS`（**已删**；词典里的 `*Label` 键标注「未对外使用」，en 还是 `ITN` 这类 stub）。**现态：`FIELD_LABELS` 已随整合批删除**（`src/strings.ts` 注释登记「整合批已删 FIELD_LABELS，`*Label` 键现为行标题唯一真源」），全仓 0 命中——本条**已不成立**，勿再当作现存根因。
 2. 音色/镜像下拉标签硬编码中文（性别、口音、「常用男声」…）；且 host（`tts-local.ts`）与客户端各抄一份音色表，靠注释保证「同源」，host 那份的中文标签**从未被任何 UI 使用**。**现态：host 侧硬编码中文标签已移除**，音色目录改单一数据源（`src/voice-catalog.ts` + `src/voice-labels.ts` 按语言生成标签）——本条的「两份音色表」已收敛。
 3. host 错误响应直接充当 UI 文案：固定中文（试听失败、`模型下载失败`）英文用户直接看到；英文机器消息（`rate limited`、`voice mode disabled`）与 `String(e)` 异常文本中文用户直接看到（并可能泄露内部细节）；客户端还用 `=== 'voice mode disabled'` 字符串比较做分支；试听失败出现「试听失败：试听失败：…」重复前缀。**现态：错误响应已码化为 `src/errors.ts` 稳定错误码表 + 客户端 `errorText()` 查词典，`client.tsx` 里的 `=== 'voice mode disabled'` 字符串比较已移除**（全仓 0 命中）——本条已消解。
 4. LLM 口语化提示词只有中文版；试听例句只有中/英。**现态：`src/prompts.ts` 已是中/英两版**，试听例句按音色语种——本条已消解。

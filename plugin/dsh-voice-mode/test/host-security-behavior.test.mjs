@@ -656,8 +656,9 @@ await t('I-2 无可读文本（readAloud=off）的回合结束时仍收到 tts-i
 await t("I-2' 「停止朗读」后本回合余句不再入队（不合成、不下发、不计费）", async () => {
   reset()
   // 先给一个回合身份：真实宿主每个 step 都会派发 agent/pre-step（回合号真源），静音记的是
-  // 「回合 40」。不派发的话静音会记成「回合号未知」，按 R15 Important-6 的采纳规则，下一条流
-  // 会把**它所属的回合**当成基准 → 紧接着的「下一回合恢复朗读」用例首句就被静音（前提不成立）。
+  // 「回合 40」。不派发的话静音会记成「回合号不可知」，只能靠 step===1 判回合边界
+  // （R15 Important-11 修正后的口径）——紧接着的「下一回合恢复朗读」用例会先派发 preStep(41)，
+  // 若这里没给回合身份，那个用例的 step 判定就不再代表真实时序，前提会失真。
   preStep(VOICE_SID, 40)
   const it = openTap(VOICE_SID, ['打断前的第一句。', '打断后的余句。', '以及没说完的尾巴'])
   await it.next() // 首句入队
@@ -989,7 +990,7 @@ await t('H-8 焦点在流中途丢失 → 该流收尾不再广播回合状态�
   )
 })
 
-await t('H-6 窗口：/cancel 早于该会话首次 pre-step（回合中途才被静音）→ 采纳基准，静音守住到回合边界', async () => {
+await t('H-6 窗口：/cancel 早于该会话首次 pre-step（回合中途才被静音）→ 按回合边界解禁，静音守到回合结束', async () => {
   reset()
   // 独立会话：/cancel 的「每会话 2 次/秒」限流桶在 ⑩ 段已被 TURN_SID 用满，复用会拿到 429、
   // 静音根本没建立（用例前提不成立却静默通过）。
@@ -1096,6 +1097,35 @@ await t("H-9 reason 的类型校验：只有精确的 'interrupt' 生效（子�
     })
     reset()
   }
+})
+
+// ---------------------------------------------------------------- ⑬ 真回合边界判别（Important-11）
+// Issue #15 R15-15：早先的「采纳基准」把**第一次见到的回合号**当成静音回合——当取消时回合号不可知、
+//   而下一个回合的 pre-step 才首次给出回合号时，整个下一回合被静默（用户点一次停止朗读，AI 的
+//   下一条回复完全不朗读）。改为真回合边界判别：step===1（宿主保证跨回合从 1 重来）。
+console.log('⑬ 真回合边界：取消时不可知 → 下一回合恢复；同一回合 step2 仍压住')
+
+await t('H-11 取消时回合号不可知 → 下一回合（step===1）必须恢复朗读', async () => {
+  reset()
+  const SID = 'live-h11-17'
+  await muteWithoutTurnNumber(SID) // 取消时回合位置不可知 → mute.turn = null
+  preStep(SID, 111, 1) // 下一个回合的首个 step（宿主语义：跨回合 step 从 1 重来）
+  await drive(SID, '下一回合的话。')
+  assert.ok(await waitFor((s) => spoken().includes('下一回合的话。')), '下一回合被整段静默——点一次「停止朗读」就哑掉 AI 的下一条回复')
+})
+
+await t('H-6 窗口不得回归：取消时回合号不可知 + 同一回合 step2（此刻可知）→ 仍不解禁', async () => {
+  reset()
+  const SID = 'live-h6b-17'
+  await muteWithoutTurnNumber(SID)
+  preStep(SID, 110, 2) // 同一回合的第 2 个 step：回合号此刻**首次可知**
+  await drive(SID, '同回合的后续正文。')
+  await sleep(60)
+  drain()
+  assert.equal(spoken().includes('同回合的后续正文。'), false, '同一回合的 step2 被解禁——Important-6 的窗口复发')
+  preStep(SID, 111, 1) // 真正的下一回合 → 恢复
+  await drive(SID, '下一回合恢复。')
+  assert.ok(await waitFor((s) => spoken().includes('下一回合恢复。')), '真回合边界没有恢复朗读')
 })
 
 rmSync(tmp, { recursive: true, force: true })

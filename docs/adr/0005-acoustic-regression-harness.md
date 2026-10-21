@@ -42,7 +42,7 @@
 | `echoGateDb` 6 | 设置默认 | ✅ |
 | `peakDecay` 0.9 | `src/asr.ts:900` | ✅ |
 | `floorAlpha` 0.98 | `src/asr.ts:901` | ✅ |
-| `confirmFrames` 3/2/1 | `src/client.tsx:2489` | ✅ |
+| `confirmFrames` 3/2/1 | `src/client.tsx:2506` | ✅ |
 | 迟滞连续 2 拍 | `src/client.tsx:48-49` / :2593-2595 | ✅ |
 | `SPEECH_RMS` 0.015 | `src/asr.ts:169` | ⏳ 阶段二（分段级联） |
 | `MIN_SPEECH_MS` 250 | `src/asr.ts:174` | ⏳ 阶段二 |

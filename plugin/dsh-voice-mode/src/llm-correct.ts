@@ -63,13 +63,35 @@ const CORRECTION_PREAMBLE_RE =
   /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i
 
 /**
- * 前言护栏的寒暄前缀：弱模型爱在说明头前先来一句客套（"好的，""当然，""Sure,"）。
- * 剥掉这段客套后再判说明头——否则加一句寒暄即绕过 ^ 锚（元叙述原样进用户消息）。
- * 每个词后面必须跟分隔符（标点或空白），避免误剥正文词（"行""Hi" 是常用词/前缀）。
+ * 寒暄词表：弱模型爱加的客套（中文 6 词 + 英文 9 词）。两个正则共用一份词表，
+ * 避免「前缀形态」与「纯寒暄形态」的词表漂移。
+ */
+const CORRECTION_FILLER_WORDS = '当然可以|当然|好吧|好的?|行吧|是的|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi'
+
+/**
+ * 前言护栏的寒暄**前缀**（每个词后面必须跟分隔符）：弱模型爱在说明头前先来一句
+ * 客套（"好的，""当然，""Sure,"）。剥掉这段客套后再判说明头——否则加一句寒暄即
+ * 绕过 ^ 锚（元叙述原样进用户消息）。
+ * 要求分隔符是为了不误剥「好的东西」这类以寒暄词开头的合法正文。
  * **只用于前言判定**：剥后的串不作为输出（那可能正是用户自己的话，见 M-6 注释）。
  */
-const CORRECTION_FILLER_PREFIX_RE =
-  /^(?:(?:当然可以|当然|好吧|好的?|行吧|是的|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi)(?:\s*[,，、:：.。!！?？)）]|\s))+/
+const CORRECTION_FILLER_PREFIX_RE = new RegExp(
+  '^(?:(?:' + CORRECTION_FILLER_WORDS + ')(?:\\s*[,，、:：.。!！?？)）]|\\s))+',
+  'i',
+)
+
+/**
+ * **纯寒暄**（整串就是一个客套词，且没有尾随分隔符）：模型只回了客套没给正文。
+ *
+ * 前缀正则要求每个词后面跟分隔符（否则会误剥「好的东西」），故「好的」「Sure」
+ * 「OK」「当然」这类**无标点**的纯客套原本不被识别为寒暄——整串三档判据被跳过，
+ * 模型输出（只有「好的」）直接顶替了用户消息（M-7）。
+ * 这里要求「整串」而非前缀：故「好的东西」「好的，我知道了。」不会被误判成纯寒暄。
+ */
+const CORRECTION_PURE_FILLER_RE = new RegExp(
+  '^(?:(?:' + CORRECTION_FILLER_WORDS + ')(?:\\s*[,，、:：.。!！?？)）]\\s*|\\s+))*(?:' + CORRECTION_FILLER_WORDS + ')\\s*$',
+  'i',
+)
 
 /**
  * 纠错一条文本。任何失败（无 ctx.get / 无 llm 服务 / 无默认模型 / stream 抛错 /
@@ -120,8 +142,12 @@ export async function correctText(
     //     「好的，」「当然，」「Sure,」即越过上面的 ^ 锚，模型元叙述原样进入用户消息
     //     （autoSend 默认开会直接发出去；长度护栏也兜不住——「好的，以下是修正后的
     //     文本：今天天气不错。」仅 20 字 < 阈值 30）。剥掉寒暄前缀后再判说明头。
-    //   M-2（Issue #15 R4）：剥空也是信号——弱模型只回了客套没给正文（「好的，」/「Sure,」）
-    //     时，剥完为空串；此前该信号没被消费，模型输出直接顶替了用户消息。空 → 回退原文。
+    //   M-2（Issue #15 R4）：剥空也是信号——模型只回了客套没给正文时，剥完为空串；
+    //     此前该信号没被消费，模型输出直接顶替了用户消息。空 → 回退原文。
+    //   M-7（Issue #15 R7）：剥空**也包括无尾随分隔符的纯寒暄**（「好的」「Sure」「OK」
+    //     「当然」）——前缀正则要求分隔符（否则会误剥「好的东西」），这类形态原本
+    //     不被识别为寒暄 → 整串三档判据被跳过 → 模型输出（只有「好的」）直接顶替
+    //     用户消息。故另用「整串纯寒暄」正则识别（见 CORRECTION_PURE_FILLER_RE）。
     //   M-6（Issue #15 R5）：**剥后的串只用于「让前言正则看穿寒暄」，绝不作为输出**。
     //     模型加的客套与用户自己说的问候在输出里形态完全相同（都是串首的寒暄词），
     //     而模型输出与用户原话之间没有可靠对应关系（模型可能改写/重排/增删），
@@ -129,15 +155,19 @@ export async function correctText(
     //     （「好的，我知道了。」→「我知道了。」；「Hello there」→「there」整句成残句），
     //     用户消息被静默改写后直接发出。保守口径：宁可保留一个「好的，」，
     //     也不改写用户的话——剥后是普通正文时原样返回模型输出。
-    //     循环剥离：客套可能叠着（「好的，当然，这是修正结果：…」）。
+    //   M-8（Issue #15 R7）：循环剥离——客套可能叠着，且分隔符可能是**空白**而非标点
+    //     （「好的 好的  Sure, corrected: …」）。单次 replace 会留下前导空白，
+    //     锚定 ^ 的前言正则看不见说明头 → 元叙述泄漏；循环里的 trimStart 不可省。
     let noFiller = corrected
     for (;;) {
       const next = noFiller.replace(CORRECTION_FILLER_PREFIX_RE, '').trimStart()
-      if (next === noFiller) break
-      noFiller = next
+      // M-7：剥完只剩一个客套词（无尾随分隔符）→ 也是「模型只回客套没给正文」→ 视为剥空。
+      const after = CORRECTION_PURE_FILLER_RE.test(next) ? '' : next
+      if (after === noFiller) break
+      noFiller = after
     }
     if (noFiller !== corrected) {
-      // 剥空 = 模型只回了客套没给正文 → 回退原文。
+      // 剥空 = 模型只回了客套没给正文（含无标点纯寒暄）→ 回退原文。
       if (noFiller === '') return text
       // 剥后仍是说明头 = 元叙述 → 回退原文。
       if (CORRECTION_PREAMBLE_RE.test(noFiller)) return text

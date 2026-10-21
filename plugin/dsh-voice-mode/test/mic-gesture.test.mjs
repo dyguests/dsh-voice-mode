@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { auxClickPending, cancelPayload, createScopeBridge, decayConfirmCount, eqPaintMode, focusFailureAction, handleReplaced, isEditingShortcut, isGestureEnd, isPrimaryPress, menuFocusIndex, onceFinished, registerScopeDispose, reportFocus, shouldReleaseStopLine, takeToggleSlot } from '../src/mic-gesture.ts'
+import { applyTurnEvent, auxClickPending, cancelPayload, createScopeBridge, decayConfirmCount, eqPaintMode, focusFailureAction, handleReplaced, isAuxClickToIgnore, isEditingShortcut, isGestureEnd, isPrimaryPress, menuFocusIndex, onceFinished, registerScopeDispose, reportFocus, shouldReleaseStopLine, takeToggleSlot } from '../src/mic-gesture.ts'
 import { createHttpScope } from '../src/settings-http-scope.ts'
 
 let passed = 0
@@ -545,11 +545,11 @@ t('C-9：「等到下一回合才解除」模式（宿主提供 running）不得
     '没有拒绝线时无事可做',
   )
 })
-t('接线：client.tsx 的 tool 广播标记同回合、turn 事件走 shouldReleaseStopLine', () => {
+t('接线：client.tsx 的 tool 广播标记同回合、turn 事件走 applyTurnEvent 判定', () => {
   const toolBody = srcBetween("source.addEventListener('tool'", '\n    })\n')
   assert.ok(/toolPending\.add\(p\.sessionId\)/.test(toolBody), "'tool' 广播未标记同回合——回合内 step2 会解除拒绝线")
   const turnBody = srcBetween("source.addEventListener('turn'", '\n    })\n')
-  assert.ok(/shouldReleaseStopLine\(/.test(turnBody), "'turn' 事件未走 shouldReleaseStopLine 判定")
+  assert.ok(/applyTurnEvent\(/.test(turnBody), "'turn' 事件未走 applyTurnEvent 判定（回合身份 + 解除判定整体判定）")
   assert.ok(
     /sameRoundContinuation/.test(turnBody) && /toolPending\.has\(ev\.sessionId\)/.test(turnBody),
     "'turn' 事件未消费同回合标记",
@@ -653,9 +653,12 @@ t('C-11 接线：client.tsx 消费 turn 载荷的回合号并维护每会话最�
   const body = srcBetween("source.addEventListener('turn'", '\n    })\n')
   assert.ok(/turn\?: number/.test(body), "'turn' 载荷未声明回合号字段")
   assert.ok(/typeof ev\.turn === 'number'/.test(body), '未按「turn 键可能缺席」解析（缺席是键不存在，不是 null）')
-  assert.ok(/currentTurn\.get\(ev\.sessionId\)/.test(body), '未取该会话最近一次的回合号')
-  assert.ok(/currentTurn\.set\(ev\.sessionId, turn\)/.test(body), '未记录该会话的回合号')
-  assert.ok(/lastTurn/.test(body), '未把最近回合号交给判定')
+  assert.ok(/applyTurnEvent\(/.test(body), "'turn' 事件未走 applyTurnEvent（回合身份 + 解除判定整体判定）")
+  assert.ok(
+    /identity: \{ lastTurn: currentTurn\.get\(ev\.sessionId\) \}/.test(body),
+    '未把该会话最近一次的回合号喂进判定（喂成 undefined 会让「回合身份权威化」整个废掉）',
+  )
+  assert.ok(/currentTurn\.set\(ev\.sessionId, r\.identity\.lastTurn\)/.test(body), '未记录该会话的回合号')
 })
 
 // --------------------------------------------------------------------------
@@ -708,7 +711,7 @@ t('C-13 接线：client.tsx 的 pointerdown 记标志（赋值式）、click 消
   const down = handlerSrc('const onPointerDown = (e: React.PointerEvent): void => {')
   assert.ok(/auxClickRef\.current = auxClickPending\(/.test(down), 'pointerdown 未按赋值式写辅助点击标志（非辅助点击必须清残留）')
   const click = srcBetween('onClick={(e: React.MouseEvent) => {', '\n        }}\n')
-  assert.ok(/if \(auxClickRef\.current\) \{/.test(click), 'click 未消费辅助点击标志')
+  assert.ok(/isAuxClickToIgnore\(/.test(click), 'click 未消费辅助点击标志')
   assert.ok(/auxClickRef\.current = false/.test(click), 'click 未清掉标志')
 })
 
@@ -727,6 +730,103 @@ t('C-14 接线：client.tsx 的 pointerdown 记下 arm 的按键，pointerup 按
   assert.ok(/button: e\.button/.test(down), 'pointerdown 未记下 arm 的按键（收尾判据要比按键）')
   const up = handlerSrc('const onPointerUp = (e: React.PointerEvent): void => {')
   assert.ok(/isGestureEnd\(p, \{ id: e\.pointerId, button: e\.button \}\)/.test(up), 'pointerup 未按「同 pointerId + 同按键」判定收尾')
+})
+
+
+// --------------------------------------------------------------------------
+// C-15：辅助点击标志会吞掉其后一次**键盘**激活的 click。
+// Blink/Gecko 的 ctrl+click **不派发 click** → 标志残留 → 随后的键盘 Enter/Space
+// 激活（detail === 0）被误吞（a11y 路径降级）。
+// --------------------------------------------------------------------------
+t('C-15：键盘激活的 click 不得被辅助点击标志吞掉', () => {
+  // Chrome/Firefox：ctrl+click 不派发 click → 标志残留 true → 随后的键盘 click（detail=0）
+  assert.equal(isAuxClickToIgnore(true, 0), false, '键盘激活（detail=0）不得被吞——a11y 路径降级')
+  // Safari：辅助点击派发的 click（detail=1，指针派生）→ 必须吞
+  assert.equal(isAuxClickToIgnore(true, 1), true, '辅助点击派发的 click 必须被忽略（否则右键开菜单会顺带切语音模式）')
+  // 无标志 → 任何 click 都不吞
+  assert.equal(isAuxClickToIgnore(false, 1), false, '无辅助点击标志时不得吞 click')
+  assert.equal(isAuxClickToIgnore(false, 0), false, '无辅助点击标志时不得吞 click')
+})
+t('C-15 接线：client.tsx 的 click 只吞指针派生的（detail !== 0）', () => {
+  const click = srcBetween('onClick={(e: React.MouseEvent) => {', '\n        }}\n')
+  assert.ok(
+    /isAuxClickToIgnore\(auxClickRef\.current, e\.detail\)/.test(click),
+    'click 未按「只吞指针派生的 click」判定——键盘激活会被误吞',
+  )
+})
+
+// --------------------------------------------------------------------------
+// C-16：客户端「权威回合号」接线此前无行为锁（把 lastTurn 喂成 undefined 全套件仍绿）。
+// 判据：lastTurn 必须**影响**判定结果——喂 undefined 与喂真值必须不同。
+// --------------------------------------------------------------------------
+t('C-16：权威回合号必须真的参与判定（lastTurn 喂成 undefined 必须改变结果）', () => {
+  const withLast = applyTurnEvent({
+    turn: 7,
+    identity: { lastTurn: 7 },
+    hasStopLine: true,
+    untilNextRun: false,
+    sameRoundContinuation: false,
+  })
+  assert.equal(withLast.release, false, '同一回合（turn 相同）不得解除拒绝线')
+  assert.equal(withLast.identity.lastTurn, 7, '未更新回合身份（供下一次比较）')
+  // 同样的载荷，但该会话「最近回合号」喂成 undefined（客户端不再用权威回合号）
+  // → 退回代理信号（此处无代理信号 → 旧行为：解除）→ 结果**必须不同**
+  const withoutLast = applyTurnEvent({
+    turn: 7,
+    identity: { lastTurn: undefined },
+    hasStopLine: true,
+    untilNextRun: false,
+    sameRoundContinuation: false,
+  })
+  assert.equal(withoutLast.release, true, 'lastTurn 缺失时应退回代理/旧行为')
+  assert.notEqual(
+    withLast.release,
+    withoutLast.release,
+    'lastTurn 未参与判定——喂成 undefined 结果不变（回合身份权威化被静默废掉，而全套件仍绿）',
+  )
+})
+
+// --------------------------------------------------------------------------
+// C-17：/focus 403 的补报是**无保护的定时重发** → 期间焦点已变会把旧会话写回 host。
+// --------------------------------------------------------------------------
+await ta('C-17：403 补报期间焦点已变 → 不补报（不把焦点写回旧会话）', async () => {
+  let calls = 0
+  const res = await reportFocus({
+    sessionId: 'sess-A',
+    fetchImpl: async () => {
+      calls++
+      return { status: 403 }
+    },
+    wait: async () => {},
+    warn: () => {},
+    stillRelevant: () => false, // 期间用户已切到别的会话
+  })
+  assert.equal(calls, 1, '焦点已变时不得补报旧会话（会把 host 的焦点归属指回旧会话）')
+  assert.equal(res.skipped, true, '应标记为「因焦点已变而放弃补报」')
+  assert.equal(res.reported, false, '未补报就不该留痕')
+})
+await ta('C-17：焦点未变 → 仍补报一次（403 的补报语义不回归）', async () => {
+  let calls = 0
+  const res = await reportFocus({
+    sessionId: 'sess-A',
+    fetchImpl: async () => {
+      calls++
+      return { status: 403 }
+    },
+    wait: async () => {},
+    warn: () => {},
+    stillRelevant: () => true,
+  })
+  assert.equal(calls, 2, '焦点未变时应补报一次')
+  assert.equal(res.skipped, false, '不应标记为跳过')
+})
+t('C-17 接线：client.tsx 的补报带「焦点是否已变」判据', () => {
+  const body = srcBetween('const postFocus = (sessionId: string | null): void => {', '\n  }\n')
+  assert.ok(
+    /stillRelevant: \(\) => focusedSessionId === sessionId/.test(body),
+    '补报前未复核焦点是否已变——会把焦点写回旧会话',
+  )
+  assert.ok(/focusWarned\.has\(warnedSession\)/.test(body), '留痕未按每会话去重（反复切标签页会刷屏）')
 })
 
 console.log(`\nmic-gesture：${passed} 项通过`)

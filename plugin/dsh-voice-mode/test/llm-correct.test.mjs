@@ -198,6 +198,60 @@ await t('M-2：叠着寒暄（好的，当然，这是修正结果：…）→ �
   )
 })
 
+await t('M-7：纯寒暄（无尾随标点：「好的」「Sure」「OK」「当然」）→ 回退原文', async () => {
+  // 寒暄前缀正则要求每个词后面跟分隔符（否则会误剥「好的东西」）→ 这类**无标点**
+  // 的纯客套原本不被识别为寒暄 → 整串三档判据被跳过 → 模型输出（只有「好的」）
+  // 直接顶替了用户消息（autoSend 默认开会把它发出去）。
+  const zhSrc = '今天天气不错'
+  for (const out of ['好的', '当然', '好吧', '行吧', '是的', '当然可以']) {
+    assert.ok(
+      out.length < Math.max(zhSrc.length * 3, zhSrc.length + 24),
+      '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）',
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), zhSrc, 'zh'),
+      zhSrc,
+      `纯寒暄「${out}」未回退原文（模型输出直接顶替了用户消息）`,
+    )
+  }
+  const enSrc = 'hello world'
+  for (const out of ['Sure', 'OK', 'Okay', 'Hello', 'Certainly']) {
+    assert.ok(
+      out.length < Math.max(enSrc.length * 3, enSrc.length + 24),
+      '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）',
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), enSrc, 'en'),
+      enSrc,
+      `纯寒暄「${out}」未回退原文（模型输出直接顶替了用户消息）`,
+    )
+  }
+  // 反向：不能把「以寒暄词开头的合法正文」误判成纯寒暄（M-6 的不变量）：
+  // 「好的东西」不是纯寒暄 → 原样通过（不被回退、不被削）。
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '好的东西' }]), '好的东西', 'zh'),
+    '好的东西',
+    '「好的东西」被误判成纯寒暄——以寒暄词开头的合法正文必须原样通过',
+  )
+})
+
+await t('M-8：空白分隔的叠着寒暄（好的 好的  Sure, corrected: …）→ 回退原文（循环剥离）', async () => {
+  // 既有的叠层锁用**逗号**分隔形态 → 单次 replace 即可吃完（量词 (...)+ 贪婪），
+  // 锁不到循环：空白分隔时单次 replace 会留下前导空白，锚定 ^ 的前言正则
+  // 看不见说明头 → 模型元叙述泄漏进用户消息。
+  const src = '原'.repeat(20)
+  const out = '好的 好的  Sure, corrected: 今天天气不错'
+  assert.ok(
+    out.length < Math.max(src.length * 3, src.length + 24),
+    '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）',
+  )
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), src, 'zh'),
+    src,
+    '空白分隔的叠着寒暄未被剥穿——模型元叙述泄漏进用户消息',
+  )
+})
+
 await t('correctionSystem：双语提示含关键约束', () => {
   const zh = correctionSystem('zh')
   const en = correctionSystem('en')

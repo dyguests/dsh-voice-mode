@@ -1,6 +1,6 @@
 # mkdocs.yml —— dsh-voice-mode 文档站（GitHub Pages，仅文档，不引入 CI）
 # 部署：本地 `mkdocs build` 产出 site/，由人工或一次性 `mkdocs gh-deploy` 推送 gh-pages 分支
-# 真源数字：v0.7.27 · 785 测试 · 兼容 dsh 0.2.1-rc.2（2026-10-21 刷新，R15-J 批落库后）
+# 真源数字：v0.7.27 · 795 测试 · 兼容 dsh 0.2.1-rc.2（2026-10-21 刷新，R15-K 批落库后）
 # docs_dir / site_dir（2026-10-21 修，导航不可达缺陷）：
 #   本文件位于 docs/ 之下，而 mkdocs 的 docs_dir 默认值 'docs' 是**相对配置文件所在目录**解析的
 #   → 默认取 docs/docs/（不存在，`mkdocs build` 直接报错）。旧配置未设 docs_dir，且 nav 混用两套口径：

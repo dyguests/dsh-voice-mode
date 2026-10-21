@@ -63,10 +63,26 @@ const NS_VOICE_MODE = 'voice-mode' as SettingsNamespace
 /** P2-4 显式回合状态（host 为准，SSE 'turn' 广播；barge-in = 状态迁移 + 三层清理）。 */
 type TurnState = 'idle' | 'listening' | 'finalizing' | 'agent-speaking'
 
-/** 「停止朗读」的静音记录：turn = 静音时的回合号（null = 未知），streams = 回合号未知期间已压住的流数。 */
+/** 「停止朗读」的静音记录：turn = 静音时的回合号（null = 不可知），streams = 回合位置不可知期间已压住的流数。 */
 interface ReadMute {
   turn: number | null
   streams: number
+}
+
+/**
+ * 宿主回合位置（由 `agent/pre-step` 的 `{turn, step}` 维护）。
+ *
+ * 宿主语义（**我本人在本机 dsh-agent-loop/lib/index.js 实测**，非照抄任务描述）：
+ *   `:865` 进入 running 阶段 `turn: lastTurn, step: 0`（每次唤醒重置 step）；
+ *   `:941` `turn = phase.turn + 1`、`:947` `phase.turn = turn` → **每回合 +1**；
+ *   `:953` `step = phase.step + 1`、`:972` `phase.step = step` → **回合内递增**；
+ *   `:1038` 回合正常结束后 `phase.step = 0`；abort 路径经 `:865` 同样复位。
+ * ⇒ **step 在回合内递增、跨回合从 1 重新开始**；turn 跨回合递增（且跨 agent 重启持久）。
+ * 故「step === 1」是可靠的**真回合边界**判别式，无需任何启发式。
+ */
+interface TurnPos {
+  turn: number
+  step: number
 }
 
 /**
@@ -78,8 +94,9 @@ interface ReadMute {
  *
  * 取 4 的理由：agent 一回合里的模型调用数典型在 1–5（工具往返），4 条足以覆盖「同一回合的
  * 后续 step」这个真正的目标；再大则会把用户下一整回合也压掉（无解禁入口，用户只能等）。
- * **代价**：回合号恒不可得时（实测 `agent/pre-step` 自 0.1.1-rc.2 起全兼容区间都有，故这只
- * 影响假想宿主）用户会多静默至多 3 条流——是「少读几句」而非「永久失聪」，方向安全。
+ * **代价**：回合位置恒不可知时（实测 `agent/pre-step` 自 0.1.1-rc.2 起全兼容区间都有，故这只
+ * 影响假想宿主）用户会**再多静默至多 4 条流**（本条 + 后续 3 条，第 5 条流恢复朗读）——
+ * 是「少读几句」而非「永久失聪」，方向安全。
  */
 const MUTED_STREAMS_WITHOUT_TURN = 4
 
@@ -628,10 +645,10 @@ export function apply(ctx: Context, config: Config): void {
    * 它是「回合内的下一个 step」与「真正的下一个回合」的唯一可用判据：`llm/stream` 的
    * `GenerateOptions` 不带 turn/step（实测 dsh-agent-loop 的 `buildRequest` 返回的请求对象里
    * 没有这两个字段，turn/step 只用于 session 事件），回合身份只能从 agent 事件侧取。
-   * 取不到（老宿主不派发 / 非 agent 调用方）时为 undefined → 解禁退回按流解禁（即旧行为），
-   * 不会把静音变成永久。
+   * 取不到（宿主不派发 / 非 agent 调用方）时为 undefined → 静误解禁退回「按流计数兜底」，
+   * 不会变成永久静音（见 MUTED_STREAMS_WITHOUT_TURN）。
    */
-  const turnOfSession = new Map<string, number>()
+  const turnOfSession = new Map<string, TurnPos>()
   /**
    * R15（Issue #15 Important-4）：有 llm/stream tap 在途的会话（tap 创建即置位，
    * tap 的 finally——onTurn('listening') 的唯一调用点——清位）。回收表项前据此避让：
@@ -1087,24 +1104,29 @@ export function apply(ctx: Context, config: Config): void {
     // 不是「下一条流」——回合内的 step2（工具调用后那轮流）必须继续静音，否则停止朗读
     // 在带工具调用的回合里形同虚设（余句照旧合成下发并计费）。当前回合号由 agent/pre-step 维护，
     // 四种组合分别处置（Important-6 定主干，Important-10 补「两侧都未知」那一格）：
-    //  ① 有回合号且与基准不同 → 真正的下一回合 → 解禁；
-    //  ② 静音时未知、此刻可知 → **采纳基准**（回合中途才成为焦点/语音会话的那一格），此后按 ①；
-    //  ③ 此刻仍不可知 → **继续压住**（Important-10 修的就是这一格：早先在此解禁，等于把同一回合
-    //     工具调用后的那条流放出来），只由 MUTED_STREAMS_WITHOUT_TURN 计数兜底解除，绝不永久化；
-    //  ④ 静音时已知、此刻不可知 → 同样按 ③ 兜底（该形态实际不可达：turnOfSession 与 readMuted
-    //     由 dropTurnTables 同步增删），取保守方向。
+    // **判据是真回合边界**（R15 Important-11 修正：早先的「采纳基准」是把第一次见到的回合号当成
+    // 静音回合——当取消时回合号不可知、而**下一个回合**的 pre-step 才首次给出回合号时，会把后一个
+    // 回合整段静默：用户点一次停止朗读，AI 的下一条回复完全不朗读）：
+    //  · 静音时回合号**可知** → 解禁条件 = 回合号变了（precise，step 都不用看）；
+    //  · 静音时回合号**不可知** → 解禁条件 = 该流的 step === 1。宿主语义保证「step 回合内递增、
+    //    跨回合从 1 重来」，故 step===1 即真回合边界；同一回合的后续 step（step>1）不解禁，
+    //    Important-6 的窗口由此守住，且**不需要任何启发式**。
+    //  · 回合位置不可知（宿主不派发 pre-step）→ 继续压住，由 MUTED_STREAMS_WITHOUT_TURN 兜底。
+    // 与客户端的分工：client 的拒绝线由 client 按回合释放；host 只负责「本回合余句」，不越界去
+    // 管「下一回合该不该读」。两侧同回合口径一致，不存在「client 放行、host 压住」的分叉——
+    // 若将来客户端提前放行，host 仍按回合边界压住本回合余句，这是有意的职责分离。
     const mute = readMuted.get(sessionId)
+    const pos = turnOfSession.get(sessionId)
     if (mute !== undefined) {
-      const curTurn = turnOfSession.get(sessionId)
-      if (curTurn === undefined) {
+      const atTurnBoundary = pos !== undefined && (mute.turn === null ? pos.step === 1 : pos.turn !== mute.turn)
+      if (atTurnBoundary) {
+        readMuted.delete(sessionId)
+      } else if (pos === undefined || mute.turn === null) {
+        // 回合位置不可知 → 继续压住，计数兜底解除（绝不永久化）。
         mute.streams += 1
         if (mute.streams > MUTED_STREAMS_WITHOUT_TURN) readMuted.delete(sessionId)
-      } else if (mute.turn === null) {
-        mute.turn = curTurn // 采纳基准：静音持续到回合边界
-        mute.streams = 0
-      } else if (curTurn !== mute.turn) {
-        readMuted.delete(sessionId)
       }
+      // 其余：同一回合的后续 step（位置可知、回合号相同、step>1）→ 保持静音，不计数。
     }
     tapInFlight.add(sessionId) // R15（Important-4）：回收表项前据此避让仍在飞的流
     return tapActiveStream(
@@ -1117,7 +1139,7 @@ export function apply(ctx: Context, config: Config): void {
         // 防御性的：真正走到「回收 + 广播」这个组合时，下面的 turnGen 守卫会先把该 setTurn 拦掉
         // （回收已清掉 turnGen）——即被回收的会话根本不再广播回合状态（静默回收的本意）。
         // 先取后清保证「将来若放宽那道守卫，这里的载荷仍带着回合号」。
-        const turn = turnOfSession.get(sessionId)
+        const turn = turnOfSession.get(sessionId)?.turn
         if (state === 'listening') {
           // onTurn('listening') 的唯一调用点是 tap 的 finally → 此刻该流确实结束。
           tapInFlight.delete(sessionId)
@@ -1164,14 +1186,15 @@ export function apply(ctx: Context, config: Config): void {
   // 且下一个正常回合的 noteTurnEnd 会自愈）。详见回报给主会话的跨域建议。
   ctx.on('agent/error', ({ agent }) => queue.noteTurnEnd(agent.id))
 
-  // R15（Issue #15 Important-6）：回合号真源。`agent/pre-step` 每个 step 派发一次，
-  // payload 带 turn（回合内不变、跨回合递增），是 host 侧唯一能区分「回合内的下一个 step」
-  // 与「真正的下一个回合」的事件（llm/stream 的 GenerateOptions 不带 turn/step）。
+  // R15（Issue #15 Important-6 / Important-11）：回合位置真源。`agent/pre-step` 每个 step 派发
+  // 一次，payload 带 {turn, step}（turn 跨回合递增、step 回合内递增且跨回合从 1 重来，见 TurnPos
+  // 注释处的宿主实测），是 host 侧唯一能区分「回合内的下一个 step」与「真正的下一个回合」的事件
+  // （llm/stream 的 GenerateOptions 不带 turn/step）。
   // 只记我们关心的会话（语音模式 / 焦点），否则这张表会随宿主里全部 agent 增长；
   // 回收走 dropTurnTables。waterfall：必须透传 next()。
-  ctx.on('agent/pre-step', ({ agent, turn }, next) => {
+  ctx.on('agent/pre-step', ({ agent, turn, step }, next) => {
     const sid = agent.id
-    if (sid === activeVoiceSession || sid === focusedSessionId) turnOfSession.set(sid, turn)
+    if (sid === activeVoiceSession || sid === focusedSessionId) turnOfSession.set(sid, { turn, step })
     return next()
   })
 
@@ -1737,7 +1760,7 @@ export function apply(ctx: Context, config: Config): void {
             // 打断后仍在跑的 llm/stream 会把余句继续送进来（新 epoch 不作废）。此处记下
             // 「本回合静音 + 当时的回合号」，余句一律不入队（不合成、不计费、不下发）；
             // 解禁只发生在回合边界（tap 入口比对回合号），回合内的下一个 step 不解禁。
-            readMuted.set(sessionId, { turn: turnOfSession.get(sessionId) ?? null, streams: 0 })
+            readMuted.set(sessionId, { turn: turnOfSession.get(sessionId)?.turn ?? null, streams: 0 })
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId)
           }
           respondJson(res, 200, { ok: true })

@@ -2282,11 +2282,27 @@ function shouldReleaseStopLine(o) {
   if (o.sameRoundContinuation) return false;
   return true;
 }
+function applyTurnEvent(o) {
+  const release = shouldReleaseStopLine({
+    hasStopLine: o.hasStopLine,
+    untilNextRun: o.untilNextRun,
+    turn: o.turn,
+    lastTurn: o.identity.lastTurn,
+    sameRoundContinuation: o.sameRoundContinuation
+  });
+  return {
+    identity: o.turn !== void 0 ? { lastTurn: o.turn } : o.identity,
+    release
+  };
+}
 function cancelPayload(o) {
   return JSON.stringify({ sessionId: o.sessionId, keepAsr: o.keepAsr, reason: o.reason });
 }
 function auxClickPending(button, opts) {
   return button === 0 && opts.mac && opts.ctrlKey;
+}
+function isAuxClickToIgnore(pending, clickDetail) {
+  return pending && clickDetail !== 0;
 }
 function isGestureEnd(armed, up) {
   if (!armed) return false;
@@ -2308,19 +2324,22 @@ async function reportFocus(o) {
     try {
       status = (await o.fetchImpl()).status;
     } catch {
-      return { ok: false, reported: false, attempts };
+      return { ok: false, reported: false, attempts, skipped: false };
     }
     const action = focusFailureAction(status, attempt);
-    if (action === "silent") return { ok: status >= 200 && status < 300, reported: false, attempts };
+    if (action === "silent") return { ok: status >= 200 && status < 300, reported: false, attempts, skipped: false };
     if (action === "retry-later") {
-      if (o.sessionId === null) return { ok: false, reported: false, attempts };
+      if (o.sessionId === null) return { ok: false, reported: false, attempts, skipped: false };
       await wait(retryMs);
+      if (o.stillRelevant && !o.stillRelevant()) {
+        return { ok: false, reported: false, attempts, skipped: true };
+      }
       continue;
     }
     warn({ sessionId: o.sessionId, status });
-    return { ok: false, reported: true, attempts };
+    return { ok: false, reported: true, attempts, skipped: false };
   }
-  return { ok: false, reported: false, attempts };
+  return { ok: false, reported: false, attempts, skipped: false };
 }
 var FOCUS_OWNER_DEFAULT = "default";
 function focusSession(owners) {
@@ -3683,7 +3702,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "cb6cafd";
+var BUILD_TAG = "9a8abce";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4095,6 +4114,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
   let voiceActive = null;
   let voiceOwnerTab = null;
   const busGen = globalThis[BUS_GEN_KEY] = (globalThis[BUS_GEN_KEY] ?? 0) + 1;
+  const focusWarned = /* @__PURE__ */ new Set();
   const postFocus = (sessionId) => {
     void reportFocus({
       sessionId,
@@ -4104,13 +4124,21 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
         body: JSON.stringify({ sessionId, tabId: TAB_ID }),
         signal: AbortSignal.timeout(3e3)
       }).then((r) => ({ status: r.status })),
+      // 补报前复核焦点是否已变：403 → 等 800ms 期间用户切到别的会话 → 补报会把**旧**
+      // 会话重新 POST → host 的焦点归属指回旧会话（当前会话不朗读、旧会话被朗读）。
+      stillRelevant: () => focusedSessionId === sessionId,
       // 留痕文案放在 client.tsx（mic-gesture.ts 不在 strings-coverage 白名单里）。
       // 日志文案用英文：本仓红线禁止 console.* 里出现中文字面量（见 strings-coverage）。
       // 含义：/focus 被 host 拒绝（host 不认识这个会话 = 会话表滞后）→ 焦点静默失败，
       // readAloud=always 可能整页不朗读而用户看不到原因。
-      warn: ({ sessionId: sessionId2, status }) => {
+      // 每会话只留一次痕：反复切标签页/可见性变化会反复触发 postFocus。
+      warn: ({ sessionId: warnedSession, status }) => {
+        if (warnedSession !== null) {
+          if (focusWarned.has(warnedSession)) return;
+          focusWarned.add(warnedSession);
+        }
         console.warn(
-          "[dsh-voice-mode] /focus rejected by host (" + status + " unknown_session): session " + String(sessionId2) + " is not in the host session table -> focus silently failed, readAloud=always may not play at all"
+          "[dsh-voice-mode] /focus rejected by host (" + status + " unknown_session): session " + String(warnedSession) + " is not in the host session table -> focus silently failed, readAloud=always may not play at all"
         );
       }
     });
@@ -4418,17 +4446,15 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
           const sameRoundContinuation = toolPending.has(ev.sessionId);
           toolPending.delete(ev.sessionId);
           const turn = typeof ev.turn === "number" ? ev.turn : void 0;
-          const lastTurn = currentTurn.get(ev.sessionId);
-          if (turn !== void 0) currentTurn.set(ev.sessionId, turn);
-          if (shouldReleaseStopLine({
+          const r = applyTurnEvent({
+            turn,
+            identity: { lastTurn: currentTurn.get(ev.sessionId) },
             hasStopLine: rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE,
             untilNextRun: stopUntilRun.has(ev.sessionId),
-            turn,
-            lastTurn,
             sameRoundContinuation
-          })) {
-            rejectSeqUpTo.delete(ev.sessionId);
-          }
+          });
+          if (r.identity.lastTurn !== void 0) currentTurn.set(ev.sessionId, r.identity.lastTurn);
+          if (r.release) rejectSeqUpTo.delete(ev.sessionId);
         }
         if (ev.sessionId === activeSessionId && ev.state) {
           ui.turn = ev.state;
@@ -6128,7 +6154,7 @@ function MicButton({
         className: "dshvm-mic",
         "data-state": visual,
         onClick: (e) => {
-          if (auxClickRef.current) {
+          if (isAuxClickToIgnore(auxClickRef.current, e.detail)) {
             auxClickRef.current = false;
             return;
           }

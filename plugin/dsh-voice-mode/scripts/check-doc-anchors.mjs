@@ -30,17 +30,22 @@
  * ── 判据与例外（刻意不留「失败就跳过」的后门）──
  * - **历史时点**：行内锚点**邻近**出现 `历史时点` / `时点值` / `原值` / `已漂移` / `快照` /
  *   `历史口径` 的，该锚点行号本就允许过时 → 只做 ①②，符号漂移不报 DRIFT、只计入 `historical`。
- * - **基线文件** `scripts/doc-anchors-baseline.json` 钉住当前已知债务：
- *   `errors` 恒为 0；`drift` 与 `undecidable` 不得超过基线值——**新增债务即红**。
- *   债务下降时脚本提示可收紧基线（`--update-baseline` 重新生成）。
+ * - **基线文件** `scripts/doc-anchors-baseline.json` 钉住当前已知债务，**基线是精确值而非上限**：
+ *   `errors` 恒为 0；`drift` 恒为 0（行号快照必须回填，**不许用基线掩盖**）；
+ *   `undecidable` 实测**大于**基线 = 新增债务 → 红；实测**小于**基线 = **基线有余量 = 存在静默额度**
+ *   → **同样红**（强制 `--update-baseline` 收紧）。故「额度」在机制上恒为 0。
+ *   `--update-baseline` **只允许收紧、不允许放宽**：抬高 `undecidable` 必须显式
+ *   `--allow-raise --reason "…"` 并把理由留痕进基线文件；`drift` 不接受任何抬高。
  *
  * ── 退出码 ──
- *   0 = 全绿（在基线之内、无 ERROR）
+ *   0 = 全绿（与基线精确一致、无 ERROR）
  *   1 = 有 ERROR（锚点真的坏了）
- *   2 = 超出基线（新增 DRIFT / 新增无法判定项 = 新增债务）
+ *   2 = 与基线不一致（新增债务 **或** 基线有余量）或缺基线文件
+ *   3 = `--update-baseline` 试图放宽基线且未显式声明理由
  *
  * 用法：
- *   node scripts/check-doc-anchors.mjs [--json] [--update-baseline] [--root <仓库根>]
+ *   node scripts/check-doc-anchors.mjs [--json] [--update-baseline]
+ *        [--allow-raise --reason "为什么必须抬高 undecidable 额度"] [--root <仓库根>]
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
@@ -97,9 +102,17 @@ const DEAD_FILE_MARK = /已删|已砍|不存在|移除|改名|重命名|删除|�
 /**
  * 邻近出现这些词 → 该**符号引用是历史陈述**（符号已被删除 / 砍除 / 是他方的东西），
  * 「符号在源文件里找不到」不判红（仍列备查）。
+ *
+ * **收窄记录（D-21 / OQ-2，2026-10-21）**：原正则含 `触发|成因|复盘|根因|历史|旧|容忍|已随|曾`
+ * 等**常见散文词**——验真轮实测：往 `docs/glossary.md:20` 注入 `zzzNoSuchSymbol`，因同行含
+ * 「已随」就把**坏锚点降级**进 historical 而不判红。现只保留**显式的历史标记**：
+ * 「原值 / 原名 / 原址 / 历史时点 / 时点值 / 快照 / 历史口径 / 当时行号 / 已删 / 已砍 /
+ *  已移除 / 已删除 / 删除 / 移除 / 砍除 / 不再存在 / 曾有 / 死代码 / 零引用 / 下线 / 改名 / 重命名」。
+ * 收窄后原属 historical 的条目若被判红，是**文档缺少显式历史标记**——已在对应 doc 行补上
+ * 「原值 / 历史时点 / 已删」等显式措辞（而不是把散文词塞回正则）。
  */
 const DEAD_SYMBOL_MARK =
-  /已删|已砍|删除|删 |删掉|移除|砍除|砍|死代码|零引用|全库零|下线|曾有|曾|历史|旧|原名|改名|重命名|容忍|不再存在|已随|根因|触发|成因|复盘/
+  /历史时点|时点值|原值|原名|原址|快照|历史口径|当时行号|已删|已砍|已移除|已删除|删除|移除|砍除|不再存在|曾有|死代码|零引用|下线|改名|重命名/
 
 /** 明显的外部路径（非仓库内文件）——不参与判定。 */
 const EXTERNAL_PATH =
@@ -354,13 +367,14 @@ for (const md of mdFiles) {
           ref: full,
           why: `文档断言的符号在源文件里不存在：${missing.join(' / ')}（${relSrc}）`,
         }
-        // 历史标记按**整行 + 最近的上级小节标题**判定——后记式根因分析
-        // （如 compat-contract §15.1「触发与根因」）整节都在陈述**过去的**根因，
-        // 符号早已被删除，节内引用不该判红。
-        let histCtx = text
+        // 历史标记必须**紧邻该锚点/符号**（±40 字符），不能是「整行任意位置」——
+        // 否则同一行里别处的历史措辞会替**这个**坏符号背书（OQ-2 的根因）。
+        // 另允许「最近的上级小节标题」作为节级后记（如 compat-contract §15.1 根因快照），
+        // 但节标题必须**自身**带显式历史标记。
+        let histCtx = near(stripped, at, span.len, 40)
         for (let k = i - 1; k >= 0 && k >= i - 12; k--) {
           if (/^\s*#{1,6}\s/.test(mdLines[k])) {
-            histCtx += '\n' + mdLines[k]
+            if (DEAD_SYMBOL_MARK.test(mdLines[k])) histCtx += '\n' + mdLines[k]
             break
           }
         }
@@ -468,29 +482,86 @@ if (JSON_OUT) {
 }
 
 const baselinePath = join(here, 'doc-anchors-baseline.json')
+
+/** 读旧基线（用于「只允许收紧」的判定）。 */
+function readBaseline() {
+  if (!existsSync(baselinePath)) return null
+  try {
+    return JSON.parse(readFileSync(baselinePath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 if (UPDATE_BASELINE) {
+  const old = readBaseline()
+  const next = { errors: 0, drift: drifts.length, undecidable: undecidable.length }
+  // ── ①「只允许收紧，不允许放宽」：抬高基线 = 制造**静默额度**，
+  //    必须显式声明理由并留痕（`--allow-raise --reason "…"`），否则拒绝写入。
+  const raiseIdx = argv.indexOf('--reason')
+  const RAISE_REASON = raiseIdx >= 0 && argv[raiseIdx + 1] ? argv[raiseIdx + 1].trim() : ''
+  const raising = []
+  if (old) {
+    for (const k of ['errors', 'drift', 'undecidable']) {
+      const o = typeof old[k] === 'number' ? old[k] : 0
+      if (next[k] > o) raising.push(`${k} ${o} → ${next[k]}`)
+    }
+  }
+  // ── 抬高「无法判定」额度 = 制造静默额度 → 必须显式声明理由并留痕 ──
+  const raiseUndecidable = raising.some((x) => x.startsWith('undecidable'))
+  if (raiseUndecidable && (!argv.includes('--allow-raise') || !RAISE_REASON)) {
+    console.error(
+      `\n✗ 拒绝放宽基线：${raising.filter((x) => x.startsWith('undecidable')).join('；')}。` +
+        `\n  **放宽「无法判定」额度 = 制造静默额度**（实测：基线大于实测时，新增此类锚点仍 exit 0）。` +
+        `\n  基线只能收紧（数值变小）；确需抬高时显式声明：` +
+        `\n    node scripts/check-doc-anchors.mjs --update-baseline --allow-raise --reason "为什么必须抬高"`,
+    )
+    process.exit(3)
+  }
+  // ── drift 必须恒为 0：实测 > 0 时**不写进基线**（债务不许被基线掩盖），
+  //    但仍把其余维度写进去并以 exit 2 报告——避免「行号待回填」阻塞「无法判定」的收紧。
+  if (next.drift > 0) {
+    const payload0 = {
+      _说明:
+        'D-13 基线：errors 恒为 0；drift 恒为 0（行号快照必须回填，不可用基线掩盖）；' +
+        'undecidable 不得超过本值且**不得小于**本值（小于 = 基线有余量 = 静默额度，同样判红）。',
+      errors: 0,
+      drift: 0,
+      undecidable: next.undecidable,
+      _生成于: new Date().toISOString(),
+    }
+    if (raiseUndecidable) {
+      payload0._本次放宽 = raising.filter((x) => x.startsWith('undecidable')).join('；')
+      payload0._放宽理由 = RAISE_REASON
+    }
+    writeFileSync(baselinePath, JSON.stringify(payload0, null, 2) + '\n', 'utf8')
+    console.error(
+      `\n✗ 已写基线（undecidable=${next.undecidable}），但实测 DRIFT=${next.drift} > 0：` +
+        `行号快照待回填，**基线不记录该债务**（drift 恒为 0），请按上方「实际位置」回填后重跑。`,
+    )
+    process.exit(2)
+  }
   const payload = {
     _说明:
-      'D-13 基线：errors 必须恒为 0；drift / undecidable 不得超过本值——新增债务即红。' +
-      '每条无法判定项都需人工消解（补符号锚或明确接受）。',
+      'D-13 基线：errors 恒为 0；drift 恒为 0（行号快照必须回填，不可用基线掩盖）；' +
+      'undecidable 不得超过本值且**不得小于**本值（小于 = 基线有余量 = 静默额度，同样判红）。' +
+      '每条无法判定项都需人工消解（补符号锚或显式接受并留理由）。',
     errors: 0,
-    drift: drifts.length,
-    undecidable: undecidable.length,
+    drift: 0,
+    undecidable: next.undecidable,
     _生成于: new Date().toISOString(),
   }
+  if (raising.length > 0) {
+    payload._本次放宽 = raising.join('；')
+    payload._放宽理由 = RAISE_REASON
+  }
   writeFileSync(baselinePath, JSON.stringify(payload, null, 2) + '\n', 'utf8')
-  console.log(`\n✓ 已写基线：${baselinePath}（drift=${drifts.length} undecidable=${undecidable.length}）`)
+  console.log(`\n✓ 已写基线：${baselinePath}（drift=${next.drift} undecidable=${next.undecidable}）`)
+  if (raising.length > 0) console.log(`  ⚠ 本次放宽了：${raising.join('；')}（理由已留痕）`)
   process.exit(errors.length > 0 ? 1 : 0)
 }
 
-let baseline = null
-if (existsSync(baselinePath)) {
-  try {
-    baseline = JSON.parse(readFileSync(baselinePath, 'utf8'))
-  } catch {
-    baseline = null
-  }
-}
+const baseline = readBaseline()
 
 if (errors.length > 0) {
   console.error(`\n✗ 有 ${errors.length} 处锚点坏了——必须修。`)
@@ -498,17 +569,29 @@ if (errors.length > 0) {
 }
 if (baseline) {
   const over = []
+  const slack = []
+  // ① 基线是**精确值**而非上限：基线 > 实测 = 静默额度 → 同样判红（强制收紧）
   if (typeof baseline.drift === 'number' && drifts.length > baseline.drift)
     over.push(`DRIFT ${drifts.length} > 基线 ${baseline.drift}`)
+  else if (typeof baseline.drift === 'number' && drifts.length < baseline.drift)
+    slack.push(`DRIFT ${drifts.length} < 基线 ${baseline.drift}`)
   if (typeof baseline.undecidable === 'number' && undecidable.length > baseline.undecidable)
     over.push(`无法判定 ${undecidable.length} > 基线 ${baseline.undecidable}`)
+  else if (typeof baseline.undecidable === 'number' && undecidable.length < baseline.undecidable)
+    slack.push(`无法判定 ${undecidable.length} < 基线 ${baseline.undecidable}`)
   if (over.length > 0) {
     console.error(`\n✗ 超出基线：${over.join('；')}——**新增了锚点债务**，请消解或显式更新基线。`)
     process.exit(2)
   }
+  if (slack.length > 0) {
+    console.error(
+      `\n✗ 基线有余量：${slack.join('；')}——**基线大于实测 = 存在静默额度**` +
+        `（新增此类锚点不会判红），必须跑 --update-baseline 收紧到实测值。`,
+    )
+    process.exit(2)
+  }
   console.log(
-    `\n✓ 在基线之内（DRIFT ${drifts.length}/${baseline.drift}、无法判定 ${undecidable.length}/${baseline.undecidable}）；` +
-      `债务减少时可跑 --update-baseline 收紧基线。`,
+    `\n✓ 与基线精确一致（DRIFT ${drifts.length}/${baseline.drift}、无法判定 ${undecidable.length}/${baseline.undecidable}）。`,
   )
 } else {
   console.log('\n⚠ 未找到基线文件 scripts/doc-anchors-baseline.json——先跑 --update-baseline 固化当前债务。')

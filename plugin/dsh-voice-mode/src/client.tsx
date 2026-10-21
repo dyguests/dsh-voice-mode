@@ -18,6 +18,7 @@ import { errorText } from './error-text.ts'
 import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
 import { composeDraft, shouldWritePartial } from './draft-compose.ts'
 import {
+  applyTurnEvent,
   auxClickPending,
   cancelPayload,
   createScopeBridge,
@@ -27,13 +28,13 @@ import {
   focusRelease,
   handleReplaced,
   isEditingShortcut,
+  isAuxClickToIgnore,
   isGestureEnd,
   isPrimaryPress,
   menuFocusIndex,
   onceFinished,
   registerScopeDispose,
   reportFocus,
-  shouldReleaseStopLine,
   takeToggleSlot,
   FOCUS_OWNER_DEFAULT,
   type FocusOwners,
@@ -827,10 +828,12 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   let voiceActive: string | null = null
   let voiceOwnerTab: string | null = null
   const busGen = ((globalThis as any)[BUS_GEN_KEY] = ((globalThis as any)[BUS_GEN_KEY] ?? 0) + 1) as number
+  /** 已留痕的会话（/focus 被 403 拒绝）——每会话只留一次痕，避免反复切标签页时刷屏。 */
+  const focusWarned = new Set<string>()
   const postFocus = (sessionId: string | null): void => {
     // 403（host 不认识这个会话 = 会话表滞后）早期被完全静默吞掉 → 焦点静默失败、
     // readAloud=always 整页不朗读而用户看不到原因。现在：403 → 退避补报一次，
-    // 仍被拒 → 留痕一次；网络失败 → 静默（瞬时，不制造噪音）。
+    // 仍被拒 → 留痕一次（**每会话一次**）；网络失败 → 静默（瞬时，不制造噪音）。
     void reportFocus({
       sessionId,
       fetchImpl: () =>
@@ -840,16 +843,24 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
           body: JSON.stringify({ sessionId, tabId: TAB_ID }),
           signal: AbortSignal.timeout(3000),
         }).then((r) => ({ status: r.status })),
+      // 补报前复核焦点是否已变：403 → 等 800ms 期间用户切到别的会话 → 补报会把**旧**
+      // 会话重新 POST → host 的焦点归属指回旧会话（当前会话不朗读、旧会话被朗读）。
+      stillRelevant: () => focusedSessionId === sessionId,
       // 留痕文案放在 client.tsx（mic-gesture.ts 不在 strings-coverage 白名单里）。
       // 日志文案用英文：本仓红线禁止 console.* 里出现中文字面量（见 strings-coverage）。
       // 含义：/focus 被 host 拒绝（host 不认识这个会话 = 会话表滞后）→ 焦点静默失败，
       // readAloud=always 可能整页不朗读而用户看不到原因。
-      warn: ({ sessionId, status }) => {
+      // 每会话只留一次痕：反复切标签页/可见性变化会反复触发 postFocus。
+      warn: ({ sessionId: warnedSession, status }) => {
+        if (warnedSession !== null) {
+          if (focusWarned.has(warnedSession)) return
+          focusWarned.add(warnedSession)
+        }
         console.warn(
           '[dsh-voice-mode] /focus rejected by host (' +
             status +
             ' unknown_session): session ' +
-            String(sessionId) +
+            String(warnedSession) +
             ' is not in the host session table -> focus silently failed, readAloud=always may not play at all',
         )
       },
@@ -1250,23 +1261,29 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
         // ① 权威判据：host 的 'turn' 载荷带回合号时（turn 键可能缺席——老宿主不派发
         //    agent/pre-step、或该会话本回合中途才成为焦点），回合号相同 = 同一回合。
         // ② 回合号不可得时退回代理信号：'tool' 事件标记的「回合内后续 step」。
+        // **实际生效路径（当前宿主）**：stopReading(!!useSession) 恒为 untilNextRun=true
+        // （conversation.input.* 两个槽位都是 session 作用域，useSession 恒存在）→
+        // 本分支在主路径上**不生效**，拒绝线由 runStarted（running 上升沿 = 回合边界）
+        // 解除；这里是「宿主拿不到会话态」时的兜底路径。
+        // 「running 上升沿 = 回合边界」的依据：宿主把会话的 running 建模为**回合（driver）
+        // 级**（回合内工具往返不翻转 running；非回合的维护任务期间 public status 仍为
+        // idle）——依据与出处见 src/mic-gesture.ts 的 shouldReleaseStopLine 注释。
         if (ev.state === 'agent-speaking' && ev.sessionId) {
           const sameRoundContinuation = toolPending.has(ev.sessionId)
           toolPending.delete(ev.sessionId) // 消费掉：下一个 agent-speaking 属新回合
           const turn = typeof ev.turn === 'number' ? ev.turn : undefined
-          const lastTurn = currentTurn.get(ev.sessionId) // 比较用旧值
-          if (turn !== undefined) currentTurn.set(ev.sessionId, turn)
-          if (
-            shouldReleaseStopLine({
-              hasStopLine: rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE,
-              untilNextRun: stopUntilRun.has(ev.sessionId),
-              turn,
-              lastTurn,
-              sameRoundContinuation,
-            })
-          ) {
-            rejectSeqUpTo.delete(ev.sessionId)
-          }
+          // 回合身份 + 解除判定**整体**走 applyTurnEvent（mic-gesture.ts）：
+          // 权威回合号的比较与「拿不到就退回代理」的兜底都在那一处，便于单测锁住
+          // 「客户端确实用权威回合号判同回合」（把 lastTurn 喂成 undefined 必须改变结果）。
+          const r = applyTurnEvent({
+            turn,
+            identity: { lastTurn: currentTurn.get(ev.sessionId) },
+            hasStopLine: rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE,
+            untilNextRun: stopUntilRun.has(ev.sessionId),
+            sameRoundContinuation,
+          })
+          if (r.identity.lastTurn !== undefined) currentTurn.set(ev.sessionId, r.identity.lastTurn)
+          if (r.release) rejectSeqUpTo.delete(ev.sessionId)
         }
         if (ev.sessionId === activeSessionId && ev.state) {
           ui.turn = ev.state
@@ -3591,9 +3608,11 @@ export function MicButton({
         onClick={(e: React.MouseEvent) => {
           // 辅助点击（macOS 的 ctrl+click）派发的 click 必须忽略：WebKit 会为它额外
           // 派发 click，若照走 toggle →「右键开快捷设置菜单」会顺带切一次语音模式
-          // （最坏是打开麦克风）。标志由 onPointerDown 写入（任何非辅助点击都会清掉
-          // 残留），此处消费。
-          if (auxClickRef.current) {
+          // （最坏是打开麦克风）。标志由 onPointerDown **赋值式**写入（任何非辅助点击
+          // 都会清掉残留），此处**只吞指针派生的 click**（detail !== 0）：
+          // Blink/Gecko 的 ctrl+click 不派发 click → 标志会残留，若无条件吞，用户随后
+          // 的**键盘**激活（detail === 0，Enter/Space）就被误吞（a11y 路径降级）。
+          if (isAuxClickToIgnore(auxClickRef.current, e.detail)) {
             auxClickRef.current = false
             return
           }

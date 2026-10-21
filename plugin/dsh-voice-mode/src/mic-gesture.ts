@@ -136,7 +136,31 @@ export function decayConfirmCount(count: number, abandon: () => void): number {
  *     缺席不是 null，是键不存在 → 走 ②。
  *  ② **代理信号**（回合号不可得时）：'tool' 事件标记的「回合内后续 step」→ 不解除。
  *  ③ 都不判得出 → 沿用旧行为（解除），保证老宿主上的行为**不回归**。
- *  untilNextRun（宿主提供 running 时为真）由 runStarted（回合边界）解除，本函数一律不解除。 */
+ *  untilNextRun（宿主提供 running 时为真）由 runStarted（回合边界）解除，本函数一律不解除。
+ *
+ *  **实际生效路径（当前宿主）**：麦克风按钮走 `stopReading(!!useSession)`，而
+ *  `conversation.input.activity` / `conversation.input.right` 两个槽位都是 session 作用域
+ *  ⇒ `useSession` 恒存在 ⇒ `untilNextRun` **恒为 true** ⇒ 本函数在**主路径上不被求值**
+ *  （拒绝线由 `runStarted` 的回合边界解除）。本函数是「宿主拿不到会话态」时的兜底路径。
+ *
+ *  **「runStarted = 回合边界」的依据（宿主公开状态模型）**：宿主把「会话正在跑」建模为
+ *  **回合（driver）级**——一个回合内的多次模型调用（工具往返）共享同一 driver，其间
+ *  `running` **不翻转**；故 `useSession(s => s.running)` 的**上升沿 = 新回合开始**，
+ *  与 host 侧 readMuted 的「按回合解禁」同口径。出处（宿主包在本机，位于
+ *  `/www/server/nodejs/v22.20.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/`）：
+ *  - `dsh-client-ui-goal/lib/types/client/activation-source.d.ts:10-12`
+ *    ——客户端会话快照 `readonly running: boolean`（"running flips trigger a fresh
+ *    authoritative read"）。
+ *  - `dsh-api-workspace-controller/lib/types/types.d.ts:36-39`——宿主自述「The Session
+ *    still has running work — **its own turn**, a subagent, a background job, or an active
+ *    schedule」：「有活」以**它自己的那一回合**为单位。
+ *  - `dsh-agent/lib/types/runtime-types.d.ts:159-162`——agent 的活跃态以 **driver（回合
+ *    驱动）**为单位（whenIdle：「Resolve after the current whole-agent activity reaches
+ *    quiescence … fulfillment after no active driver or maintenance task remains」）；
+ *    非回合的维护任务期间「public status stays `idle`」（:168）⇒ 维护任务不冒充回合。
+ *  **证据强度**：结论基于宿主**公开状态模型**（上述三处）；插件所注入的 `useSession`
+ *  选择器**自身的类型定义不在本环境可核实**（`dsh-client-web-react` 未安装于此），
+ *  故不声称「已核实插件选择器类型」。 */
 export function shouldReleaseStopLine(o: {
   /** 该会话当前挂着「停止朗读」的整回合拒绝线 */
   hasStopLine: boolean
@@ -157,6 +181,46 @@ export function shouldReleaseStopLine(o: {
   if (o.sameRoundContinuation) return false
   // ③ 判不出 → 旧行为（解除），老宿主上不回归。
   return true
+}
+
+/** 客户端侧的回合身份状态（每会话一份）：最近一次带回合号的 'turn' 事件里的回合号。 */
+export interface TurnIdentity {
+  /** 该会话最近一次带回合号的回合号（undefined = 还没见过带回合号的事件） */
+  lastTurn?: number
+}
+
+/** 消费一个 'turn' 事件：更新回合身份 + 判「是否解除该会话的拒绝线」。
+ *  客户端的 turn 处理**整体**走这里（而不是在 client.tsx 里散着比），这样
+ *  「客户端确实用权威回合号判同回合」这件事本身可被单测锁住：把 identity.lastTurn
+ *  喂成 undefined 与喂成真值，判定结果必须**不同**（否则说明 lastTurn 根本没被用）。
+ *  注：当前宿主下 useSession 恒存在 → untilNextRun 恒为 true → 本路径在**主路径**上
+ *  实际不生效（拒绝线由 runStarted 的回合边界解除）；它是「宿主拿不到会话态」时的兜底路径。
+ *  「runStarted = 回合边界」的依据见 shouldReleaseStopLine 的注释（宿主把会话的 running
+ *  建模为**回合（driver）级** ⇒ 回合内工具往返不翻转 running ⇒ 上升沿即新回合开始；
+ *  结论基于宿主公开状态模型，插件侧选择器类型未在本环境可核实）。 */
+export function applyTurnEvent(o: {
+  /** 载荷里的回合号（键可能缺席 → undefined） */
+  turn?: number
+  /** 该会话当前的回合身份 */
+  identity: TurnIdentity
+  /** 该会话是否挂着「停止朗读」拒绝线 */
+  hasStopLine: boolean
+  /** 「等到下一回合才解除」模式（宿主提供 running 时为真） */
+  untilNextRun: boolean
+  /** 代理信号：本次之前出现过工具调用（回合内后续 step） */
+  sameRoundContinuation: boolean
+}): { identity: TurnIdentity; release: boolean } {
+  const release = shouldReleaseStopLine({
+    hasStopLine: o.hasStopLine,
+    untilNextRun: o.untilNextRun,
+    turn: o.turn,
+    lastTurn: o.identity.lastTurn,
+    sameRoundContinuation: o.sameRoundContinuation,
+  })
+  return {
+    identity: o.turn !== undefined ? { lastTurn: o.turn } : o.identity,
+    release,
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -189,6 +253,19 @@ export function cancelPayload(o: {
  *  ——Blink/Gecko 的 ctrl+click 不派发 click，残留标志会误抑制之后的正常左键 click。 */
 export function auxClickPending(button: number, opts: { mac: boolean; ctrlKey: boolean }): boolean {
   return button === 0 && opts.mac && opts.ctrlKey
+}
+
+/** 这次 click 是否源自辅助点击（须忽略，不能 toggle）。
+ *  判据 = 辅助点击标志为真 **且** 该 click 是**指针派生**的（detail !== 0）。
+ *  - detail === 0 = 键盘（Enter/Space）激活，或辅助技术/脚本合成的 click → **永不**被吞。
+ *    这条是必需的：Blink/Gecko 的 ctrl+click **根本不派发 click** → 标志会残留；若无条件
+ *    吞，用户随后的**键盘**激活就被误吞（a11y 路径降级）。
+ *  - 标志由 pointerdown **赋值式**写入：任何非辅助点击的 pointerdown 都会覆盖它 → 残留
+ *    标志只可能活到「下一次 pointerdown」或「下一次键盘 click」，两者都不会被误抑制。
+ *    故**不需要**额外的时间窗过期（而且 Safari 的辅助 click 可能在原生菜单关闭后才派发，
+ *    时间窗反而会漏掉它）。 */
+export function isAuxClickToIgnore(pending: boolean, clickDetail: number): boolean {
+  return pending && clickDetail !== 0
 }
 
 /* ---------------------------------------------------------------------------
@@ -228,12 +305,18 @@ export interface FocusReportResult {
   reported: boolean
   /** 实际发出的请求次数 */
   attempts: number
+  /** 是否因「期间焦点已变」而放弃补报 */
+  skipped: boolean
 }
 
 /** /focus 上报：host 侧会话表可能滞后于客户端持有的会话（未知会话 → 403 unknown_session），
  *  早期实现从不看响应状态码 → 403 被完全静默吞掉 → 焦点静默失败、readAloud=always 整页
  *  不朗读而用户看不到任何原因。这里：403 → 退避补报一次，仍 403 → 留痕一次；
- *  网络失败 / 其它状态 → 静默（fire-and-forget 的既有语义，不制造噪音）。 */
+ *  网络失败 / 其它状态 → 静默（fire-and-forget 的既有语义，不制造噪音）。
+ *
+ *  **补报前必须复核焦点是否已变**（stillRelevant）：403 → 等 800ms 期间用户切到另一会话
+ *  → 补报会把**旧**会话重新 POST → host 的 focusedSessionId 指回旧会话（当前会话不朗读、
+ *  旧会话被朗读），直到下一次焦点上报才自愈。焦点已变则**不补报**。 */
 export async function reportFocus(o: {
   sessionId: string | null
   /** 发一次请求（返回 HTTP 状态码）；抛错 = 网络失败 */
@@ -243,6 +326,8 @@ export async function reportFocus(o: {
   /** 语义拒绝且补报后仍被拒时的留痕回调。**文案由调用方给**——本模块不写中文字面量
    *  （mic-gesture.ts 不在 strings-coverage 的白名单里，文案一律走调用方）。 */
   warn?: (detail: { sessionId: string | null; status: number }) => void
+  /** 补报前是否仍应上报（焦点是否已变）——false 则放弃补报（不把焦点写回旧会话）。 */
+  stillRelevant?: () => boolean
   /** 补报等待毫秒 */
   retryMs?: number
 }): Promise<FocusReportResult> {
@@ -257,20 +342,25 @@ export async function reportFocus(o: {
       status = (await o.fetchImpl()).status
     } catch {
       // 网络失败：可重试的瞬时，且 fire-and-forget 的既有语义就是静默 → 不留痕。
-      return { ok: false, reported: false, attempts }
+      return { ok: false, reported: false, attempts, skipped: false }
     }
     const action = focusFailureAction(status, attempt)
-    if (action === 'silent') return { ok: status >= 200 && status < 300, reported: false, attempts }
+    if (action === 'silent') return { ok: status >= 200 && status < 300, reported: false, attempts, skipped: false }
     if (action === 'retry-later') {
       // 让出焦点（sessionId=null）不需要补报；补报的是「host 还不认识这个会话」。
-      if (o.sessionId === null) return { ok: false, reported: false, attempts }
+      if (o.sessionId === null) return { ok: false, reported: false, attempts, skipped: false }
       await wait(retryMs)
+      // 补报前复核：期间焦点若已切到别的会话，补报会把旧会话写回 host 的焦点归属
+      // （当前会话不朗读、旧会话被朗读）→ 放弃补报。
+      if (o.stillRelevant && !o.stillRelevant()) {
+        return { ok: false, reported: false, attempts, skipped: true }
+      }
       continue
     }
     warn({ sessionId: o.sessionId, status })
-    return { ok: false, reported: true, attempts }
+    return { ok: false, reported: true, attempts, skipped: false }
   }
-  return { ok: false, reported: false, attempts }
+  return { ok: false, reported: false, attempts, skipped: false }
 }
 
 /* ---------------------------------------------------------------------------

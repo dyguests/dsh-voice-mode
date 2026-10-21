@@ -2527,7 +2527,15 @@ function correctionSystem(lang) {
   return lang === "en" ? "You are a speech-recognition corrector. The user text comes from ASR and may contain homophone errors, typos, or missing/wrong punctuation. Make only minimal fixes: correct typos/homophones and fix punctuation, preserving the original meaning and colloquial style. Do not rewrite sentences, do not add content, do not answer questions, and do not alter numbers or proper nouns. Output only the corrected text, with no explanation. If the input has no obvious errors, return it unchanged." : "\u4F60\u662F\u4E2D\u6587\u8BED\u97F3\u8BC6\u522B\u7EA0\u9519\u5668\u3002\u7528\u6237\u7684\u8BDD\u6765\u81EA\u8BED\u97F3\u8BC6\u522B\uFF08ASR\uFF09\uFF0C\u53EF\u80FD\u6709\u540C\u97F3\u5B57\u3001\u9519\u522B\u5B57\u3001\u6807\u70B9\u7F3A\u5931\u6216\u9519\u8BEF\u3002\u8BF7\u53EA\u505A\u6700\u5C0F\u4FEE\u6B63\uFF1A\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57\u3001\u8865\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\u4E0E\u53E3\u8BED\u98CE\u683C\uFF1B\u4E0D\u8981\u6539\u5199\u53E5\u5B50\u3001\u4E0D\u8981\u8865\u5145\u5185\u5BB9\u3001\u4E0D\u8981\u56DE\u7B54\u95EE\u9898\u3001\u4E0D\u8981\u6539\u53D8\u6570\u5B57\u548C\u4E13\u4E1A\u672F\u8BED\u3002\u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u6587\u672C\uFF0C\u4E0D\u8981\u4EFB\u4F55\u89E3\u91CA\u3002\u5982\u679C\u539F\u6587\u6CA1\u6709\u660E\u663E\u9519\u8BEF\uFF0C\u539F\u6837\u8FD4\u56DE\u3002";
 }
 var CORRECTION_PREAMBLE_RE = /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i;
-var CORRECTION_FILLER_PREFIX_RE = /^(?:(?:当然可以|当然|好吧|好的?|行吧|是的|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi)(?:\s*[,，、:：.。!！?？)）]|\s))+/;
+var CORRECTION_FILLER_WORDS = "\u5F53\u7136\u53EF\u4EE5|\u5F53\u7136|\u597D\u5427|\u597D\u7684?|\u884C\u5427|\u662F\u7684|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi";
+var CORRECTION_FILLER_PREFIX_RE = new RegExp(
+  "^(?:(?:" + CORRECTION_FILLER_WORDS + ")(?:\\s*[,\uFF0C\u3001:\uFF1A.\u3002!\uFF01?\uFF1F)\uFF09]|\\s))+",
+  "i"
+);
+var CORRECTION_PURE_FILLER_RE = new RegExp(
+  "^(?:(?:" + CORRECTION_FILLER_WORDS + ")(?:\\s*[,\uFF0C\u3001:\uFF1A.\u3002!\uFF01?\uFF1F)\uFF09]\\s*|\\s+))*(?:" + CORRECTION_FILLER_WORDS + ")\\s*$",
+  "i"
+);
 async function correctText(ctx, text, lang) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return text;
@@ -2555,8 +2563,9 @@ async function correctText(ctx, text, lang) {
     let noFiller = corrected;
     for (; ; ) {
       const next = noFiller.replace(CORRECTION_FILLER_PREFIX_RE, "").trimStart();
-      if (next === noFiller) break;
-      noFiller = next;
+      const after = CORRECTION_PURE_FILLER_RE.test(next) ? "" : next;
+      if (after === noFiller) break;
+      noFiller = after;
     }
     if (noFiller !== corrected) {
       if (noFiller === "") return text;
@@ -3236,16 +3245,14 @@ function apply(ctx, config) {
     const gen = (turnGen.get(sessionId) ?? 0) + 1;
     turnGen.set(sessionId, gen);
     const mute = readMuted.get(sessionId);
+    const pos = turnOfSession.get(sessionId);
     if (mute !== void 0) {
-      const curTurn = turnOfSession.get(sessionId);
-      if (curTurn === void 0) {
+      const atTurnBoundary = pos !== void 0 && (mute.turn === null ? pos.step === 1 : pos.turn !== mute.turn);
+      if (atTurnBoundary) {
+        readMuted.delete(sessionId);
+      } else if (pos === void 0 || mute.turn === null) {
         mute.streams += 1;
         if (mute.streams > MUTED_STREAMS_WITHOUT_TURN) readMuted.delete(sessionId);
-      } else if (mute.turn === null) {
-        mute.turn = curTurn;
-        mute.streams = 0;
-      } else if (curTurn !== mute.turn) {
-        readMuted.delete(sessionId);
       }
     }
     tapInFlight.add(sessionId);
@@ -3255,7 +3262,7 @@ function apply(ctx, config) {
       queue,
       broadcast,
       (state) => {
-        const turn = turnOfSession.get(sessionId);
+        const turn = turnOfSession.get(sessionId)?.turn;
         if (state === "listening") {
           tapInFlight.delete(sessionId);
           if (focusedSessionId !== sessionId && activeVoiceSession !== sessionId) {
@@ -3271,9 +3278,9 @@ function apply(ctx, config) {
   });
   ctx.on("agent/turn-stopping", ({ agent }) => queue.noteTurnEnd(agent.id));
   ctx.on("agent/error", ({ agent }) => queue.noteTurnEnd(agent.id));
-  ctx.on("agent/pre-step", ({ agent, turn }, next) => {
+  ctx.on("agent/pre-step", ({ agent, turn, step }, next) => {
     const sid = agent.id;
-    if (sid === activeVoiceSession || sid === focusedSessionId) turnOfSession.set(sid, turn);
+    if (sid === activeVoiceSession || sid === focusedSessionId) turnOfSession.set(sid, { turn, step });
     return next();
   });
   const base = BASE_PATH;
@@ -3703,7 +3710,7 @@ function apply(ctx, config) {
             }
             queue.cancel(sessionId);
             if (isInterrupt) queue.abandonTurn(sessionId);
-            readMuted.set(sessionId, { turn: turnOfSession.get(sessionId) ?? null, streams: 0 });
+            readMuted.set(sessionId, { turn: turnOfSession.get(sessionId)?.turn ?? null, streams: 0 });
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId);
           }
           respondJson2(res, 200, { ok: true });
