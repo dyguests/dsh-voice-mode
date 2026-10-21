@@ -134,7 +134,7 @@ systemctl restart dsh   # Linux；其他平台重启 dsh 进程
 
 > 字段名保持向后兼容，旧 `~/.dsh/settings.yaml` 可直接沿用。
 
-完整 25 项设置表见 [使用说明 · 设置](plugin/dsh-voice-mode/README.md)。
+完整 28 项设置表见 [使用说明 · 设置](plugin/dsh-voice-mode/README.md)。
 
 ---
 

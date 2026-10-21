@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+### Issue #15 R15 轮（v0.7.27 基线上的文档与口径收口，2026-10-21）
+
+> 本轮**无用户可见行为变更**（纯文档/口径），代码与测试未改。主要是发版后才发现的文档漂移与账本断裂的补正。
+
+- **基线纠正**：本轮开工时本地 `main` 落后 `origin/main` 18 个提交（含 v0.7.26 / v0.7.27 两次发版），此前基于 `58c9ffd` 的取证全部作废并重做。教训：动手前先 `git fetch` 核对 `origin/main`。
+- **文档漂移修复 7 项**：根 README「完整 25 项设置表」→ **28 项**（schema 实测 28 键）；计数 624→653 的现行口径漏刷 5 处（v0.7.27 发版只更新了 `docs/CONTEXT.md`）；根 `CONTEXT.md` 补 PR #16 新增 3 键（`readAloud` / `showStatusBar` / `showCaptions`）与 `mode:once`、补 `mic-gesture.ts`；三处随 `client.tsx`(+799) / `index.ts`(+174) 重写失效的 file:line 锚点刷新（`asr.ts` / `segmenter.ts` 侧经实测未漂移、未动）。
+- **账本补记**：CHANGELOG 补记 R14 段（第 7 道门 tts-local 引擎级 closed 闸门）——R14 随 v0.7.26 一同发布但**当时未记**；v0.7.26 段计数行 624→**627**（实测：R14 在 v0.7.26 树内且二者之间 `test/` 未变）；STATE 闭合 R13 验真轮悬空句、补 R14 账本条目、记 v0.7.26 / v0.7.27 两轮发版承载。
+- **行为级计数口径升级（87 → 368，勿误读为新增 281 项测试）**：统计口径从「fix-test scope 13 个文件」扩到「全 52 文件逐用例判定」；R13 口径 13 文件子集现值 **103**（原 87）。合同级/静态守卫 285 项，368 + 285 = 653。权威口径 = 运行时各文件「N 项通过」求和——静态扫 `t(` 调用点在 3 个文件各多 1 条注释/字面量里的假用例、package-install 少 3 条（for 循环展开），数值巧合相同、构成不同。
+
 ### 规划中
 
 - F1：emotion 标签 DSL 全量上线（LLM 侧标签使用指引注入 + 真机验收）
@@ -136,8 +145,8 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 
 **测试与口径（终态）**
 
-- 计数（**R4 时点**；终态 624 ✓ / 51 文件——R9 后 616（+5 barge-in-detect-behavior）、R11 后 618（+2 M7）、R12 后 622（+4 I-1/M7①/warmupSense）、R13 后 624（+2 第 6 道门/Minor-8），沿革见 STATE 账本）：`npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；`scripts.test` 链 50 个文件调用）。沿革：R1 41 文件/518 项 → R2 48 文件/583 项 → R3 49 文件/603 项（+20）→ R4 50 文件/611 项（**+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16**）。
-- **行为级测试 74 项**（fix-test scope 枚举口径，**R4 时点**；终态 87 项 = 74 + barge-in-detect-behavior 5 + M7/I-1/warmupSense 行为回归 6 + 第 6 道门/Minor-8 2）：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（R4 时点；**现值 7/20**——R12 后 host-fixes 行为级 +4 = M7① 入口判序双路径 3 + warmupSense 1（I-1 闸门锁在 tts-queue-engine、不计入 host-fixes；全套件 +4 breakdown 见 STATE 账本），余 13 条合同级；其余各文件计数与 R4 时点一致，现值以 STATE 账本枚举为准）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
+- 计数（**R4 时点**；终态 627 ✓ / 51 文件（本版 v0.7.26 的实测终态，R14 后 627）——R9 后 616（+5 barge-in-detect-behavior）、R11 后 618（+2 M7）、R12 后 622（+4 I-1/M7①/warmupSense）、R13 后 624（+2 第 6 道门/Minor-8）、R14 后 627（+3 第 7 道门引擎级闸门，tts-queue-engine 7→10），沿革见 STATE 账本）：`npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；`scripts.test` 链 50 个文件调用）。沿革：R1 41 文件/518 项 → R2 48 文件/583 项 → R3 49 文件/603 项（+20）→ R4 50 文件/611 项（**+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16**）。
+- **行为级测试 74 项**（fix-test scope 枚举口径，**R4 时点**；终态 **368 项**（**全 52 文件逐用例判定**口径，R15 升级；**非新增 281 项测试**——87→368 是统计口径从「fix-test scope 13 文件」扩到「全 52 文件逐用例判定」，同期全套件仅 624→653；R13 口径 13 文件子集现值 **103 项**，与 368 不混用；判定分布与计数陷阱见 STATE 账本））：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（R4 时点；**现值 7/20**——R12 后 host-fixes 行为级 +4 = M7① 入口判序双路径 3 + warmupSense 1（I-1 闸门锁在 tts-queue-engine、不计入 host-fixes；全套件 +4 breakdown 见 STATE 账本），余 13 条合同级；其余各文件计数与 R4 时点一致，现值以 STATE 账本枚举为准）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
 
 ### Issue #15 R5 修复轮（R4 验真轮 2 Important；2026-10-20，`0763966`）
 
@@ -197,6 +206,19 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 - **Important-1：第 6 道门——重试 sleep 期间 close 不再 post-close synthesize**：有界重试的退避 sleep（400ms×attempt）期间若会话被 close，sleep 返回后仍会对已关闭引擎 `synthesize` → 本地 TTS 孤儿子进程被重新 fork（热重载泄漏同型第六处）；修「sleep 期间 close 不再触达 synthesize + 重试 timer 纳入取消集」，锁 B（timer 取消）red-green 实证（锁 A 抓红能力当时为零，更正注记见 STATE R13 账本）。
 - **Minor-8：纵深防御**：close 后入口早返锁（双保险）。
 - 测试：tts-queue-engine 5→7（+2），计数 622→**624 ✓ / 51 文件**、行为级 85→**87 项**。
+
+### Issue #15 R14 修复轮（第七次全新 sweep 1 Important；2026-10-20，`58c9ffd`）
+
+> **补记**：R14 随 v0.7.26 一同发布，但当时未记入本文件；本段于 R15 轮补记（代码 commit `58c9ffd` 与 v0.7.26 tag 同树，非新发布）。
+
+**修复（用户可见，真实代码修复）**
+
+- **Important-1：第 7 道门——tts-local 引擎级 closed 闸门**：TtsQueue 侧 8 处判序全在 `await engine.synthesize()` 的调用前/返回后，而 fork 发生在 `synthesize` 内部——冷引擎首句进模型校验/下载窗 → `queue.close()`（=dispose 路径）→ `engine.close()` 返回后 `ensureReady` 的 IIFE 续跑 `if (!child) fork(...)`，孤儿子进程携带完整模型、无人再 close（`setEngine` 与试听 `synthesize` 同窗口同型暴露）。修**引擎级闭环（四层判序）**——`close()` 最早期置 `closed` 标志（早于 `await call({type:'close'})`）+ `ensureReady` IIFE 入口判序 + 模型校验循环内每次 `await ensureModelFile` 之后判序（fork 之前必达）+ `synthesize` 的 `ensureReady()` 前后各一次判序；与 `TtsQueue.closed` 同构、两层各自闭环。
+- **探针 A 竞态修**：`retrySleep()` 内 `if (this.closed) return Promise.resolve()`——守 `close` 自述不变式「clear 之后不得再有新 timer 入集」，并让重试循环顶部判序立即 break。
+- **锁A 可达窗补锁**（R13 叙述失准的根因修复）：新用例桩构造真实竞态窗（在途合成被 `close` 的 `rejectAll` 打回、catch 在 clear 之后跑）+ 双句排队，双断言各自独立抓红。
+- **M7② 锁去掩蔽**：补 close 前后 `getActiveResourcesInfo` 增量断言（原锁被 I-1 入口门掩蔽，删取消集后泵被拦住、`synthesize` 断言仍绿）。
+- **`build.mjs` 原子化**：`sense-worker.mjs` 改走 `buildAtomically`（运行期 `new Worker` 加载产物，与 `tts-vits-worker.cjs` 同型闭合「写一半被加载」窗口）。
+- 测试：tts-queue-engine 7→10（+3），计数 624→**627 ✓ / 51 文件**（本版 v0.7.26 的实测终态）。
 
 ## [0.7.25] - 2026-10-19
 

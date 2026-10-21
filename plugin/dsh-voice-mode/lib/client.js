@@ -3463,7 +3463,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "2fbb26c";
+var BUILD_TAG = "8c0368a";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);

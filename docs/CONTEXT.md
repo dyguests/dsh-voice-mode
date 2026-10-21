@@ -22,6 +22,8 @@ client client.tsx：播放 + 参考池 + 手势 + UI（字幕/状态条/设置�
 bridge /voice-mode SSE：owner=sessionId，/config + /preview + assembleStream
 ```
 
+**PR #16 新交互（v0.7.27，摘要）**：麦克风按钮即状态面板（按钮按状态着色）、**朗读范围** `readAloud`（voice 仅语音模式 / always 含打字 / off）、**状态条** `showStatusBar` 与**字幕** `showCaptions` 可各自关闭、右键快捷设置、说完就关 `mode:once`。逐键语义见根 `CONTEXT.md`「设置语义」表（本文档为 I1-I10 摘要，不列全量键）。
+
 ## 设置键语义（I1-I10 摘要 + 关键字段）
 
 **不变量 I1-I10**（plan §0.4）：I1 finalize 幂等 / I2 打断计数仅播放期 / I3 播放门不得 return / I4 TTS 单 chunk+final 帧协议 / I5 epoch 守卫 / I6 client.inject 9 锚点取交集 / I7 cordis 按需 / I8 模型 SHA256 固定 / I9 零 API Key / I10 默认行为与现状字节等价（**批 5 `backchannelYield` + 批 7O `bargeInMode` detect 两处豁免**）。
