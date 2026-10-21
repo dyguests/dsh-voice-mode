@@ -21,6 +21,17 @@ import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 // Type-only: pulls the 'system-prompt/assemble' waterfall into the Events
 // registry (so ctx.on can type-check the assembly callback).
 import type { AssembleContext, PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+// R15（Issue #15 Important-2）：'agent/turn-stopping' 由宿主的 @deepseek-ai/dsh-agent 声明，
+// 而本插件不依赖该包（engines.dsh 覆盖 0.1.1-rc.2 起全部版本），无法像上文那样
+// `import type {}` 把它拉进 Events 注册表——就地按同一意图补声明（只取用得到的字段）。
+// 实测：该事件在 dsh-agent / dsh-agent-loop 0.1.1-rc.2 即已声明并派发，兼容区间全程可用。
+// 用处见 apply() 内「回合真正结束的确认点」处注释。
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /** 回合即将关闭（模型不再欠回复：没有在跑的工具调用、没有新转向）；payload.agent.id 即会话 id。 */
+    'agent/turn-stopping'(payload: { agent: { id: string } }): void
+  }
+}
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -571,6 +582,20 @@ export function apply(ctx: Context, config: Config): void {
   /** 活跃语音会话的界面语言（决定口语化提示词版本；由客户端 /toggle 上报，缺省中文以兼容旧客户端）。 */
   let activeVoiceLang: PromptLang = 'zh'
   let ownerYieldTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * R15（Issue #15 Important-2）：「停止朗读」静音闸门——按会话记「本回合余句不再入队朗读」。
+   *
+   * 缺陷（逐行复核 8c0368a）：/cancel 只做 queue.cancel（epoch++ 弃积压/作废在途），
+   * 但被 cancel 打断的那次 llm/stream **仍在跑**，其后每一句照常 segmenter.feed → queue.enqueue，
+   * 而新句带的是新 epoch（cancel 不作废后续入队），于是余句继续合成下发；客户端拒绝线
+   * （STOP_READING_LINE=MAX_SAFE_INTEGER）只有上界没有下界，并在下一轮 agent-speaking 时清除
+   * （client.tsx:1169-1176）——用户马上发下一条，刚「停止」的回复尾巴就在下一条开头重新出声，
+   * 且这段云端合成本是白付的。
+   *
+   * 口径：静音只覆盖**当回合**——下一回合的 llm/stream 一进来就解禁（见 tap 内 delete），
+   * 与客户端拒绝线的解除时机同一边界。退出/让出时随 clearTurnState 一并回收（防集合增长）。
+   */
+  const readMuted = new Set<string>()
 
   // --- P2-4 显式回合状态机（host 真相源）：idle | listening | finalizing | agent-speaking。 ---
   // 迁移点：/asr partial → listening；/asr final=1 → finalizing；llm 首 token → agent-speaking；
@@ -586,11 +611,12 @@ export function apply(ctx: Context, config: Config): void {
    *  M15（Issue #15 审查 Minor）：只增不删——会话退出/让出时与 turnStates 一并清掉，
    *  否则长命宿主里这个 Map 随历史会话数无限增长（每项仅一个数字，但永不回收）。 */
   const turnGen = new Map<string, number>()
-  /** 会话回合状态收尾（退出/让出/被抢占共用）：广播 idle 后清两张表。 */
+  /** 会话回合状态收尾（退出/让出/被抢占共用）：广播 idle 后清两张表 + 静音闸门。 */
   const clearTurnState = (sessionId: string): void => {
     setTurn(sessionId, 'idle')
     turnStates.delete(sessionId)
     turnGen.delete(sessionId)
+    readMuted.delete(sessionId) // R15：静音闸门随之回收（防集合随会话数增长）
   }
 
   // --- fork 加固：会话存在性校验（第 0 层）。 ---
@@ -843,6 +869,11 @@ export function apply(ctx: Context, config: Config): void {
     // streak = 连续被跳过的句数：客户端据此区分偶发抖动与「云端整体不可用」（如服务端拒绝握手）。
     onSkip: (sessionId, text, streak) => broadcast('tts-skip', { sessionId, text: text.slice(0, 80), streak }),
     onIdle: (sessionId) => broadcast('tts-idle', { sessionId }),
+    // R15（Issue #15 Important-2 host 侧接线）：onIdle 降级为「候选空闲」——「队列排空」不等于
+    // 「回合结束」。带工具调用的回合会在工具执行期间把队列排空一次，据此发 tts-idle 会让
+    // mode:once 在空档里提前 exitMode（麦克风熄灭、后半段回复永不朗读）。置 true 后 tts-idle
+    // 只在 host 经 `agent/turn-stopping` 确认回合真正结束后才发（见下方钩子）。
+    awaitTurnEnd: true,
   })
   // fork 修复：启动时把当前设置的音色/语速应用到引擎——
   // 此前引擎默认硬编码为素映雪，朗读直到"设置变化"才更新（重启后朗读一直女声的根因）。
@@ -953,10 +984,19 @@ export function apply(ctx: Context, config: Config): void {
     const sessionId: string = rawSessionId as string
     // readAloud=always：客户端经 /focus 上报的当前可见会话，非语音模式的回复（含打字发送）也朗读；
     // 只认可见会话，后台子任务/其他会话的流不读。off：语音模式里也不朗读，但回合状态照常广播。
-    const alwaysRead = vset.readAloud === 'always' && focusedSessionId === sessionId
+    // R15（Issue #15 Important-3）：语音模式会话与焦点会话是两个**不同**会话时必须二选一——
+    // 两个条件各自独立成立会给两个会话各挂一个 tap，而它们在 TtsQueue 里是两个独立
+    // SessionQueue（pump 按会话各自跑），即并发合成 + 同时广播 = 两个标签页叠播。
+    // 故 alwaysRead 只在「当前没有语音模式会话」时生效：语音模式是显式用户动作（占用麦克风、
+    // 带 barge-in 语义），优先级高于「当前可见」。
+    const alwaysRead =
+      vset.readAloud === 'always' && focusedSessionId === sessionId && activeVoiceSession === null
     if (activeVoiceSession !== sessionId && !alwaysRead) return next()
     const gen = (turnGen.get(sessionId) ?? 0) + 1
     turnGen.set(sessionId, gen)
+    // R15（Issue #15 Important-2）：新回合解除「停止朗读」静音——/cancel 只停**当回合**余句，
+    // 下一回合恢复朗读（与客户端拒绝线在同一回合边界解除同口径：client.tsx:1169-1176）。
+    readMuted.delete(sessionId)
     return tapActiveStream(
       sessionId,
       next(),
@@ -965,13 +1005,29 @@ export function apply(ctx: Context, config: Config): void {
       (state) => {
         if ((turnGen.get(sessionId) ?? 0) !== gen) return
         setTurn(sessionId, state)
-        // 回合结束时队列本就空（没有可读文本 / readAloud=off）就不会再有跑空回调——补发一次，
-        // 让等待朗读结束的一方（「说完就关」）总能收到结束信号。
-        if (state === 'listening' && queue.isIdle(sessionId)) broadcast('tts-idle', { sessionId })
       },
       vset.readAloud !== 'off',
+      () => readMuted.has(sessionId),
     )
   })
+
+  // R15（Issue #15 Important-2 host 侧接线）：「回合真正结束」的确认点，tts-idle 由此统一发出。
+  // `agent/turn-stopping` 的契约原文「the model owes no response (no live tool calls, no fresh
+  // steering)」正是「工具调用空档」与「真回合结束」的判别式。旧实现在**每一条** llm/stream 的
+  // finally（tapActiveStream 末尾）里直发 tts-idle，绕过队列闸门——工具空档 / 句间长停顿都会误发，
+  // mode:once 据此提前退出。该补发已删；readAloud=off / 无可读文本时「回合结束也收不到信号」
+  // 的场景由本钩子覆盖（队列空 → noteTurnEnd 直接补发），语义与旧的补发一致。
+  // 事件词汇表见文件头就地声明（该事件由宿主的 @deepseek-ai/dsh-agent 声明，本插件不依赖该包）。
+  // 实测：该事件在 dsh-agent / dsh-agent-loop 0.1.1-rc.2 即已声明并派发，兼容区间全程可用。
+  // 时序（实测 dsh-agent-loop 0.1.1-rc.2 起各版本同一形态）：turn-stopping 在
+  // `await this.step(...)` **之后**派发，而 step 内的 `for await (const chunk of stream)` 结束
+  // 即触发 tap 的 finally（尾句 flush 入队）——故末条流必先入队、回合确认后到，不会在
+  // 「队列瞬时空」时抢发一次。
+  // 不过滤会话：事件对全部 agent 派发，而 noteTurnEnd 逐会话自洽（未 tap 的会话不进
+  // openTurns、isIdle 恒真，多发的那条客户端按 sessionId 过滤，client.tsx:1189）；
+  // 反过来在 host 侧按「当前是否被 tap」过滤，一旦焦点/语音归属中途变化就会把闸门
+  // 留在关闭态（tts-idle 永不到，once 模式退 10s 兜底），比多发一条坏得多。
+  ctx.on('agent/turn-stopping', ({ agent }) => queue.noteTurnEnd(agent.id))
 
   // --- HTTP 面 ---
   const base = BASE_PATH
@@ -1514,6 +1570,10 @@ export function apply(ctx: Context, config: Config): void {
             // ASR 段（按住说的前半句已上行，松手定稿以同一 epoch 增量续传，
             // 若 reset 会把 host 流清空导致定稿缺前半句——对抗审查第三轮 Blocker）。
             queue.cancel(sessionId)
+            // R15（Issue #15 Important-2）：epoch 只作废**已入队**的句子，打断后仍在跑的
+            // llm/stream 会把余句继续送进来（新 epoch 不作废）。此处记下「本回合静音」，
+            // 余句一律不入队（不合成、不计费、不下发），下一回合解禁。
+            readMuted.add(sessionId)
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId)
           }
           respondJson(res, 200, { ok: true })
@@ -1816,6 +1876,9 @@ function collectBody(
  * 活跃语音会话的流 tap：无损转发（观察不改流）；text-delta 进句子切分器并
  * 入 TTS 队列；被打断的回合不 flush 尾部半句
  * （那正是用户打断的内容，不能朗读 —— Q8 半截标注由 client 侧完成）。
+ *
+ * R15（Issue #15 Important-2）：muted 逐句求值（非入 tap 时定值），「停止朗读」后
+ * 本回合余句（含末尾 flush 的半句）一律不入队；下一回合解禁。
  */
 async function* tapActiveStream(
   sessionId: string,
@@ -1824,6 +1887,7 @@ async function* tapActiveStream(
   broadcast: (event: string, payload: unknown) => void,
   onTurn: (state: 'listening' | 'agent-speaking') => void,
   speak = true,
+  muted: () => boolean = () => false,
 ): AsyncIterable<StreamChunk> {
   const segmenter = new SentenceSegmenter()
   // P1-5 延迟埋点链：每回合至多广播一次 host 侧里程碑（首 token / 首句成型）。
@@ -1835,7 +1899,7 @@ async function* tapActiveStream(
     if (flushed) return
     flushed = true
     for (const s of segmenter.flush()) {
-      if (speak) queue.enqueue(sessionId, s)
+      if (speak && !muted()) queue.enqueue(sessionId, s)
     }
   }
   try {
@@ -1854,7 +1918,7 @@ async function* tapActiveStream(
             firstSentenceBroadcast = true
             broadcast('latency', { sessionId, stage: 'first-sentence-text' })
           }
-          if (speak) queue.enqueue(sessionId, s)
+          if (speak && !muted()) queue.enqueue(sessionId, s)
         }
       }
       // 工具调用事件：提示音（toolBeep 设置项控制播放；默认关）。

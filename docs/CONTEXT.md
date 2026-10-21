@@ -47,7 +47,7 @@ bridge /voice-mode SSE：owner=sessionId，/config + /preview + assembleStream
   - `emotion.ts`（批 4）/ `asr-sense-key.ts`（纯函数 sanitize/key；批 7M 砍除 `asr-hotwords.ts`）
   - `sense-worker.ts` / `wakeword.ts` / `segmenter.ts` / `fixture-recorder.ts` 等
 - **`plugin/dsh-voice-mode/lib/`** —— esbuild 产物（`build.mjs` 重建，**不手改**；批 7P P2 起 lib 随每批 rebuild 对齐 BUILD_TAG=HEAD，旧「免重建」口径已证伪作废）
-- **`plugin/dsh-voice-mode/test/`** —— `.mjs` 测试（npm test 52 文件 / **669 项全绿**（2026-10-21 R15 三个 Blocker 域落库后实测口径：各文件「N 项通过」之和 = `grep -c '✓'` = 669，`scripts.test` 链 52 个文件调用，exit 0）。沿革：R1 时 41 文件/518 项 → R2 集成轮 48 文件/583 项 → R3 后 49 文件/603 项 → R4 后 50 文件/611 项（+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16）→ R9 后 51 文件/616 项（+5 = barge-in-detect-behavior 一级探测行为锁）→ R11 后 51 文件/618 项（+2 = host-fixes 16→17 +M7① 行为回归、tts-queue-engine 3→4 +M7② 行为回归）→ R12 后 51 文件/622 项（+4 = I-1 TtsQueue closed 闸门锁 1 + M7① 入口判序双路径锁 2 + warmupSense 1）→ R13 后 51 文件/624 项（+2 = 第 6 道门锁 + Minor-8 早返锁，tts-queue-engine 5→7）→ R14 后 51 文件/627 项（+3 = 第 7 道门引擎级 closed 闸门锁，tts-queue-engine 7→10）→ v0.7.26 发版 51 文件/627 项 → v0.7.27 后 52 文件/653 项（PR #16 交互移植 + 发版前对抗审查 8 处修正）→ R15 后 52 文件/669 项（+16 = segmenter 围栏状态机 7 + mic-gesture 右键守卫 4 + tts-queue-engine Kokoro 闸门/tts-idle 回合闸门 5）。两口径勿混用：**行为级测试 382 项**（**全 52 文件逐用例判定**口径，2026-10-21 R15 实测；合同级/静态守卫 287 项，382+287=669；R13 口径 13 文件子集现值 **108**，与 382 不混用）与**全套件 52 文件/669 项**是两回事——判定分布、镜像级先例与计数陷阱见 `docs/rules/STATE.md`「行为级计数口径（R15 升级）」段））
+- **`plugin/dsh-voice-mode/test/`** —— `.mjs` 测试（npm test 52 文件 / **678 项全绿**（2026-10-21 R15 三个 Blocker 域 + host 域落库后实测口径：各文件「N 项通过」之和 = `grep -c '✓'` = 678，`scripts.test` 链 52 个文件调用，exit 0）。沿革：R1 时 41 文件/518 项 → R2 集成轮 48 文件/583 项 → R3 后 49 文件/603 项 → R4 后 50 文件/611 项（+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16）→ R9 后 51 文件/616 项（+5 = barge-in-detect-behavior 一级探测行为锁）→ R11 后 51 文件/618 项（+2 = host-fixes 16→17 +M7① 行为回归、tts-queue-engine 3→4 +M7② 行为回归）→ R12 后 51 文件/622 项（+4 = I-1 TtsQueue closed 闸门锁 1 + M7① 入口判序双路径锁 2 + warmupSense 1）→ R13 后 51 文件/624 项（+2 = 第 6 道门锁 + Minor-8 早返锁，tts-queue-engine 5→7）→ R14 后 51 文件/627 项（+3 = 第 7 道门引擎级 closed 闸门锁，tts-queue-engine 7→10）→ v0.7.26 发版 51 文件/627 项 → v0.7.27 后 52 文件/653 项（PR #16 交互移植 + 发版前对抗审查 8 处修正）→ R15-D 后 52 文件/669 项（+16 = segmenter 围栏状态机 7 + mic-gesture 右键守卫 4 + tts-queue-engine Kokoro 闸门/tts-idle 回合闸门 5）→ R15-E 后 52 文件/678 项（+9 = host 域 tts-idle 回合闸门 / 停止朗读静音闸门 / 跨会话叠播仲裁，host-security-behavior 24→33）。两口径勿混用：**行为级测试 391 项**（**全 52 文件逐用例判定**口径，2026-10-21 R15 实测；合同级/静态守卫 287 项，391+287=678；R13 口径 13 文件子集现值 **117**，与 391 不混用）与**全套件 52 文件/678 项**是两回事——判定分布、镜像级先例与计数陷阱见 `docs/rules/STATE.md`「行为级计数口径（R15 升级）」段））
 - **`docs/competitive/sources/scan-*.md`** —— 18 份子代理扫描报告
 
 ## 诊断开关
@@ -72,7 +72,7 @@ cd plugin/dsh-voice-mode && \
 ## 发版流程（批 K 收口 + L 文档同步验证通过的工作流）
 
 1. `git status --short` 仓干净
-2. `npm run typecheck && npm run build && npm test` 全绿（npm test 669 项 / 52 文件）
+2. `npm run typecheck && npm run build && npm test` 全绿（npm test 678 项 / 52 文件）
 3. `systemctl restart dsh.service && curl /voice-mode/config` 验 ASR 侧 8 字段非 null（senseVoice/senseITN/captionFontSize/captionMaxWidth/backchannelYield/yieldMs/bargeInSalvage/llmCorrect）
 4. 真机冒烟 **4 项必过** / **~10 分钟**（`docs/qa/must-verify-manually.md`：字幕 / 让位 / 60s 长段 / manual 外放）
 5. 文档回写：`STATE.md` + 根 `CONTEXT.md` + `backlog.md` + ADR 落地注记（批 7M 砍 4 项 + 批 7N 重做 5 项已完成）

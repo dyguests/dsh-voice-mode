@@ -76,10 +76,19 @@ const absorb = () => new Proxy(function stub() {}, {
   construct() { return absorb() },
 })
 `
-const ttsQueueStub = stub('tts-queue.mjs', absorbBody + `
-export class EdgeTtsEngine { constructor() { return absorb() } }
-export class TtsQueue { constructor() { return absorb() } }
-export function listEdgeVoices() { return [] }
+// tts-queue.ts **真编译**（⑧ 段行为锁需要真实的排空/回合闸门），只把它唯一的外部依赖
+// msedge-tts 换成桩：立即返回合法 MP3 头，合成不触网、不下模型，帧照常下行。
+const msedgeStub = stub('msedge-tts.mjs', `
+export const OUTPUT_FORMAT = { AUDIO_24KHZ_48KBITRATE_MONO_MP3: 'audio-24khz-48kbitrate-mono-mp3' }
+export class MsEdgeTTS {
+  async setMetadata() {}
+  toStream() {
+    const audioStream = (async function* () { yield Buffer.from([0xff, 0xfb, 0x90, 0x00]) })()
+    return { audioStream }
+  }
+  async close() {}
+  async getVoices() { return [] }
+}
 `)
 const ttsLocalStub = stub('tts-local.mjs', absorbBody + `
 export function createSherpaVitsEngine() { return absorb() }
@@ -87,7 +96,24 @@ export function createSherpaKokoroEngine() { return absorb() }
 export const TTS_MODEL_REPO = ''
 export function kokoroModelDir() { return '' }
 `)
-const segmenterStub = stub('segmenter.mjs', `export class SentenceSegmenter {}\n`)
+// 分句器最小可用实现（⑧ 段需 host 真切句入队）：按句末标点切；flush 吐出残留半句
+// （与真 segmenter 同口径——⑧ 的「停止朗读」用例要覆盖 tap finally 里那条 flush 入队路径）。
+const segmenterStub = stub('segmenter.mjs', `
+export class SentenceSegmenter {
+  constructor() { this.buf = '' }
+  feed(text) { this.buf += text; return this.take() }
+  flush() { const rest = this.buf; this.buf = ''; return rest ? [rest] : [] }
+  take() {
+    const out = []
+    let i = 0
+    for (let k = 0; k < this.buf.length; k++) {
+      if ('。！？!?.\\n'.includes(this.buf[k])) { out.push(this.buf.slice(i, k + 1)); i = k + 1 }
+    }
+    this.buf = this.buf.slice(i)
+    return out
+  }
+}
+`)
 const modelsStub = stub('models.mjs', `
 export const HOST_PRIMARY = 'https://huggingface.co'
 export function validateModelHost(h) { return h || HOST_PRIMARY }
@@ -121,8 +147,8 @@ await build({
     {
       name: 'stub-internal',
       setup(b) {
+        b.onResolve({ filter: /^msedge-tts$/ }, () => ({ path: msedgeStub }))
         b.onResolve({ filter: /\.\.?\/asr-host\.ts$/ }, () => ({ path: asrHostStub }))
-        b.onResolve({ filter: /\.\.?\/tts-queue\.ts$/ }, () => ({ path: ttsQueueStub }))
         b.onResolve({ filter: /\.\.?\/tts-local\.ts$/ }, () => ({ path: ttsLocalStub }))
         b.onResolve({ filter: /\.\.?\/segmenter\.ts$/ }, () => ({ path: segmenterStub }))
         b.onResolve({ filter: /\.\.?\/models\.ts$/ }, () => ({ path: modelsStub }))
@@ -153,6 +179,8 @@ const settingsValue = {
   spokenFormat: false,
 }
 let settingsWatcher = null
+/** ctx.on 注册的钩子（⑧ 段行为锁需要主动触发 llm/stream 与 agent/turn-stopping）。 */
+const hooks = new Map()
 const fakeCtx = {
   effect(fn) {
     const d = fn()
@@ -160,7 +188,8 @@ const fakeCtx = {
       if (typeof d === 'function') d()
     }
   },
-  on() {
+  on(event, listener) {
+    hooks.set(event, listener)
     return () => {}
   },
   get(name) {
@@ -493,6 +522,157 @@ await t('SSE 上限 8：第 9 个不同标签页 429；已有标签页重连不�
   assert.equal(bodyCode(ninth), 'too_many_streams')
   const again = openStream('tab-0')
   assert.equal(again.statusCode, 200, '同标签页重连应先去重再判上限')
+})
+
+// ---------------------------------------------------------------- ⑧ 朗读链路（真 TtsQueue + 桩引擎）
+// Issue #15 R15-4 的三条 host 侧 Important 在此锁行为（此前零行为覆盖）：
+//   I-2   tts-idle 必须由「回合真正结束」确认（句间排空 / 工具调用空档都不算）；
+//   I-2'  「停止朗读」后本回合余句不再入队（下一回合恢复）；
+//   I-3   readAloud=always 下语音模式会话与焦点会话**不同**时不同时出声。
+// 观察面只有一条：SSE 广播。复用 ⑦ 已上线的 watcher（⑧ 不再开连接，免得撞 SSE 上限 8）。
+console.log('⑧ 朗读链路：tts-idle 回合闸门 / 停止朗读静音 / 跨会话叠播仲裁')
+
+let cursor = watcher.chunks.length
+const seen = []
+/** 增量解析 SSE 帧：每个 res.write 都是一整帧，故按 chunks 下标切分始终帧对齐。 */
+const drain = () => {
+  for (const block of watcher.chunks.slice(cursor).join('').split('\n\n')) {
+    const m = /^event: ([^\n]+)\ndata: (.*)$/.exec(block.trim())
+    if (m) seen.push({ event: m[1], data: JSON.parse(m[2]) })
+  }
+  cursor = watcher.chunks.length
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+/** 轮询到 pred 成立为止；超时返回 false（由调用方断言给出具体缺口）。 */
+const waitFor = async (pred, ms = 1000) => {
+  const t0 = Date.now()
+  for (;;) {
+    drain()
+    if (pred(seen)) return true
+    if (Date.now() - t0 > ms) return false
+    await sleep(5)
+  }
+}
+/** 已被合成下发的句子（audio 帧的 final 帧带 text，data 帧不带）。 */
+const spoken = () => seen.filter((f) => f.event === 'audio' && f.data.final).map((f) => f.data.text)
+const idles = (sid) => seen.filter((f) => f.event === 'tts-idle' && f.data.sessionId === sid).length
+const reset = () => {
+  drain()
+  seen.length = 0
+}
+/** 打开一条被 tap 的流，逐块推进（模拟 LLM 增量吐字）。 */
+const openTap = (sessionId, chunks) => {
+  const inner = (async function* () {
+    for (const text of chunks) yield { type: 'text-delta', text }
+  })()
+  return hooks.get('llm/stream')({ sessionId }, () => inner)[Symbol.asyncIterator]()
+}
+/** 一次性跑完一条被 tap 的流（回合内的完整作答）。 */
+const drive = async (sessionId, ...chunks) => {
+  const it = openTap(sessionId, chunks)
+  for (;;) {
+    const r = await it.next()
+    if (r.done) break
+  }
+}
+const turnStopping = (sid) => hooks.get('agent/turn-stopping')({ agent: { id: sid } })
+const postCancel = (sid, keepAsr = true) =>
+  awaitRes(get('/voice-mode/cancel', makeReq({ url: '/voice-mode/cancel', body: JSON.stringify({ sessionId: sid, keepAsr }) })))
+const enterVoice = (sid) => awaitRes(get('/voice-mode/toggle', makeReq({ url: '/voice-mode/toggle', body: JSON.stringify({ sessionId: sid, on: true }) })))
+const leaveVoice = (sid) => awaitRes(get('/voice-mode/toggle', makeReq({ url: '/voice-mode/toggle', body: JSON.stringify({ sessionId: sid, on: false }) })))
+const setReadAloud = (v) => settingsWatcher({ ...settingsValue, readAloud: v })
+
+const VOICE_SID = 'live-1' // fakeCtx.get('sessions') 只认这一个（/toggle 第 0 层校验）
+const FOCUS_SID = 'focus-2' // 焦点会话：readAloud=always 的朗读对象（本身不在语音模式）
+
+await t('语音模式会话的 llm/stream 被 tap（合成帧下行）', async () => {
+  reset()
+  assert.equal((await enterVoice(VOICE_SID)).statusCode, 200)
+  await drive(VOICE_SID, '第一句。')
+  assert.ok(await waitFor((s) => spoken().includes('第一句。')), '第一句没被合成下发——tap 未生效')
+})
+
+await t('I-2 回合内队列排空**不发** tts-idle（否则 mode:once 在句间空档提前退出）', () => {
+  drain()
+  assert.equal(spoken().length, 1, '前提不成立：本用例未产生朗读')
+  assert.equal(idles(VOICE_SID), 0, `排空即发了 tts-idle ×${idles(VOICE_SID)}——回合闸门没生效`)
+})
+
+await t('I-2 agent/turn-stopping 确认回合结束后才补发 tts-idle', async () => {
+  assert.equal(typeof hooks.get('agent/turn-stopping'), 'function', '未注册 agent/turn-stopping 钩子——回合结束没有确认点')
+  turnStopping(VOICE_SID)
+  assert.ok(await waitFor((s) => idles(VOICE_SID) === 1), `回合确认后没有 tts-idle（×${idles(VOICE_SID)}）`)
+})
+
+await t('I-2 工具调用空档（两条流之间无回合确认）不得触发 tts-idle', async () => {
+  reset()
+  // 模拟带工具调用的回合：第一轮流排空 → 工具执行 → 第二轮流，中间没有 turn-stopping。
+  await drive(VOICE_SID, '工具前的正文。')
+  assert.ok(await waitFor((s) => spoken().includes('工具前的正文。')), '第一段没合成')
+  drain()
+  assert.equal(idles(VOICE_SID), 0, '第一段排空就发了 tts-idle——工具空档会误退 mode:once')
+  await drive(VOICE_SID, '工具后的正文。')
+  assert.ok(await waitFor((s) => spoken().includes('工具后的正文。')), '第二段没合成')
+  drain()
+  assert.equal(idles(VOICE_SID), 0, '第二段排空仍发了 tts-idle——回合闸门被绕过')
+  turnStopping(VOICE_SID)
+  assert.ok(await waitFor((s) => idles(VOICE_SID) === 1), '真正的回合结束没有补发 tts-idle')
+})
+
+await t('I-2 无可读文本（readAloud=off）的回合结束时仍收到 tts-idle（旧直发补发的语义不丢）', async () => {
+  reset()
+  setReadAloud('off')
+  // 必须用**被 tap 的**语音会话：readAloud=off 时 speak=false（不入队），流仍被观察，
+  // 于是「队列本就空」——这正是旧直发补发唯一会命中的场景，也是删掉它之后最该锁住的一条。
+  await drive(VOICE_SID, '不会被朗读的一句。')
+  drain()
+  assert.equal(spoken().length, 0, 'readAloud=off 却下发了朗读帧')
+  assert.equal(idles(VOICE_SID), 0, '回合内就发了 tts-idle（绕过了回合闸门）')
+  turnStopping(VOICE_SID)
+  assert.ok(await waitFor((s) => idles(VOICE_SID) === 1), '回合结束没有补发 tts-idle（客户端会一直等）')
+  setReadAloud('voice')
+})
+
+await t("I-2' 「停止朗读」后本回合余句不再入队（不合成、不下发、不计费）", async () => {
+  reset()
+  const it = openTap(VOICE_SID, ['打断前的第一句。', '打断后的余句。', '以及没说完的尾巴'])
+  await it.next() // 首句入队
+  assert.ok(await waitFor((s) => spoken().includes('打断前的第一句。')), '首句没合成')
+  assert.equal((await postCancel(VOICE_SID)).statusCode, 200)
+  await sleep(60)
+  drain()
+  const before = spoken().length
+  await it.next() // 余句（feed 站点）：应被静音
+  await it.next() // 尾巴半句（feed 站点）：应被静音
+  await it.next() // 迭代到底 → tap 的 finally flush 残留（flush 站点）：同样应被静音
+  await sleep(60)
+  drain()
+  assert.equal(spoken().length, before, `停止朗读后仍下发了 ${JSON.stringify(spoken().slice(before))}`)
+})
+
+await t("I-2' 下一回合恢复朗读（静音只覆盖当回合，与客户端拒绝线同一解除边界）", async () => {
+  reset()
+  await drive(VOICE_SID, '新回合的一句。')
+  assert.ok(await waitFor((s) => spoken().includes('新回合的一句。')), '新回合没恢复朗读——静音闸门没在回合边界解除')
+})
+
+await t('I-3 readAloud=always 且焦点会话≠语音会话：焦点会话不朗读（不叠播）', async () => {
+  reset()
+  setReadAloud('always')
+  assert.equal((await postFocus({ sessionId: FOCUS_SID, tabId: 'tab-W' })).statusCode, 200)
+  // 此时 activeVoiceSession=VOICE_SID（非空），焦点在另一个会话 → 必须二选一，语音模式优先。
+  await drive(FOCUS_SID, '焦点会话的回复。')
+  await sleep(60)
+  drain()
+  assert.equal(spoken().length, 0, `焦点会话在语音模式进行时仍被朗读（${JSON.stringify(spoken())}）——跨会话叠播`)
+  assert.equal(seen.filter((f) => f.event === 'turn' && f.data.sessionId === FOCUS_SID).length, 0, '焦点会话不该有 turn 广播')
+})
+
+await t('I-3 退出语音模式后，readAloud=always 的焦点会话恢复正常朗读', async () => {
+  reset()
+  assert.equal((await leaveVoice(VOICE_SID)).statusCode, 200)
+  await drive(FOCUS_SID, '焦点会话的回复。')
+  assert.ok(await waitFor((s) => spoken().includes('焦点会话的回复。')), '退出语音模式后焦点会话不朗读——always 语义被误伤')
 })
 
 rmSync(tmp, { recursive: true, force: true })

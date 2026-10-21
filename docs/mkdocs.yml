@@ -1,6 +1,6 @@
 # mkdocs.yml —— dsh-voice-mode 文档站（GitHub Pages，仅文档，不引入 CI）
 # 部署：本地 `mkdocs build` 产出 site/，由人工或一次性 `mkdocs gh-deploy` 推送 gh-pages 分支
-# 真源数字：v0.7.27 · 669 测试 · 兼容 dsh 0.2.1-rc.2（2026-10-21 刷新，R15 三个 Blocker 域落库后）
+# 真源数字：v0.7.27 · 678 测试 · 兼容 dsh 0.2.1-rc.2（2026-10-21 刷新，R15 三个 Blocker 域 + host 域落库后）
 site_name: dsh-voice-mode
 site_description: DeepSeek Harness 全双工语音插件文档 —— 边说边出字 · 按句朗读 · 开口即打断
 site_author: qishuilalala
