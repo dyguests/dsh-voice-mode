@@ -63,6 +63,26 @@ const NS_VOICE_MODE = 'voice-mode' as SettingsNamespace
 /** P2-4 显式回合状态（host 为准，SSE 'turn' 广播；barge-in = 状态迁移 + 三层清理）。 */
 type TurnState = 'idle' | 'listening' | 'finalizing' | 'agent-speaking'
 
+/** 「停止朗读」的静音记录：turn = 静音时的回合号（null = 未知），streams = 回合号未知期间已压住的流数。 */
+interface ReadMute {
+  turn: number | null
+  streams: number
+}
+
+/**
+ * R15（Issue #15 Important-10）：回合号**始终**不可得时的兜底解除条件。
+ *
+ * 漏网的那一格：取消时回合号未知（mutedAt=null）、且下一条流进来时回合号**仍然**未知 ——
+ * 按流解禁会把同一回合工具调用后的那条流放出来（Important-6 的缺陷在回合内复发）。故改为
+ * 「回合号不可知就继续压住」，用本计数兜底，保证不永久化。
+ *
+ * 取 4 的理由：agent 一回合里的模型调用数典型在 1–5（工具往返），4 条足以覆盖「同一回合的
+ * 后续 step」这个真正的目标；再大则会把用户下一整回合也压掉（无解禁入口，用户只能等）。
+ * **代价**：回合号恒不可得时（实测 `agent/pre-step` 自 0.1.1-rc.2 起全兼容区间都有，故这只
+ * 影响假想宿主）用户会多静默至多 3 条流——是「少读几句」而非「永久失聪」，方向安全。
+ */
+const MUTED_STREAMS_WITHOUT_TURN = 4
+
 /**
  * 插件 HTTP 命名空间（固定路径）。client bundle 以静态产物分发，无法感知
  * 宿主侧配置；若 basePath 可配置而客户端硬编码，一旦修改即分叉。故按
@@ -596,12 +616,11 @@ export function apply(ctx: Context, config: Config): void {
    * （client.tsx:1169-1176）——用户马上发下一条，刚「停止」的回复尾巴就在下一条开头重新出声，
    * 且这段云端合成本是白付的。
    *
-   * 口径（R15 Important-6 校正）：静音**活到回合边界**，不是活到下一条流。值 = 静音时的回合号
-   * （`turnOfSession.get`，取不到则为 null = 回合号未知）；解禁判据见 llm/stream tap 入口。
-   * 早先按流解禁的写法在带工具调用的回合里形同虚设：回合内 step2 的流一进来就解禁，余句照旧出声。
-   * 退出/让出/焦点转移时随 dropTurnTables 一并回收（防集合增长）。
+   * 口径（R15 Important-6 校正，Important-10 补格）：静音**活到回合边界**，不是活到下一条流。
+   * 值 = { turn: 静音时的回合号（取不到为 null = 未知）, streams: 回合号未知期间已压住的流数 }。
+   * 解禁判据见 llm/stream tap 入口。退出/让出/焦点转移时随 dropTurnTables 一并回收。
    */
-  const readMuted = new Map<string, number | null>()
+  const readMuted = new Map<string, ReadMute>()
   /**
    * R15（Issue #15 Important-6）：会话 → 当前回合号，由 `agent/pre-step` 维护
    * （每个 step 派发一次，回合内不变、跨回合递增 —— 契约 payload 带 `turn`）。
@@ -625,10 +644,25 @@ export function apply(ctx: Context, config: Config): void {
   // 迁移点：/asr partial → listening；/asr final=1 → finalizing；llm 首 token → agent-speaking；
   // 回合流结束 → listening（用户可随时开口接管）。barge-in = 状态迁移 + 三层清理（epoch 不动）。
   const turnStates = new Map<string, TurnState>()
-  const setTurn = (sessionId: string, state: TurnState): void => {
+  /**
+   * R15（Issue #15 Important-8）：`turn` 事件载荷带**回合身份**（turn = 回合号）。
+   *
+   * 背景：客户端拿不到回合身份，只能用两个代理信号推断「是否同一回合」——宿主会话态
+   * `running` 的上升沿（本仓注释自述其回合级语义，无法在本机核实；若实为流级则主路径同样
+   * 有按流解除的缺陷）与 `'tool'` 事件（工具调用后若回合没有后续 step，标记残留会让下一回合
+   * 的拒绝线被误判为同回合 → 该回合不朗读）。host 侧已有权威回合号真源（turnOfSession），
+   * 广播出去即可让这两个推断源退为老宿主兼容路径。
+   *
+   * turn 可为 undefined（非 agent 调用方 / 老宿主不派发 pre-step 时没有回合号）：
+   * JSON.stringify 丢弃 undefined 字段，故线上载荷就是**不含 turn 键**的旧形态——客户端在
+   * 缺字段时按现有推断路径工作，不崩、不静默失效。只有 tap（模型回合内的迁移）才带回合号：
+   * ASR 的 listening/finalizing 属于「用户说话」阶段、clearTurnState 的 idle 属于「回合已
+   * 结束」，两者都不属于某个模型回合，填一个可能已过期的回合号反而会误导客户端。
+   */
+  const setTurn = (sessionId: string, state: TurnState, turn?: number): void => {
     if (turnStates.get(sessionId) === state) return
     turnStates.set(sessionId, state)
-    broadcast('turn', { sessionId, state })
+    broadcast('turn', { sessionId, state, turn })
   }
   /** 回合世代：每次新 llm/stream（新回合）递增；旧回合迟到的 finally onTurn('listening')
    *  不得把新回合已推进的 'agent-speaking' 打回 listening（对抗审查 Important）。
@@ -1051,12 +1085,26 @@ export function apply(ctx: Context, config: Config): void {
     turnGen.set(sessionId, gen)
     // R15（Issue #15 Important-2 + Important-6 校正）：「停止朗读」的解禁判据是**回合边界**，
     // 不是「下一条流」——回合内的 step2（工具调用后那轮流）必须继续静音，否则停止朗读
-    // 在带工具调用的回合里形同虚设（余句照旧合成下发并计费）。当前回合号由 agent/pre-step
-    // 维护；取不到（老宿主不派发 / 非 agent 调用方）时退回按流解禁 = 旧行为，不产生新回归。
-    if (readMuted.has(sessionId)) {
-      const mutedAt = readMuted.get(sessionId) ?? null
+    // 在带工具调用的回合里形同虚设（余句照旧合成下发并计费）。当前回合号由 agent/pre-step 维护，
+    // 四种组合分别处置（Important-6 定主干，Important-10 补「两侧都未知」那一格）：
+    //  ① 有回合号且与基准不同 → 真正的下一回合 → 解禁；
+    //  ② 静音时未知、此刻可知 → **采纳基准**（回合中途才成为焦点/语音会话的那一格），此后按 ①；
+    //  ③ 此刻仍不可知 → **继续压住**（Important-10 修的就是这一格：早先在此解禁，等于把同一回合
+    //     工具调用后的那条流放出来），只由 MUTED_STREAMS_WITHOUT_TURN 计数兜底解除，绝不永久化；
+    //  ④ 静音时已知、此刻不可知 → 同样按 ③ 兜底（该形态实际不可达：turnOfSession 与 readMuted
+    //     由 dropTurnTables 同步增删），取保守方向。
+    const mute = readMuted.get(sessionId)
+    if (mute !== undefined) {
       const curTurn = turnOfSession.get(sessionId)
-      if (mutedAt === null || curTurn === undefined || curTurn !== mutedAt) readMuted.delete(sessionId)
+      if (curTurn === undefined) {
+        mute.streams += 1
+        if (mute.streams > MUTED_STREAMS_WITHOUT_TURN) readMuted.delete(sessionId)
+      } else if (mute.turn === null) {
+        mute.turn = curTurn // 采纳基准：静音持续到回合边界
+        mute.streams = 0
+      } else if (curTurn !== mute.turn) {
+        readMuted.delete(sessionId)
+      }
     }
     tapInFlight.add(sessionId) // R15（Important-4）：回收表项前据此避让仍在飞的流
     return tapActiveStream(
@@ -1065,6 +1113,11 @@ export function apply(ctx: Context, config: Config): void {
       queue,
       broadcast,
       (state) => {
+        // R15（Important-8）：回合号取自本流所属的回合。取在下面 reclaimFocusState **之前**是
+        // 防御性的：真正走到「回收 + 广播」这个组合时，下面的 turnGen 守卫会先把该 setTurn 拦掉
+        // （回收已清掉 turnGen）——即被回收的会话根本不再广播回合状态（静默回收的本意）。
+        // 先取后清保证「将来若放宽那道守卫，这里的载荷仍带着回合号」。
+        const turn = turnOfSession.get(sessionId)
         if (state === 'listening') {
           // onTurn('listening') 的唯一调用点是 tap 的 finally → 此刻该流确实结束。
           tapInFlight.delete(sessionId)
@@ -1074,7 +1127,7 @@ export function apply(ctx: Context, config: Config): void {
           }
         }
         if ((turnGen.get(sessionId) ?? 0) !== gen) return
-        setTurn(sessionId, state)
+        setTurn(sessionId, state, turn)
       },
       vset.readAloud !== 'off',
       () => readMuted.has(sessionId),
@@ -1645,10 +1698,20 @@ export function apply(ctx: Context, config: Config): void {
         collectBody(req, res, MAX_JSON_BODY, (body) => {
           let sessionId: string | undefined
           let keepAsr = false
+          // R15（Issue #15 Important-9）：区分「停止朗读」与「用户打断」。
+          // cancel 是五个语义完全不同的出口的共同出口（/cancel 停止朗读 · 用户打断 · 进模式 ·
+          // 退模式 · 会话让出），而对队列可见的输入**只有 sessionId 一个** —— 两者都可能发
+          // `keepAsr: true`，载荷层面不可分。fix-tts 用变异 N-4 证明：把回合闸门的清理挂进
+          // `queue.cancel()`，「停止朗读」后队列走到排空分支就会补发一条 tts-idle，把
+          // Important-1（回合间空档误发致 mode:once 提前退出）**重新引进来**。故把区分权
+          // 放回载荷：客户端按同一契约发 reason；缺省（老客户端 / 未带）一律视为「不是打断」
+          // ——保守方向：最多退 10s 兜底，绝不提前退出。
+          let isInterrupt = false
           try {
-            const parsed = JSON.parse(body || '{}') as { sessionId?: string; keepAsr?: unknown }
+            const parsed = JSON.parse(body || '{}') as { sessionId?: string; keepAsr?: unknown; reason?: unknown }
             sessionId = parsed.sessionId
             keepAsr = parsed.keepAsr === true
+            isInterrupt = parsed.reason === 'interrupt' // 精确比较：不做子串/模糊匹配
           } catch {
             // ignore malformed body
           }
@@ -1663,11 +1726,18 @@ export function apply(ctx: Context, config: Config): void {
             // ASR 段（按住说的前半句已上行，松手定稿以同一 epoch 增量续传，
             // 若 reset 会把 host 流清空导致定稿缺前半句——对抗审查第三轮 Blocker）。
             queue.cancel(sessionId)
+            // R15（Issue #15 Important-9）：回合以 abort / blocked / 空首步收场时，宿主**不**派发
+            // agent/turn-stopping（abort 走 catch 直接重抛、blocked 走 return false），openTurns
+            // 残留 → 回合闸门永不闭合 → 即便此后读尽也补不出 tts-idle，mode:once 只能等
+            // ONCE_STALL_MS=10s 静默兜底。abandonTurn 只清闸门、**不补发**（补不补由 host 的
+            // 上下文决定），且与上面 queue.cancel 语义**正交**：前者不碰 pending/在途，后者不碰
+            // openTurns —— 两者互不覆盖，无先后依赖，调换顺序结果相同。
+            if (isInterrupt) queue.abandonTurn(sessionId)
             // R15（Issue #15 Important-2 + Important-6 校正）：epoch 只作废**已入队**的句子，
             // 打断后仍在跑的 llm/stream 会把余句继续送进来（新 epoch 不作废）。此处记下
             // 「本回合静音 + 当时的回合号」，余句一律不入队（不合成、不计费、不下发）；
             // 解禁只发生在回合边界（tap 入口比对回合号），回合内的下一个 step 不解禁。
-            readMuted.set(sessionId, turnOfSession.get(sessionId) ?? null)
+            readMuted.set(sessionId, { turn: turnOfSession.get(sessionId) ?? null, streams: 0 })
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId)
           }
           respondJson(res, 200, { ok: true })

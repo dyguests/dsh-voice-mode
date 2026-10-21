@@ -57,6 +57,7 @@
     "verify": "node scripts/verify.mjs",
     "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p tsconfig.client.json --noEmit",
     "check:anchors": "node scripts/check-anchors.mjs",
+    "check:doc-anchors": "node scripts/check-doc-anchors.mjs",
     "typecheck:dual": "bash scripts/typecheck-dual.sh",
     "smoke:runtime": "bash scripts/smoke-runtime.sh",
     "verify:dual": "bash scripts/verify-dual.sh",

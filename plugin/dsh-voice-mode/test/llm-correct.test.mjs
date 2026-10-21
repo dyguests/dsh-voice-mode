@@ -141,18 +141,52 @@ await t('M-2：模型只回寒暄没给正文（剥成空串）→ 回退原文�
   )
 })
 
-await t('M-2：zh 侧寒暄词（好的/当然/好吧/行吧/是的）→ 寒暄不进用户消息', async () => {
+await t('M-2：zh 侧寒暄词（好的/当然/好吧/行吧/是的）→ 寒暄后面的说明头仍被前言护栏兜住', async () => {
   // 此前 zh 侧寒暄词一条测试都没有（只测了英文两个样例）——护栏在这半边是零覆盖。
+  // R5 起：寒暄剥离只用于「让前言正则看穿寒暄」，不再改写模型输出（见 M-6），
+  // 故这里的可观测量是「寒暄后面的说明头仍被兜住」。
   const src = '今天天气不错'
   for (const filler of ['好的，', '当然，', '好吧，', '行吧，', '是的，']) {
-    const out = filler + '今天天气不错。'
+    const out = filler + '修正后的文本：今天天气不错'
     assert.ok(out.length < Math.max(src.length * 3, src.length + 24), '前置条件：样例长度应低于长度护栏阈值')
     assert.equal(
       await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), src, 'zh'),
-      '今天天气不错。',
-      `寒暄「${filler}」未从输出里剥掉（寒暄不得进用户消息）`,
+      src,
+      `寒暄「${filler}」后面的说明头未被前言护栏兜住（元叙述不得进用户消息）`,
     )
   }
+})
+
+await t('M-6：用户原话以寒暄词开头时不得被削（输出原样保留问候）', async () => {
+  // 回归来源：上一批「剥后是正文 → 用剥后正文」把**用户自己说的**开头问候也削了：
+  //   「好的，我知道了。」→「我知道了。」；「Hi, what time is it」→「what time is it」；
+  //   「Hello there」→「there」（整句削成残句）——用户消息被静默改写后直接发出去。
+  // 判据：模型加的客套与用户自己说的问候在输出里形态完全相同，且模型输出与用户原话
+  //   之间没有可靠对应关系 → **无法区分** → 剥后的串只用于前言判定，绝不作为输出。
+  for (const [src, lang] of [
+    ['好的，我知道了。', 'zh'],
+    ['Hi, what time is it', 'en'],
+    ['Hello there', 'en'],
+  ]) {
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: src }]), src, lang),
+      src,
+      `用户原话以寒暄开头却被削（用户的话被静默改写）：${src}`,
+    )
+  }
+  // 模型把用户的问候保留、只改了标点 → 问候同样必须原样保留。
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '好的，我知道了!' }]), '好的，我知道了。', 'zh'),
+    '好的，我知道了!',
+    '用户自己的问候被削掉了（只该改标点，不该削问候）',
+  )
+  // 保守取舍：模型给「本来没有寒暄」的原话加了寒暄 → 寒暄保留（不改写用户的话），
+  // 而不是把它剥掉——剥了就无法保证剩下的是用户的原话（见 M-6 注释）。
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '好的，我知道了。' }]), '我知道了。', 'zh'),
+    '好的，我知道了。',
+    '模型加的寒暄被剥掉了（保守口径：宁可保留寒暄，也不改写用户的话）',
+  )
 })
 
 await t('M-2：叠着寒暄（好的，当然，这是修正结果：…）→ 回退原文（循环剥离 + 说明头命中）', async () => {

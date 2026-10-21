@@ -33,6 +33,10 @@ jobs:
       # 本地门禁发现，升级 dsh 前先红一步，避免「升级后客户端静默挂不上」。
       - name: Anchor health check
         run: npm run check:anchors
+      # 文档 file:line 锚点守卫（Issue #15 R15）：代码批每次改动 src 都会批量作废文档锚点，
+      # 该缺陷已复发两轮，故加机械守卫——新增锚点债务即红（exit 2），历史债务记在基线文件里。
+      - name: Doc anchor health check
+        run: npm run check:doc-anchors
 
   # 安装形态门禁：link/源码态测不出「别人从 npm 安装」的缺陷（0.7.17 及更早版本在 pnpm 11 / npm 全新安装、
   # dsh ≥0.1.7 已安装形态下无法使用，见 docs/adr/0011）。此 job 对打包产物做 pnpm(严格 build 脚本策略)+npm 全新安装并 import，

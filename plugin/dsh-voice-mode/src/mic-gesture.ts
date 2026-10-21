@@ -119,6 +119,161 @@ export function decayConfirmCount(count: number, abandon: () => void): number {
 }
 
 /* ---------------------------------------------------------------------------
+ * 「停止朗读」拒绝线（客户端侧第二道防线）
+ *
+ * host 侧的静音闸门（readMuted）已按**回合**解禁，客户端这条拒绝线早期按**流**解禁
+ * → 回合内 step2 的流（工具调用后的后续作答）会把 client 侧这半道防线撤掉。
+ * ------------------------------------------------------------------------- */
+
+/** 收到 'turn' agent-speaking 时，是否解除该会话的「停止朗读」整回合拒绝线。
+ *
+ *  口径必须与 host 侧一致（host 按**回合**解禁，client 早期按**流**解禁 → 回合内
+ *  step2 的流（工具调用后的后续作答）会把 client 侧这半道防线撤掉）。
+ *
+ *  判据优先级：
+ *  ① **权威回合号**（host 的 'turn' 载荷带 turn 键时）：回合号相同 = 同一回合 → 不解除。
+ *     turn 键可能**缺席**（老宿主不派发 agent/pre-step、或该会话本回合中途才成为焦点）——
+ *     缺席不是 null，是键不存在 → 走 ②。
+ *  ② **代理信号**（回合号不可得时）：'tool' 事件标记的「回合内后续 step」→ 不解除。
+ *  ③ 都不判得出 → 沿用旧行为（解除），保证老宿主上的行为**不回归**。
+ *  untilNextRun（宿主提供 running 时为真）由 runStarted（回合边界）解除，本函数一律不解除。 */
+export function shouldReleaseStopLine(o: {
+  /** 该会话当前挂着「停止朗读」的整回合拒绝线 */
+  hasStopLine: boolean
+  /** 「等到下一回合才解除」模式（宿主提供 running 时为真） */
+  untilNextRun: boolean
+  /** 本次 'turn' 事件携带的权威回合号（载荷缺 turn 键时为 undefined） */
+  turn?: number
+  /** 该会话**最近一次**带回合号的 'turn' 事件里的回合号（undefined = 还没见过） */
+  lastTurn?: number
+  /** 代理信号：本次 agent-speaking 之前出现过工具调用（= 同一回合的后续 step） */
+  sameRoundContinuation: boolean
+}): boolean {
+  if (!o.hasStopLine) return false
+  if (o.untilNextRun) return false
+  // ① 权威回合号可用 → 直接比回合号（相同 = 同一回合 → 不解除）。
+  if (o.turn !== undefined && o.lastTurn !== undefined) return o.turn !== o.lastTurn
+  // ② 回合号不可得 → 退回代理信号（老宿主 / 载荷缺 turn 键）。
+  if (o.sameRoundContinuation) return false
+  // ③ 判不出 → 旧行为（解除），老宿主上不回归。
+  return true
+}
+
+/* ---------------------------------------------------------------------------
+ * /cancel 载荷
+ * ------------------------------------------------------------------------- */
+
+/** /cancel 的载荷：reason 区分「停止朗读」与「用户打断」——host 侧靠它决定是否
+ *  abandonTurn（回合闸门）。host 侧对**缺省** reason 按保守方向处理（**不**调
+ *  abandonTurn）：老客户端不发 reason，而老客户端的 /cancel 无法区分两种语义；
+ *  把「停止朗读」误当打断 → 清闸门 → 队列排空分支补发 tts-idle → mode:once 提前
+ *  退出（R15 Important-1 回归，用户可见）；而闸门残留最多让 mode:once 走 10s 静默
+ *  兜底才退出，代价小得多。**保守方向是安全的。** */
+export function cancelPayload(o: {
+  sessionId: string
+  keepAsr: boolean
+  reason: 'stop-reading' | 'interrupt'
+}): string {
+  return JSON.stringify({ sessionId: o.sessionId, keepAsr: o.keepAsr, reason: o.reason })
+}
+
+/* ---------------------------------------------------------------------------
+ * 辅助点击（macOS 的 ctrl+click）
+ * ------------------------------------------------------------------------- */
+
+/** 这次 pointerdown 是否是**辅助点击**（macOS 的 ctrl+click：系统「Secondary click」关闭时
+ *  右键 = ctrl+click，浏览器派发 button=0 + ctrlKey=true 的 pointerdown + contextmenu）。
+ *  WebKit（Safari）还会为它**额外派发一个 click** → 那个 click 若被当成普通点击，
+ *  「右键开快捷设置菜单」会顺带切一次语音模式（最坏是打开麦克风）。
+ *  标志由 pointerdown 写入、click 消费；**任何非辅助点击的 pointerdown 都会把它清掉**
+ *  ——Blink/Gecko 的 ctrl+click 不派发 click，残留标志会误抑制之后的正常左键 click。 */
+export function auxClickPending(button: number, opts: { mac: boolean; ctrlKey: boolean }): boolean {
+  return button === 0 && opts.mac && opts.ctrlKey
+}
+
+/* ---------------------------------------------------------------------------
+ * 手势收尾（pointerup）
+ * ------------------------------------------------------------------------- */
+
+/** 抬起是否是我们 arm 的那次手势的收尾。
+ *  判据是「同 pointerId + **同按键**」：
+ *  - 鼠标所有按键共用一个 pointerId → 还须比按键：右键抬起（button=2）不是手势结束；
+ *  - **修饰键不参与**判据：arm 的是主键，抬手时 Ctrl 仍按下也照样收尾（否则打断计时器
+ *    不清、holding 态不退、引擎持续收音，交互态卡住）。 */
+export function isGestureEnd(
+  armed: { id: number; button: number } | null,
+  up: { id: number; button: number },
+): boolean {
+  if (!armed) return false
+  return armed.id === up.id && armed.button === up.button
+}
+
+/* ---------------------------------------------------------------------------
+ * /focus 上报
+ * ------------------------------------------------------------------------- */
+
+/** /focus 上报失败的处置：区分「可恢复的瞬时」与「语义拒绝」。
+ *  403 = host 不认识该会话（会话表滞后于客户端）→ 语义拒绝：先退避补报一次，
+ *  仍被拒才留痕（避免每次都弹提示）；网络失败 / 其它状态 → 静默（瞬时，不制造噪音）。 */
+export function focusFailureAction(status: number | null, attempt: number): 'retry-later' | 'report-once' | 'silent' {
+  if (status !== 403) return 'silent'
+  return attempt === 1 ? 'retry-later' : 'report-once'
+}
+
+/** /focus 上报结果。 */
+export interface FocusReportResult {
+  /** 是否被 host 接受 */
+  ok: boolean
+  /** 是否留痕（语义拒绝且补报后仍被拒） */
+  reported: boolean
+  /** 实际发出的请求次数 */
+  attempts: number
+}
+
+/** /focus 上报：host 侧会话表可能滞后于客户端持有的会话（未知会话 → 403 unknown_session），
+ *  早期实现从不看响应状态码 → 403 被完全静默吞掉 → 焦点静默失败、readAloud=always 整页
+ *  不朗读而用户看不到任何原因。这里：403 → 退避补报一次，仍 403 → 留痕一次；
+ *  网络失败 / 其它状态 → 静默（fire-and-forget 的既有语义，不制造噪音）。 */
+export async function reportFocus(o: {
+  sessionId: string | null
+  /** 发一次请求（返回 HTTP 状态码）；抛错 = 网络失败 */
+  fetchImpl: () => Promise<{ status: number }>
+  /** 补报前的等待（可注入，便于测试） */
+  wait?: (ms: number) => Promise<void>
+  /** 语义拒绝且补报后仍被拒时的留痕回调。**文案由调用方给**——本模块不写中文字面量
+   *  （mic-gesture.ts 不在 strings-coverage 的白名单里，文案一律走调用方）。 */
+  warn?: (detail: { sessionId: string | null; status: number }) => void
+  /** 补报等待毫秒 */
+  retryMs?: number
+}): Promise<FocusReportResult> {
+  const wait = o.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const warn = o.warn ?? (() => {})
+  const retryMs = o.retryMs ?? 800
+  let attempts = 0
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    attempts++
+    let status: number
+    try {
+      status = (await o.fetchImpl()).status
+    } catch {
+      // 网络失败：可重试的瞬时，且 fire-and-forget 的既有语义就是静默 → 不留痕。
+      return { ok: false, reported: false, attempts }
+    }
+    const action = focusFailureAction(status, attempt)
+    if (action === 'silent') return { ok: status >= 200 && status < 300, reported: false, attempts }
+    if (action === 'retry-later') {
+      // 让出焦点（sessionId=null）不需要补报；补报的是「host 还不认识这个会话」。
+      if (o.sessionId === null) return { ok: false, reported: false, attempts }
+      await wait(retryMs)
+      continue
+    }
+    warn({ sessionId: o.sessionId, status })
+    return { ok: false, reported: true, attempts }
+  }
+  return { ok: false, reported: false, attempts }
+}
+
+/* ---------------------------------------------------------------------------
  * 焦点归属（实例级所有权）
  *
  * 同一标签页里可能同时存在多个 MicButton 实例（宿主把麦克风按钮挂在

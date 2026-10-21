@@ -83,7 +83,13 @@ export const OUTPUT_FORMAT = { AUDIO_24KHZ_48KBITRATE_MONO_MP3: 'audio-24khz-48k
 export class MsEdgeTTS {
   async setMetadata() {}
   toStream() {
-    const audioStream = (async function* () { yield Buffer.from([0xff, 0xfb, 0x90, 0x00]) })()
+    // globalThis.__ttsDelayMs：让某句合成**悬在途**（⑫ 段要制造「/cancel 到达时 pump 仍在跑」
+    // 的时序，否则排空分支已经过去，观察不到「回合闸门是否合上」）。缺省 0 = 立即返回。
+    const audioStream = (async function* () {
+      const d = Number(globalThis.__ttsDelayMs ?? 0)
+      if (d > 0) await new Promise((r) => setTimeout(r, d))
+      yield Buffer.from([0xff, 0xfb, 0x90, 0x00])
+    })()
     return { audioStream }
   }
   async close() {}
@@ -649,6 +655,10 @@ await t('I-2 无可读文本（readAloud=off）的回合结束时仍收到 tts-i
 
 await t("I-2' 「停止朗读」后本回合余句不再入队（不合成、不下发、不计费）", async () => {
   reset()
+  // 先给一个回合身份：真实宿主每个 step 都会派发 agent/pre-step（回合号真源），静音记的是
+  // 「回合 40」。不派发的话静音会记成「回合号未知」，按 R15 Important-6 的采纳规则，下一条流
+  // 会把**它所属的回合**当成基准 → 紧接着的「下一回合恢复朗读」用例首句就被静音（前提不成立）。
+  preStep(VOICE_SID, 40)
   const it = openTap(VOICE_SID, ['打断前的第一句。', '打断后的余句。', '以及没说完的尾巴'])
   await it.next() // 首句入队
   assert.ok(await waitFor((s) => spoken().includes('打断前的第一句。')), '首句没合成')
@@ -867,17 +877,41 @@ await t('H-6 回合内的下一个 step（工具调用后）不得解除静音�
   assert.ok(await waitFor((s) => spoken().includes('新回合的话。')), '新回合没恢复朗读——回合号递增时必须解禁')
 })
 
-await t('H-6 pre-step 未派发时退回按流解禁（老宿主降级：不得变成永久静音）', async () => {
-  reset()
-  // 模拟「老宿主不派发 agent/pre-step」：先把该会话的回合号表清空（焦点离开 → dropTurnTables），
-  // 之后全程不派发 pre-step → /cancel 记下的是「回合号未知」。
+// 模拟「回合号不可得」：先把该会话的回合号表清空（焦点离开 → dropTurnTables），之后不派发 pre-step。
+const muteWithoutTurnNumber = async (sid) => {
   await postFocus({ sessionId: OTHER_SID, tabId: 'tab-W' })
-  await focusVoice()
-  await drive(TURN_SID, '未知回合号的首句。')
-  assert.ok(await waitFor((s) => spoken().includes('未知回合号的首句。')), '前置条件：首句没合成')
-  await postCancel(TURN_SID)
-  await drive(TURN_SID, '未知回合号的次句。') // 无 pre-step → 回合号取不到 → 退回按流解禁
-  assert.ok(await waitFor((s) => spoken().includes('未知回合号的次句。')), '回合号不可得时变成永久静音——老宿主会彻底失去朗读')
+  await postFocus({ sessionId: sid, tabId: 'tab-W' })
+  await drive(sid, '回合号未知前的首句。')
+  assert.ok(await waitFor((s) => spoken().includes('回合号未知前的首句。')), '前置条件：首句没合成')
+  const r = await postCancel(sid)
+  assert.equal(r.statusCode, 200, `前置条件：/cancel 未成功（statusCode=${r.statusCode}）——静音态没建立`)
+}
+
+await t('H-10 取消时与下一条流的回合号**都**未知 → 同回合的后续流不得解禁（Important-6 不许在回合内复发）', async () => {
+  reset()
+  const SID = 'live-noturn-16'
+  await muteWithoutTurnNumber(SID)
+  // 取消后仍不派发 pre-step → 下一条流进来时回合号**仍然**取不到。早先的实现在此解禁，
+  // 于是同一回合工具调用后的那条流被放出来（Important-6 的缺陷在回合内复发）。
+  await drive(SID, '同回合工具后的正文。')
+  await sleep(60)
+  drain()
+  assert.equal(spoken().includes('同回合工具后的正文。'), false, '回合号两侧都未知时解禁了——同回合的 step2 被放出来')
+})
+
+await t('H-10 兜底：回合号**永远**不可得时，静音有界释放（不永久化）', async () => {
+  reset()
+  const SID = 'live-noturn-17'
+  await muteWithoutTurnNumber(SID)
+  // 计数兜底：回合号一直不可得 → 压住 MUTED_STREAMS_WITHOUT_TURN 条流后必须恢复朗读。
+  for (let i = 1; i <= 4; i++) {
+    await drive(SID, `兜底内的第${i}条。`)
+    await sleep(40)
+    drain()
+    assert.equal(spoken().includes(`兜底内的第${i}条。`), false, `第 ${i} 条流不该解禁（兜底上限内）`)
+  }
+  await drive(SID, '兜底之后的话。')
+  assert.ok(await waitFor((s) => spoken().includes('兜底之后的话。')), '回合号永远不可得时静音永久化——用户会彻底失去朗读')
 })
 
 await t('H-7 回合以 error 收场（无 turn-stopping）→ agent/error 兜底补发 tts-idle', async () => {
@@ -892,6 +926,176 @@ await t('H-7 回合以 error 收场（无 turn-stopping）→ agent/error 兜底
   // `if (turnEnds && inbox.nextStep.length === 0)` 内派发），此时 openTurns 会残留。
   agentError(TURN_SID)
   assert.ok(await waitFor((s) => idles(TURN_SID) === 1), `error 收场后没有补发 tts-idle（×${idles(TURN_SID)}）——mode:once 会退 10s 兜底`)
+})
+
+// ---------------------------------------------------------------- ⑪ turn 载荷带回合身份 + 静误解禁窗口
+// Issue #15 R15-13（H-8）：客户端拿不到回合身份，只能用 `running` 上升沿 / `tool` 事件两个
+//   代理信号推断「是否同一回合」。host 侧已有权威回合号真源（turnOfSession），广播出去即可。
+//   turn 为可选字段：缺失时载荷就是旧形态，客户端退回现有推断路径（兼容锁）。
+console.log('⑪ turn 载荷回合身份 + 静音「回合号未知」窗口')
+
+const turnsOf = (sid, state) =>
+  seen.filter((f) => f.event === 'turn' && f.data.sessionId === sid && (!state || f.data.state === state)).map((f) => f.data.turn)
+
+await t('H-8 turn 事件载荷带回合号：同一回合的两个 step 相同、跨回合不同', async () => {
+  reset()
+  assert.equal((await focusVoice()).statusCode, 200, '前置条件：TURN_SID 未成为焦点（不会被 tap）')
+  preStep(TURN_SID, 81, 1)
+  await drive(TURN_SID, '回合一的甲。') // step1
+  preStep(TURN_SID, 81, 2)
+  await drive(TURN_SID, '回合一的乙。') // step2 = 同一回合（工具调用后）
+  preStep(TURN_SID, 82, 1)
+  await drive(TURN_SID, '回合二的丙。') // 下一个回合
+  drain()
+  assert.deepEqual(
+    turnsOf(TURN_SID, 'agent-speaking'),
+    [81, 81, 82],
+    '回合号缺失或错乱：客户端无法区分「同回合的下一个 step」与「下一回合」',
+  )
+  assert.deepEqual(turnsOf(TURN_SID, 'listening'), [81, 81, 82], '回合收尾的 listening 也必须带回合号（否则该回合无法判别）')
+})
+
+await t('H-8 兼容锁：回合号不可得时 turn 字段**缺席**（不是 null），旧客户端按现有推断路径工作', async () => {
+  reset()
+  // 老宿主 / 非 agent 调用方：pre-step 不派发 → 没有回合号。载荷必须退成旧形态。
+  await postFocus({ sessionId: OTHER_SID, tabId: 'tab-W' }) // 清掉 TURN_SID 的回合号
+  await focusVoice()
+  await drive(TURN_SID, '没有回合号的一句。')
+  drain()
+  const speaking = seen.filter((f) => f.event === 'turn' && f.data.state === 'agent-speaking' && f.data.sessionId === TURN_SID)
+  assert.equal(speaking.length, 1, '前置条件：本回合没有 agent-speaking 广播')
+  assert.ok(!('turn' in speaking[0].data), `回合号不可得时不应带 turn 键（实际 ${JSON.stringify(speaking[0].data)}）`)
+  assert.equal(speaking[0].data.sessionId, TURN_SID)
+  assert.equal(speaking[0].data.state, 'agent-speaking')
+})
+
+await t('H-8 焦点在流中途丢失 → 该流收尾不再广播回合状态（会话已被静默回收，无监听方）', async () => {
+  reset()
+  const LOST_SID = 'live-lost-14'
+  assert.equal((await postFocus({ sessionId: LOST_SID, tabId: 'tab-W' })).statusCode, 200)
+  preStep(LOST_SID, 95)
+  const it = openTap(LOST_SID, ['焦点丢失前的一句。', '焦点丢失后的半句'])
+  await it.next() // 首 token → agent-speaking（此刻仍在焦点内，带回合号 95）
+  drain()
+  assert.deepEqual(turnsOf(LOST_SID, 'agent-speaking'), [95], '前置条件：没有带回合号的 agent-speaking')
+  // 焦点在流进行中被移走 → 该会话的回合表项会在它的 tap finally 里被回收（dropTurnTables）
+  assert.equal((await postFocus({ sessionId: OTHER_SID, tabId: 'tab-W' })).statusCode, 200)
+  await it.next() // 迭代到底 → finally：回收表项 → turnGen 守卫拦下收尾广播
+  drain()
+  assert.deepEqual(
+    turnsOf(LOST_SID),
+    [95],
+    '被回收的会话仍在广播回合状态——静默回收被绕过了（客户端会收到一个没有归属的 listening）',
+  )
+})
+
+await t('H-6 窗口：/cancel 早于该会话首次 pre-step（回合中途才被静音）→ 采纳基准，静音守住到回合边界', async () => {
+  reset()
+  // 独立会话：/cancel 的「每会话 2 次/秒」限流桶在 ⑩ 段已被 TURN_SID 用满，复用会拿到 429、
+  // 静音根本没建立（用例前提不成立却静默通过）。
+  const WINDOW_SID = 'live-window-13'
+  const focusWindow = () => postFocus({ sessionId: WINDOW_SID, tabId: 'tab-W' })
+  // 造出「回合号还没写、但用户已按停止朗读」：本回合不派发 pre-step（会话中途才被 tap）。
+  assert.equal((await focusWindow()).statusCode, 200, '前置条件：新会话未成为焦点（不会被 tap）')
+  await drive(WINDOW_SID, '窗口里的首句。') // 无 pre-step → turnOfSession 无该会话
+  assert.ok(await waitFor((s) => spoken().includes('窗口里的首句。')), '前置条件：首句没合成')
+  const cancelRes = await postCancel(WINDOW_SID)
+  assert.equal(cancelRes.statusCode, 200, `前置条件：/cancel 未成功（statusCode=${cancelRes.statusCode}）——静音态没建立`)
+  preStep(WINDOW_SID, 91, 2) // 同回合的 step2 终于带上回合号
+  await drive(WINDOW_SID, '窗口内的余句。')
+  await sleep(60)
+  drain()
+  assert.equal(
+    spoken().includes('窗口内的余句。'),
+    false,
+    '回合号未知的静音在同回合内被解除——H-6 在该窗口内失效',
+  )
+  preStep(WINDOW_SID, 92) // 真正的下一回合 → 解禁
+  await drive(WINDOW_SID, '窗口之后的新回合。')
+  assert.ok(await waitFor((s) => spoken().includes('窗口之后的新回合。')), '窗口修完后回合边界仍不解禁')
+})
+
+// ---------------------------------------------------------------- ⑫ /cancel 的 reason 判别（回合闸门）
+// Issue #15 R15-14（H-9）：回合以 abort / blocked / 空首步收场时宿主不派发
+//   `agent/turn-stopping`，openTurns 残留 → 回合闸门永不闭合 → 读尽也补不出 tts-idle，
+//   mode:once 退 ONCE_STALL_MS=10s 静默兜底。队列侧原语 `abandonTurn`（只合闸门、不补发）
+//   已由 fix-tts 落库，本段锁 host 侧的接线与**反向判别**。
+console.log('⑫ /cancel reason：interrupt 合闸门 / 停止朗读与缺省不合闸门')
+
+const cancelAs = (sid, extra) =>
+  awaitRes(
+    get('/voice-mode/cancel', makeReq({ url: '/voice-mode/cancel', body: JSON.stringify({ sessionId: sid, keepAsr: true, ...extra }) })),
+  )
+/** 让「/cancel 到达时该句仍在合成中」——否则 pump 的 finally 早已过去，观察不到闸门状态。 */
+const withSynthesisInFlight = async (fn) => {
+  globalThis.__ttsDelayMs = 150
+  try {
+    await fn()
+  } finally {
+    globalThis.__ttsDelayMs = 0
+  }
+}
+
+await t("H-9 reason='interrupt' → 合回合闸门：本回合读尽后补发 tts-idle", async () => {
+  reset()
+  const SID = 'live-int-15'
+  assert.equal((await postFocus({ sessionId: SID, tabId: 'tab-W' })).statusCode, 200)
+  preStep(SID, 101)
+  await withSynthesisInFlight(async () => {
+    await drive(SID, '打断前的话。') // 合成悬在途
+    drain()
+    assert.equal(idles(SID), 0, '前置条件：回合未结束时不该有 tts-idle（闸门本应开着）')
+    assert.equal((await cancelAs(SID, { reason: 'interrupt' })).statusCode, 200)
+    assert.ok(await waitFor(() => idles(SID) === 1, 2000), `interrupt 后没有补发 tts-idle（×${idles(SID)}）——回合闸门没合上`)
+  })
+})
+
+await t("H-9 反向锁①：reason='stop-reading' → **不合**闸门（防止 R15 Important-1 复发）", async () => {
+  reset()
+  const SID = 'live-stop-15'
+  assert.equal((await postFocus({ sessionId: SID, tabId: 'tab-W' })).statusCode, 200)
+  preStep(SID, 102)
+  await withSynthesisInFlight(async () => {
+    await drive(SID, '停止朗读前的话。')
+    drain()
+    assert.equal((await cancelAs(SID, { reason: 'stop-reading' })).statusCode, 200)
+    await sleep(300) // 等在途句作废 → pump 走到排空分支
+    drain()
+    assert.equal(idles(SID), 0, '停止朗读也合上了回合闸门——回合仍在进行，补发 tts-idle 会让 mode:once 提前退出')
+  })
+})
+
+await t('H-9 反向锁②：缺省 reason（老客户端 / 未带）→ **不合**闸门', async () => {
+  reset()
+  const SID = 'live-none-15'
+  assert.equal((await postFocus({ sessionId: SID, tabId: 'tab-W' })).statusCode, 200)
+  preStep(SID, 103)
+  await withSynthesisInFlight(async () => {
+    await drive(SID, '老客户端打断前的话。')
+    drain()
+    assert.equal((await cancelAs(SID, {})).statusCode, 200, '缺省 reason 必须仍然放行（老客户端兼容）')
+    await sleep(300)
+    drain()
+    assert.equal(idles(SID), 0, '缺省 reason 合上了回合闸门——老客户端上会重新引入 Important-1')
+  })
+})
+
+await t("H-9 reason 的类型校验：只有精确的 'interrupt' 生效（子串/其它值都不合闸门）", async () => {
+  reset()
+  for (const bad of ['INTERRUPT', 'interrupt-soft', 'stop-reading-interrupt', 1, true]) {
+    const SID = `live-bad-${String(bad).replace(/[^a-z0-9]/gi, '')}-${typeof bad}`
+    assert.equal((await postFocus({ sessionId: SID, tabId: 'tab-W' })).statusCode, 200, `前置条件：${String(bad)} 用例的会话未就绪`)
+    preStep(SID, 104)
+    await withSynthesisInFlight(async () => {
+      await drive(SID, `非法 reason ${String(bad)} 的话。`)
+      drain()
+      assert.equal((await cancelAs(SID, { reason: bad })).statusCode, 200)
+      await sleep(300)
+      drain()
+      assert.equal(idles(SID), 0, `reason=${JSON.stringify(bad)} 竟合上了回合闸门——判据必须是精确比较`)
+    })
+    reset()
+  }
 })
 
 rmSync(tmp, { recursive: true, force: true })

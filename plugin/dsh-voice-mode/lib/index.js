@@ -1220,7 +1220,38 @@ async function listEdgeVoices(force = false) {
   }
 }
 var TtsQueue = class {
+  /**
+   * 各会话队列：只在**有活**时存在（见 pump finally 的退休处置），不再随历史会话数增长。
+   *
+   * R15（Issue #15 T-3）：本表原先每会话留一个空 SessionQueue 且永不回收，而所有对外
+   * 清理入口都是 cancel()（index.ts:1007/1376/1390/1409/1665）——cancel 按设计必须保留
+   * 队列对象，故 turn 退出路径下这张表只增不减（量级 = 历史会话数，非本次回归）。
+   * 真正的回收点只能是「队列已排空、泵已收工」的那一刻。
+   *
+   * 【不变式：seq 单调】回收绝不能让某会话的 sentenceId 归零或回退——client 的
+   * rejectSeqUpTo（client.tsx:1359/1385，`frame.sentenceId <= rejectLine` 即丢弃）记的是
+   * 「本会话已见过的最大句号」，新句必须**大于**它，否则新回复前 N 句被静默丢弃（静音）。
+   * 这正是 index.ts:1376/1409 与 setEngine B1 都写明「用 cancel 而非 prune 保 seq 连续」
+   * 的同一条理由，也是不用 prune() 回收的直接原因。
+   * 故 seq 已上移为本类的全局计数器（见下方 seq），会话维度不再持有任何 seq 状态——
+   * 这样「回收」与「seq 不归零」不再互相排斥：会话回来时拿到的必然是一个比它历史上
+   * 任何一句都大的句号（全局单调在会话上的投影必然严格递增）。
+   */
   queues = /* @__PURE__ */ new Map();
+  /**
+   * 句序号发号器（**全局**，非每会话）。
+   *
+   * 为什么不是每会话：每会话 seq 必须活到会话彻底消失，可任何「活到会话消失」的形态
+   * （墓碑表、有界 LRU 淘汰）都只是把同一张永不回收的表换个名字——LRU 淘汰后该会话再回来
+   * 仍会 seq 归零，仍撞 rejectSeqUpTo。全局计数器则让「会话维度 seq 状态」根本不存在，
+   * 回收得以无条件成立。
+   *
+   * 只在成功广播时自增（pump 的 `const sentenceId = this.seq++` 位于成功分支内），
+   * 与改动前逐字等价。client 只把 sentenceId 用于**比较**（`> rejectLine` 放行、
+   * `!== curSentenceId` 重建拼帧缓冲），从不假设连续或小值——见 client.tsx:1354
+   * 「host 的 sentenceId 跨回合单调递增，新回合必然 > 线」。
+   */
+  seq = 0;
   listeners = /* @__PURE__ */ new Set();
   engine;
   /** TTS 全体不可达通知（每会话去重，成功后复位）。 */
@@ -1319,6 +1350,33 @@ var TtsQueue = class {
     const q = this.queues.get(sessionId);
     return !q || !q.busy && q.pending.length === 0;
   }
+  /**
+   * R15（Issue #15 T-4）：回合作废——本轮**不会再有任何后续文本**，但与「回合正常结束」
+   * （noteTurnEnd）不同的一点是：**不补发 onIdle**。
+   *
+   * 为何队列侧无法自行判断 abort（宿主侧实测 + 本文件调用点实测）：
+   *  · 回合 abort 时宿主是 `catch → 直接重抛`：不派发 `agent/turn-stopping`、不派发
+   *    `agent/error`、不经本插件的任何入口——队列侧**收不到任何信号**，无法自愈；
+   *  · 唯一在队列侧与 abort「沾边」的入口是 cancel()，但它是五处语义完全不同的出口的
+   *    共同出口，对队列可见的输入**只有 sessionId 一个**：/cancel「停止朗读」与用户打断
+   *    (index.ts:1665)、进模式 (:1376)、退模式 (:1409)、会话让出 (:1007/:1390)。
+   *    在 cancel() 里清 openTurns，「停止朗读」后队列排空就会补发一条 tts-idle → 把
+   *    R15 Important-1（回合间空档误发致 mode:once 提前退出、后半段永不朗读）**重新
+   *    引进来**。故这里刻意不挂 cancel()，宁可把区分权交回 host。
+   *
+   * 语义（与 noteTurnEnd 唯一的差别就是不发 onIdle）：
+   *  · 只合闸门（清 openTurns）：此后该会话若还有句子读尽，pump finally 会正常补发；
+   *    下一回合的 enqueue 也照常重开闸门，语义与 noteTurnEnd 之后完全一致。
+   *  · 不主动补发：abort 时队列可能已空，此时该不该让 mode:once 立即收尾取决于 host
+   *    的上下文（用户是否马上又要开口），队列无从判断。若 host 判定「abort 前已读尽」，
+   *    在其后紧接一次 noteTurnEnd(sessionId) 即可补发（两次调用对 openTurns 幂等）。
+   *
+   * 接线点：宿主侧在判定回合被 abort / blocked / 空首步时调用（这三类路径都不派发
+   * agent/turn-stopping——error 半边已由 ctx.on('agent/error') 覆盖，见 index.ts:1112）。
+   */
+  abandonTurn(sessionId) {
+    this.openTurns.delete(sessionId);
+  }
   /** 当前引擎音频 MIME（/preview 的 Content-Type 也用它）。 */
   get mime() {
     return this.engine.mime;
@@ -1335,8 +1393,10 @@ var TtsQueue = class {
    *     sentenceId 拒绝线（rejectSeqUpTo）是「旧会话遗留的最大句号」，新回复前 N 句
    *     全部 ≤ 线被静默丢弃——正是 /toggle 用 cancel 而非 prune 保 seq 连续的同一条
    *     不变式（index.ts:1177 进模式 cancel / :1191 让出旧会话 cancel(previous) / :1210 退出 cancel）。
-   * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身
-   * （seq 连续递增，跨引擎切换不归零）。
+   * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身。
+   * R15 T-3 后这条顾虑的一半已由构造消除：seq 是**全局**发号器（不再随队列存亡），
+   * 故即便队列对象事后被回收，重入的会话拿到的句号仍必然 > 旧线；但 epoch 仍必须
+   * 逐队列提升才能压住孤儿泵，那部分保留原样。
    */
   setEngine(engine) {
     const old = this.engine;
@@ -1395,7 +1455,7 @@ var TtsQueue = class {
     if (this.awaitTurnEnd) this.openTurns.add(sessionId);
     let q = this.queues.get(sessionId);
     if (!q) {
-      q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 };
+      q = { pending: [], busy: false, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 };
       this.queues.set(sessionId, q);
     }
     if (q.pending.length >= 500) {
@@ -1459,7 +1519,7 @@ var TtsQueue = class {
         q.errorNotified = false;
         q.failStreak = 0;
         q.backoff = 0;
-        const sentenceId = q.seq++;
+        const sentenceId = this.seq++;
         const mime = this.engine.mime;
         const dataFrame = {
           sessionId,
@@ -1508,6 +1568,7 @@ var TtsQueue = class {
           } catch {
           }
         }
+        this.queues.delete(sessionId);
       } else {
         const delay = q.errorNotified ? q.backoff : 0;
         q.backoff = Math.min(8e3, delay + 1e3);
@@ -2500,7 +2561,6 @@ async function correctText(ctx, text, lang) {
     if (noFiller !== corrected) {
       if (noFiller === "") return text;
       if (CORRECTION_PREAMBLE_RE.test(noFiller)) return text;
-      return noFiller;
     }
     return corrected || text;
   } catch {
@@ -2635,6 +2695,7 @@ function readLegacyVoiceSettings(dir, keys) {
 // src/index.ts
 var name = "voice-mode";
 var NS_VOICE_MODE = "voice-mode";
+var MUTED_STREAMS_WITHOUT_TURN = 4;
 var BASE_PATH = "/voice-mode";
 var PREVIEW_NETWORK_PATTERN = /fetch failed|ECONN|ENOTFOUND|getaddrinfo|ETIMEDOUT|EAI_AGAIN|network|unreachable|socket hang up|aborted|WebSocket error/i;
 var PREVIEW_ENGINE_PATTERN = /model download|model verify|init failed|child exited|tts child|local TTS|prepare|sherpa|local Kokoro/i;
@@ -2911,10 +2972,10 @@ function apply(ctx, config) {
   const turnOfSession = /* @__PURE__ */ new Map();
   const tapInFlight = /* @__PURE__ */ new Set();
   const turnStates = /* @__PURE__ */ new Map();
-  const setTurn = (sessionId, state) => {
+  const setTurn = (sessionId, state, turn) => {
     if (turnStates.get(sessionId) === state) return;
     turnStates.set(sessionId, state);
-    broadcast("turn", { sessionId, state });
+    broadcast("turn", { sessionId, state, turn });
   };
   const turnGen = /* @__PURE__ */ new Map();
   const dropTurnTables = (sessionId) => {
@@ -3174,10 +3235,18 @@ function apply(ctx, config) {
     if (activeVoiceSession !== sessionId && !alwaysRead) return next();
     const gen = (turnGen.get(sessionId) ?? 0) + 1;
     turnGen.set(sessionId, gen);
-    if (readMuted.has(sessionId)) {
-      const mutedAt = readMuted.get(sessionId) ?? null;
+    const mute = readMuted.get(sessionId);
+    if (mute !== void 0) {
       const curTurn = turnOfSession.get(sessionId);
-      if (mutedAt === null || curTurn === void 0 || curTurn !== mutedAt) readMuted.delete(sessionId);
+      if (curTurn === void 0) {
+        mute.streams += 1;
+        if (mute.streams > MUTED_STREAMS_WITHOUT_TURN) readMuted.delete(sessionId);
+      } else if (mute.turn === null) {
+        mute.turn = curTurn;
+        mute.streams = 0;
+      } else if (curTurn !== mute.turn) {
+        readMuted.delete(sessionId);
+      }
     }
     tapInFlight.add(sessionId);
     return tapActiveStream(
@@ -3186,6 +3255,7 @@ function apply(ctx, config) {
       queue,
       broadcast,
       (state) => {
+        const turn = turnOfSession.get(sessionId);
         if (state === "listening") {
           tapInFlight.delete(sessionId);
           if (focusedSessionId !== sessionId && activeVoiceSession !== sessionId) {
@@ -3193,7 +3263,7 @@ function apply(ctx, config) {
           }
         }
         if ((turnGen.get(sessionId) ?? 0) !== gen) return;
-        setTurn(sessionId, state);
+        setTurn(sessionId, state, turn);
       },
       vset.readAloud !== "off",
       () => readMuted.has(sessionId)
@@ -3618,10 +3688,12 @@ function apply(ctx, config) {
         collectBody(req, res, MAX_JSON_BODY, (body) => {
           let sessionId;
           let keepAsr = false;
+          let isInterrupt = false;
           try {
             const parsed = JSON.parse(body || "{}");
             sessionId = parsed.sessionId;
             keepAsr = parsed.keepAsr === true;
+            isInterrupt = parsed.reason === "interrupt";
           } catch {
           }
           if (sessionId && (sessionId === activeVoiceSession || sessionId === focusedSessionId)) {
@@ -3630,7 +3702,8 @@ function apply(ctx, config) {
               return;
             }
             queue.cancel(sessionId);
-            readMuted.set(sessionId, turnOfSession.get(sessionId) ?? null);
+            if (isInterrupt) queue.abandonTurn(sessionId);
+            readMuted.set(sessionId, { turn: turnOfSession.get(sessionId) ?? null, streams: 0 });
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId);
           }
           respondJson2(res, 200, { ok: true });

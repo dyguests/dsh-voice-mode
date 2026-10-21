@@ -852,4 +852,147 @@ await t('R15 I-2：noteTurnEnd 落在在途合成上不抢发；close 后不再�
   await legacy.close()
 })
 
+// ---------------------------------------------------------------------------
+// R15（Issue #15 T-3）：queues 表永不回收 —— 需要一个「不重置 seq」的方案。
+//
+// 约束（client.tsx:1359/1385）：rejectSeqUpTo 记「本会话已见过的最大句号」，新句必须
+// 大于它，否则新回复前 N 句被静默丢弃。故任何回收方案都不得让 seq 归零/回退。
+// 实现取「seq 上移为全局发号器 + 排空即退休」：会话维度不再持有 seq 状态，回收与
+// seq 单调因此不再互相排斥（墓碑表 / LRU 淘汰都只是把同一张永不回收的表换个名字，
+// 淘汰后该会话回来仍 seq 归零、仍撞拒绝线）。
+// ---------------------------------------------------------------------------
+console.log('R15 T-3：SessionQueue 排空即退休（seq 上移为全局发号器）')
+
+await t('R15 T-3：跑空即退休——历史会话数不再推高 queues 表', async () => {
+  const frames = []
+  const q = new TtsQueue({ engine: makeEngine('a') })
+  q.subscribe((f) => frames.push(f))
+  const SESSIONS = 50
+  for (let i = 0; i < SESSIONS; i++) {
+    q.enqueue(`s${i}`, '一句')
+    await waitFrames(frames, (i + 1) * 2)
+  }
+  await sleep(80) // 让最后一个 pump 的 finally（排空→退休）跑完
+  // 退休是纯内存行为，公开面只暴露 isIdle/帧/onIdle，**没有**直接可观测量——故直读
+  // 内部表。这是本文件唯一读私有字段的用例，理由即上述（不为测试给公开面开洞）。
+  assert.equal(
+    q.queues.size,
+    0,
+    `${SESSIONS} 个会话各自跑空后 queues 仍有 ${q.queues.size} 项——SessionQueue 仍随历史会话数增长（T-3 未修）`,
+  )
+  await q.close()
+})
+
+await t('R15 T-3：回收不得让 seq 归零——跨 cancel / setEngine / prune 重入后句号仍严格递增', async () => {
+  const frames = []
+  const q = new TtsQueue({ engine: makeEngine('a') })
+  q.subscribe((f) => frames.push(f))
+  const seqs = () => [...new Set(frames.map((f) => f.sentenceId))]
+
+  q.enqueue('s1', '一')
+  q.enqueue('s1', '二')
+  await waitFrames(frames, 4)
+  q.cancel('s1') // 打断：epoch++ 弃积压（队列仍在册）
+  q.enqueue('s1', '三')
+  await waitFrames(frames, 6)
+  q.setEngine(makeEngine('b')) // 切引擎：逐队列 epoch++，保留队列对象
+  q.enqueue('s1', '四')
+  await waitFrames(frames, 8)
+  q.prune('s1') // 显式清理：连队列对象一起删（回归到每会话 seq 时，就是这里 seq 归零）
+  q.enqueue('s1', '五')
+  await waitFrames(frames, 10)
+
+  const s = seqs()
+  assert.equal(s.length, 5, `应有 5 个不同句号（实际 ${JSON.stringify(s)}）`)
+  assert.deepEqual(s, [0, 1, 2, 3, 4], `句号应为全局单调的 0..4（实际 ${JSON.stringify(s)}）`)
+  for (let i = 1; i < s.length; i++) {
+    assert.ok(
+      s[i] > s[i - 1],
+      `句号回退：${JSON.stringify(s)}——会话维度 seq 归零会让新句 ≤ 客户端 rejectSeqUpTo 残留线，被静默丢弃（静音）`,
+    )
+  }
+  await q.close()
+})
+
+// ---------------------------------------------------------------------------
+// R15（Issue #15 T-4）：回合以 error / abort 收场时 openTurns 残留 → tts-idle 永不补发。
+//
+// 队列侧无法自行区分 abort 与「停止朗读」——两者都是 queue.cancel(sessionId)，对队列
+// 可见的输入只有 sessionId（index.ts:1665 同时服务两者；另有 :1007/:1376/:1390/:1409）。
+// 故本轮在队列侧只提供最小原语 abandonTurn，由 host 在判定回合作废时调用；**刻意不挂
+// cancel()**（在 cancel 里清闸门会让「停止朗读」后补发 tts-idle，把 R15 Important-1
+// ——回合间空档误发致 mode:once 提前退出——重新引进来）。
+// ---------------------------------------------------------------------------
+console.log('R15 T-4：abandonTurn 合上 abort 残留的回合闸门')
+
+await t('R15 T-4：abandonTurn 自愈 abort 残留；自身不补发 tts-idle', async () => {
+  const idles = []
+  let release
+  const gate = new Promise((r) => {
+    release = r
+  })
+  const q = new TtsQueue({ engine: makeEngine('a', gate), onIdle: (sid) => idles.push(sid), awaitTurnEnd: true })
+  const frames = []
+  q.subscribe((f) => frames.push(f))
+
+  // ① 回合进行中：首句在途、次句积压。宿主 abort 时不派发 agent/turn-stopping 也不派发
+  //    agent/error，队列侧收不到任何信号——这正是本条缺陷的成因。
+  q.enqueue('s1', '第一段。')
+  q.enqueue('s1', '第二段。')
+  const t0 = Date.now()
+  while (q.isIdle('s1') && Date.now() - t0 < 2000) await sleep(5)
+  assert.equal(q.isIdle('s1'), false, '前置条件：应有在途合成')
+  assert.deepEqual(idles, [], '前置条件：闸门开着时排空不得发')
+
+  // ② host 判定回合作废 → abandonTurn
+  q.abandonTurn('s1')
+  assert.deepEqual(
+    idles,
+    [],
+    'abandonTurn 在队列仍有活时抢发了 tts-idle——那与 noteTurnEnd 无异，会把 R15 Important-1 在 abort 路径上重新引进来',
+  )
+
+  // ③ abort 前已入队的句子读尽 → 闸门已合 → 正常补发（自愈收益：mode:once 不再退到
+  //    ONCE_STALL_MS=10s 兜底才退出）。
+  release()
+  await waitFrames(frames, 4)
+  const t1 = Date.now()
+  while (idles.length === 0 && Date.now() - t1 < 2000) await sleep(5)
+  assert.deepEqual(
+    idles,
+    ['s1'],
+    'abandonTurn 后读尽的句子未补发 tts-idle——abort 残留使回合闸门恒开，mode:once 只能退到 10s 静默兜底',
+  )
+  await q.close()
+})
+
+await t('R15 T-4：cancel 不清回合闸门（不得把 abort 与「停止朗读」混为一谈）', async () => {
+  const idles = []
+  let release
+  const gate = new Promise((r) => {
+    release = r
+  })
+  const q = new TtsQueue({ engine: makeEngine('a', gate), onIdle: (sid) => idles.push(sid), awaitTurnEnd: true })
+  const frames = []
+  q.subscribe((f) => frames.push(f))
+  // 「停止朗读」（index.ts:1665 的 /cancel）与 abort 共用 queue.cancel，队列侧看到的
+  // 输入只有 sessionId。本用例把 cancel 放在**仍有在途合成**时（用户在播第一句时按下
+  // 停止）——此时 cancel 的 epoch++ 会让泵随即走到 finally 的「排空」分支，若闸门在这里
+  // 被清掉，就会补发一条 tts-idle，mode:once 立刻 exitMode：停止朗读反而把语音模式关了。
+  q.enqueue('s1', '第一段。')
+  await sleep(30)
+  assert.equal(q.isIdle('s1'), false, '前置条件：首句在途')
+  q.enqueue('s1', '第二段。')
+  q.cancel('s1') // 作废在途句与积压 → 泵必然走到 finally 的 pending===0 分支
+  release()
+  await sleep(150)
+  assert.deepEqual(
+    idles,
+    [],
+    'cancel 清了回合闸门——「停止朗读」后补发 tts-idle 会把 R15 Important-1（回合间空档误发致 mode:once 提前退出、后半段永不朗读）重新引进来',
+  )
+  assert.equal(frames.length, 0, '被 cancel 作废的句子不得广播')
+  await q.close()
+})
+
 console.log(`\ntts-queue-engine：${passed} 项通过`)

@@ -47,7 +47,7 @@
 | WebSocket 性质 | 消除 |
 |---|---|
 | 有序 | 迟到响应作废逻辑（`segmentEpoch` / `detectGeneration` 的响应校验分支） |
-| 有状态（连接 = 会话生命周期） | 403 会话过期 → 重入 → 全量重发的整条恢复路径（`src/asr.ts:416-438` 403 重试、`:659-660` recoverySegment 全量重发；2026-10-20 实测刷新） |
+| 有状态（连接 = 会话生命周期） | 403 会话过期 → 重入 → 全量重发的整条恢复路径（`src/asr.ts:441-442` 403 重试、recoverySegment 全量重发；2026-10-20 实测刷新，2026-10-21 前快照的 `:416-438` 已漂移，本轮按现态行号刷新） |
 | 连接断开即明确失效 | host 侧 90s 空闲扫描回收（`SEGMENT_IDLE_MS`） |
 | 无轮询 | 100ms 量化延迟；`lastPollAt` / `partialInFlight` / `detectInFlight` 三个在途标志 |
 | 二进制帧原生 | base64 膨胀（TTS 下行当前 base64，+33%） |
@@ -55,7 +55,7 @@
 保留的：`turnGen`（LLM 回合语义，与传输无关）、TTS `q.epoch`（打断语义，与传输无关）。**预计可塌缩 3 套计数器 + 2 套水位。**
 
 配套建议（同一次改动内）：
-- 上行 PCM 改 **int16**（当前 f32，`src/asr.ts:232` Float32Array 构造 + `src/asr-host.ts:154-155`（pcmToSamples）Float32Array 解析）——带宽减半，ASR 输入精度无损失
+- 上行 PCM 改 **int16**（当前 f32，`src/asr.ts:355` 与 `:1237` 的 Float32Array 构造 + `src/asr-host.ts:154-155`（pcmToSamples）Float32Array 解析；2026-10-21 前快照的 `src/asr.ts:232` 已漂移，本轮按现态行号刷新）——带宽减半，ASR 输入精度无损失
 - 下行 TTS 改二进制帧，去掉 base64
 
 ## 预期后果

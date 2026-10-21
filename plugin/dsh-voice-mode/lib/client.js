@@ -2275,6 +2275,53 @@ function decayConfirmCount(count, abandon) {
   if (next === 0) abandon();
   return next;
 }
+function shouldReleaseStopLine(o) {
+  if (!o.hasStopLine) return false;
+  if (o.untilNextRun) return false;
+  if (o.turn !== void 0 && o.lastTurn !== void 0) return o.turn !== o.lastTurn;
+  if (o.sameRoundContinuation) return false;
+  return true;
+}
+function cancelPayload(o) {
+  return JSON.stringify({ sessionId: o.sessionId, keepAsr: o.keepAsr, reason: o.reason });
+}
+function auxClickPending(button, opts) {
+  return button === 0 && opts.mac && opts.ctrlKey;
+}
+function isGestureEnd(armed, up) {
+  if (!armed) return false;
+  return armed.id === up.id && armed.button === up.button;
+}
+function focusFailureAction(status, attempt) {
+  if (status !== 403) return "silent";
+  return attempt === 1 ? "retry-later" : "report-once";
+}
+async function reportFocus(o) {
+  const wait = o.wait ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const warn = o.warn ?? (() => {
+  });
+  const retryMs = o.retryMs ?? 800;
+  let attempts = 0;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    attempts++;
+    let status;
+    try {
+      status = (await o.fetchImpl()).status;
+    } catch {
+      return { ok: false, reported: false, attempts };
+    }
+    const action = focusFailureAction(status, attempt);
+    if (action === "silent") return { ok: status >= 200 && status < 300, reported: false, attempts };
+    if (action === "retry-later") {
+      if (o.sessionId === null) return { ok: false, reported: false, attempts };
+      await wait(retryMs);
+      continue;
+    }
+    warn({ sessionId: o.sessionId, status });
+    return { ok: false, reported: true, attempts };
+  }
+  return { ok: false, reported: false, attempts };
+}
 var FOCUS_OWNER_DEFAULT = "default";
 function focusSession(owners) {
   let last = null;
@@ -3636,7 +3683,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "f8a3268";
+var BUILD_TAG = "4f85c50";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -4049,12 +4096,23 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
   let voiceOwnerTab = null;
   const busGen = globalThis[BUS_GEN_KEY] = (globalThis[BUS_GEN_KEY] ?? 0) + 1;
   const postFocus = (sessionId) => {
-    void fetch(`${location.origin}${basePath}/focus`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId, tabId: TAB_ID }),
-      signal: AbortSignal.timeout(3e3)
-    }).catch(() => {
+    void reportFocus({
+      sessionId,
+      fetchImpl: () => fetch(`${location.origin}${basePath}/focus`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, tabId: TAB_ID }),
+        signal: AbortSignal.timeout(3e3)
+      }).then((r) => ({ status: r.status })),
+      // 留痕文案放在 client.tsx（mic-gesture.ts 不在 strings-coverage 白名单里）。
+      // 日志文案用英文：本仓红线禁止 console.* 里出现中文字面量（见 strings-coverage）。
+      // 含义：/focus 被 host 拒绝（host 不认识这个会话 = 会话表滞后）→ 焦点静默失败，
+      // readAloud=always 可能整页不朗读而用户看不到原因。
+      warn: ({ sessionId: sessionId2, status }) => {
+        console.warn(
+          "[dsh-voice-mode] /focus rejected by host (" + status + " unknown_session): session " + String(sessionId2) + " is not in the host session table -> focus silently failed, readAloud=always may not play at all"
+        );
+      }
     });
   };
   const DEFAULT_BOOT = {
@@ -4356,8 +4414,21 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("turn", (e) => {
       try {
         const ev = JSON.parse(e.data);
-        if (ev.state === "agent-speaking" && ev.sessionId && rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE && !stopUntilRun.has(ev.sessionId)) {
-          rejectSeqUpTo.delete(ev.sessionId);
+        if (ev.state === "agent-speaking" && ev.sessionId) {
+          const sameRoundContinuation = toolPending.has(ev.sessionId);
+          toolPending.delete(ev.sessionId);
+          const turn = typeof ev.turn === "number" ? ev.turn : void 0;
+          const lastTurn = currentTurn.get(ev.sessionId);
+          if (turn !== void 0) currentTurn.set(ev.sessionId, turn);
+          if (shouldReleaseStopLine({
+            hasStopLine: rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE,
+            untilNextRun: stopUntilRun.has(ev.sessionId),
+            turn,
+            lastTurn,
+            sameRoundContinuation
+          })) {
+            rejectSeqUpTo.delete(ev.sessionId);
+          }
         }
         if (ev.sessionId === activeSessionId && ev.state) {
           ui.turn = ev.state;
@@ -4450,6 +4521,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("tool", (e) => {
       try {
         const p = JSON.parse(e.data);
+        if (p.sessionId) toolPending.add(p.sessionId);
         if (p.sessionId === activeSessionId && ui.boot.toolBeep === true) playToolBeep();
       } catch {
       }
@@ -4458,6 +4530,8 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
   connect();
   const rejectSeqUpTo = /* @__PURE__ */ new Map();
   const stopUntilRun = /* @__PURE__ */ new Set();
+  const toolPending = /* @__PURE__ */ new Set();
+  const currentTurn = /* @__PURE__ */ new Map();
   const lastFinalSeq = /* @__PURE__ */ new Map();
   let curSentenceId = null;
   let curChunks = [];
@@ -4690,7 +4764,9 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
       void fetch(`${location.origin}${basePath}/cancel`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId: sid, keepAsr: true }),
+        // reason=stop-reading：host 据此**不**动回合闸门（否则「停止朗读」后的排空分支
+        // 会补发 tts-idle → mode:once 提前退出，R15 Important-1 回归）。
+        body: cancelPayload({ sessionId: sid, keepAsr: true, reason: "stop-reading" }),
         signal: AbortSignal.timeout(3e3)
       }).catch(() => {
       });
@@ -5299,7 +5375,13 @@ function MicButton({
           method: "POST",
           headers: { "content-type": "application/json" },
           // hold 按压中保留 host ASR 段（松手定稿续传前半句，防吃句）。
-          body: JSON.stringify({ sessionId: sidRef.current, keepAsr: engineRef.current?.holding === true }),
+          // reason=interrupt：host 据此可收口回合闸门（abandonTurn）——用户打断与
+          // 「停止朗读」靠它区分（两者 keepAsr 都可能是 true，载荷本身区分不了）。
+          body: cancelPayload({
+            sessionId: sidRef.current,
+            keepAsr: engineRef.current?.holding === true,
+            reason: "interrupt"
+          }),
           signal: AbortSignal.timeout(3e3)
         }).catch(() => {
         });
@@ -5836,6 +5918,7 @@ function MicButton({
     t("buttonListening")
   ) : local === "pending" ? t("entering") : t("voiceBtn");
   const holdPtrRef = (0, import_react3.useRef)(null);
+  const auxClickRef = (0, import_react3.useRef)(false);
   const toggleHoldRef = (0, import_react3.useRef)(false);
   const suppressClickUntilRef = (0, import_react3.useRef)(0);
   const breakTimerRef = (0, import_react3.useRef)(null);
@@ -5892,9 +5975,10 @@ function MicButton({
     return () => el.removeEventListener("touchstart", onTouchStart);
   }, []);
   const onPointerDown = (e) => {
+    auxClickRef.current = auxClickPending(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey });
     if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return;
     lockSelection();
-    holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId };
+    holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId, button: e.button };
     e.currentTarget.setPointerCapture?.(e.pointerId);
     if (bootNow().mode === "hold") {
       if (localRef.current === "on") {
@@ -5933,12 +6017,12 @@ function MicButton({
     }
   };
   const onPointerUp = (e) => {
-    if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return;
     const p = holdPtrRef.current;
+    if (p && !isGestureEnd(p, { id: e.pointerId, button: e.button })) return;
     holdPtrRef.current = null;
     clearBreakTimer();
     setHolding(false);
-    if (!p || p.id !== e.pointerId) return;
+    if (!p) return;
     const ms = Date.now() - p.t;
     if (bootNow().mode !== "hold") {
       if (toggleHoldRef.current) {
@@ -6044,6 +6128,10 @@ function MicButton({
         className: "dshvm-mic",
         "data-state": visual,
         onClick: (e) => {
+          if (auxClickRef.current) {
+            auxClickRef.current = false;
+            return;
+          }
           if (Date.now() < suppressClickUntilRef.current) return;
           if (holdMode && !readingOutside()) {
             if (e.detail !== 0) return;

@@ -18,6 +18,8 @@ import { errorText } from './error-text.ts'
 import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
 import { composeDraft, shouldWritePartial } from './draft-compose.ts'
 import {
+  auxClickPending,
+  cancelPayload,
   createScopeBridge,
   decayConfirmCount,
   eqPaintMode,
@@ -25,10 +27,13 @@ import {
   focusRelease,
   handleReplaced,
   isEditingShortcut,
+  isGestureEnd,
   isPrimaryPress,
   menuFocusIndex,
   onceFinished,
   registerScopeDispose,
+  reportFocus,
+  shouldReleaseStopLine,
   takeToggleSlot,
   FOCUS_OWNER_DEFAULT,
   type FocusOwners,
@@ -823,12 +828,32 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   let voiceOwnerTab: string | null = null
   const busGen = ((globalThis as any)[BUS_GEN_KEY] = ((globalThis as any)[BUS_GEN_KEY] ?? 0) + 1) as number
   const postFocus = (sessionId: string | null): void => {
-    void fetch(`${location.origin}${basePath}/focus`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId, tabId: TAB_ID }),
-      signal: AbortSignal.timeout(3000),
-    }).catch(() => {})
+    // 403（host 不认识这个会话 = 会话表滞后）早期被完全静默吞掉 → 焦点静默失败、
+    // readAloud=always 整页不朗读而用户看不到原因。现在：403 → 退避补报一次，
+    // 仍被拒 → 留痕一次；网络失败 → 静默（瞬时，不制造噪音）。
+    void reportFocus({
+      sessionId,
+      fetchImpl: () =>
+        fetch(`${location.origin}${basePath}/focus`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId, tabId: TAB_ID }),
+          signal: AbortSignal.timeout(3000),
+        }).then((r) => ({ status: r.status })),
+      // 留痕文案放在 client.tsx（mic-gesture.ts 不在 strings-coverage 白名单里）。
+      // 日志文案用英文：本仓红线禁止 console.* 里出现中文字面量（见 strings-coverage）。
+      // 含义：/focus 被 host 拒绝（host 不认识这个会话 = 会话表滞后）→ 焦点静默失败，
+      // readAloud=always 可能整页不朗读而用户看不到原因。
+      warn: ({ sessionId, status }) => {
+        console.warn(
+          '[dsh-voice-mode] /focus rejected by host (' +
+            status +
+            ' unknown_session): session ' +
+            String(sessionId) +
+            ' is not in the host session table -> focus silently failed, readAloud=always may not play at all',
+        )
+      },
+    })
   }
   const DEFAULT_BOOT: VoiceBootConfig = {
     basePath: BASE_PATH,
@@ -1218,15 +1243,30 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     // P2-4：host 回合状态下行（思考中/朗读中展示）。
     source.addEventListener('turn', (e: MessageEvent<string>) => {
       try {
-        const ev = JSON.parse(e.data) as { sessionId?: string; state?: VoiceUiState['turn'] }
+        const ev = JSON.parse(e.data) as { sessionId?: string; state?: VoiceUiState['turn']; turn?: number }
         // 新一轮作答开始：解除「停止朗读」留下的整回合拒绝线。
-        if (
-          ev.state === 'agent-speaking' &&
-          ev.sessionId &&
-          rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE &&
-          !stopUntilRun.has(ev.sessionId)
-        ) {
-          rejectSeqUpTo.delete(ev.sessionId)
+        // 口径与 host 侧一致（host 按**回合**解禁）：回合内工具调用后的后续 step
+        // （同一回合的又一条流）**不得**解除它——否则这次回复的剩余句子照旧出声。
+        // ① 权威判据：host 的 'turn' 载荷带回合号时（turn 键可能缺席——老宿主不派发
+        //    agent/pre-step、或该会话本回合中途才成为焦点），回合号相同 = 同一回合。
+        // ② 回合号不可得时退回代理信号：'tool' 事件标记的「回合内后续 step」。
+        if (ev.state === 'agent-speaking' && ev.sessionId) {
+          const sameRoundContinuation = toolPending.has(ev.sessionId)
+          toolPending.delete(ev.sessionId) // 消费掉：下一个 agent-speaking 属新回合
+          const turn = typeof ev.turn === 'number' ? ev.turn : undefined
+          const lastTurn = currentTurn.get(ev.sessionId) // 比较用旧值
+          if (turn !== undefined) currentTurn.set(ev.sessionId, turn)
+          if (
+            shouldReleaseStopLine({
+              hasStopLine: rejectSeqUpTo.get(ev.sessionId) === STOP_READING_LINE,
+              untilNextRun: stopUntilRun.has(ev.sessionId),
+              turn,
+              lastTurn,
+              sameRoundContinuation,
+            })
+          ) {
+            rejectSeqUpTo.delete(ev.sessionId)
+          }
         }
         if (ev.sessionId === activeSessionId && ev.state) {
           ui.turn = ev.state
@@ -1340,6 +1380,9 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     source.addEventListener('tool', (e: MessageEvent<string>) => {
       try {
         const p = JSON.parse(e.data) as { sessionId?: string }
+        // 工具调用 → 回合内还会再开一步（step2 的流）→ 那一轮的 agent-speaking 属
+        // **同一回合**，不得解除「停止朗读」的拒绝线（口径与 host 侧一致）。
+        if (p.sessionId) toolPending.add(p.sessionId)
         if (p.sessionId === activeSessionId && ui.boot.toolBeep === true) playToolBeep()
       } catch {
         // ignore malformed frame
@@ -1359,6 +1402,11 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   const rejectSeqUpTo = new Map<string, number>()
   /** 「停止朗读」要等到下一次回合开始才解除的会话（见 stopReading）。 */
   const stopUntilRun = new Set<string>()
+  /** 已收到工具调用、回合内还会再开一步的会话（'tool' 广播置位，下一个
+   *  'agent-speaking' 消费）——用于「同回合的后续 step 不得解除拒绝线」的判定。 */
+  const toolPending = new Set<string>()
+  /** 会话 → 最近一次带回合号的 'turn' 事件里的回合号（权威回合身份；缺席时靠代理信号）。 */
+  const currentTurn = new Map<string, number>()
   /** 各会话最后完整入队（final）的 sentenceId（skip 取线用）。 */
   const lastFinalSeq = new Map<string, number>()
   let curSentenceId: number | null = null
@@ -1659,7 +1707,9 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
       void fetch(`${location.origin}${basePath}/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: sid, keepAsr: true }),
+        // reason=stop-reading：host 据此**不**动回合闸门（否则「停止朗读」后的排空分支
+        // 会补发 tts-idle → mode:once 提前退出，R15 Important-1 回归）。
+        body: cancelPayload({ sessionId: sid, keepAsr: true, reason: 'stop-reading' }),
         signal: AbortSignal.timeout(3000),
       }).catch(() => {})
     },
@@ -2480,7 +2530,13 @@ export function MicButton({
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           // hold 按压中保留 host ASR 段（松手定稿续传前半句，防吃句）。
-          body: JSON.stringify({ sessionId: sidRef.current, keepAsr: engineRef.current?.holding === true }),
+          // reason=interrupt：host 据此可收口回合闸门（abandonTurn）——用户打断与
+          // 「停止朗读」靠它区分（两者 keepAsr 都可能是 true，载荷本身区分不了）。
+          body: cancelPayload({
+            sessionId: sidRef.current!,
+            keepAsr: engineRef.current?.holding === true,
+            reason: 'interrupt',
+          }),
           signal: AbortSignal.timeout(3000),
         }).catch(() => {
           // cancel 路由不可达：本地已静音
@@ -3226,7 +3282,10 @@ export function MicButton({
   // hold 手势（仅 hold 模式激活后有效）：按下即录；<250ms 视为短按退出；
   // 按住中途向上滑出 ≥40px 放弃本段；松手定稿发送。click 一律不切换
   // （Blocker-1：pointerup 合成的 click 会自毁退出）。
-  const holdPtrRef = useRef<{ t: number; y: number; id: number } | null>(null)
+  const holdPtrRef = useRef<{ t: number; y: number; id: number; button: number } | null>(null)
+  /** 上一次 pointerdown 是否是辅助点击（macOS 的 ctrl+click）——WebKit 会为它额外派发
+   *  click，该 click 必须被忽略（否则右键开菜单会顺带切一次语音模式）。 */
+  const auxClickRef = useRef(false)
   /** toggle 模式播放中按住（长按打断 + 接管）。 */
   const toggleHoldRef = useRef(false)
   /** 长按打断松手后抑制合成 click 的时间戳（防误触发 tap-to-exit）。 */
@@ -3306,9 +3365,14 @@ export function MicButton({
     // 独占开快捷设置，若这里照 arm，用户按住等菜单弹出（≥250ms 必然成立）就会触发长按
     // 打断，取消正在生成的回复。触屏/笔的 button 恒为 0，按住说话不受影响。
     // macOS 另拦 ctrl+click（Secondary click 关闭时右键 = ctrl+click，button 仍是 0）。
+    // 辅助点击标记：WebKit 会为 ctrl+click **额外派发 click** → 那个 click 必须被忽略
+    // （否则 Safari 上「右键开菜单」会顺带切一次语音模式）。**这里是赋值不是置位**——
+    // 任何非辅助点击的 pointerdown 都会把残留标记清掉（Blink/Gecko 的 ctrl+click 不派发
+    // click，残留标记会误抑制之后的正常左键 click）。
+    auxClickRef.current = auxClickPending(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })
     if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return
     lockSelection()
-    holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId }
+    holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId, button: e.button }
     ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
     if (bootNow().mode === 'hold') {
       // hold 模式全程 pointer 驱动：on=按住说话，off=短按进入；click 事件不参与
@@ -3354,15 +3418,17 @@ export function MicButton({
     }
   }
   const onPointerUp = (e: React.PointerEvent): void => {
-    // 与 onPointerDown 对称：非主键的抬起不是手势结束。鼠标所有按键共用同一个 pointerId，
-    // 左键按住中再按下并松开右键时，若不拦会把右键抬起误读成松手（清掉打断计时器 +
-    // endHeld 提前定稿一段话）。macOS 的 ctrl+click 同样拦（见 onPointerDown）。
-    if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return
+    // 收尾判据：**抬起的是我们 arm 的那一次按下**（同 pointerId + 同按键）。
+    //  - 鼠标所有按键共用一个 pointerId → 还须比按键：左键按住中再按下并松开右键时，
+    //    右键抬起不是手势结束（否则会清掉打断计时器 + endHeld 提前定稿一段话）。
+    //  - 修饰键**不参与**判据：arm 的是主键，抬手时 Ctrl 仍按下也照样收尾（否则打断
+    //    计时器不取消、holding 态不退、引擎持续收音 → 交互态卡住 + 稍后误打断）。
     const p = holdPtrRef.current
+    if (p && !isGestureEnd(p, { id: e.pointerId, button: e.button })) return
     holdPtrRef.current = null
     clearBreakTimer() // 松手即取消未到阈值的打断（短按不得取消回复）
     setHolding(false)
-    if (!p || p.id !== e.pointerId) return
+    if (!p) return
     const ms = Date.now() - p.t
     if (bootNow().mode !== 'hold') {
       // toggle 模式：播放中长按打断 → 松开发送 + 抑制合成 click；短按交给 click（退出）。
@@ -3523,6 +3589,14 @@ export function MicButton({
         className="dshvm-mic"
         data-state={visual}
         onClick={(e: React.MouseEvent) => {
+          // 辅助点击（macOS 的 ctrl+click）派发的 click 必须忽略：WebKit 会为它额外
+          // 派发 click，若照走 toggle →「右键开快捷设置菜单」会顺带切一次语音模式
+          // （最坏是打开麦克风）。标志由 onPointerDown 写入（任何非辅助点击都会清掉
+          // 残留），此处消费。
+          if (auxClickRef.current) {
+            auxClickRef.current = false
+            return
+          }
           // toggle 模式长按打断松手后，抑制合成的 click（防误触发 tap-to-exit）。
           if (Date.now() < suppressClickUntilRef.current) return
           if (holdMode && !readingOutside()) {

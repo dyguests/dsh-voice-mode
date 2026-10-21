@@ -207,7 +207,6 @@ interface QueuedSentence {
 interface SessionQueue {
   pending: QueuedSentence[]
   busy: boolean
-  seq: number
   /** cancel() 时提升；携带旧 epoch 的句子被丢弃。 */
   epoch: number
   /** TTS 不可达已通知过（去重，直到下一帧成功才复位）。 */
@@ -219,7 +218,38 @@ interface SessionQueue {
 }
 
 export class TtsQueue {
+  /**
+   * 各会话队列：只在**有活**时存在（见 pump finally 的退休处置），不再随历史会话数增长。
+   *
+   * R15（Issue #15 T-3）：本表原先每会话留一个空 SessionQueue 且永不回收，而所有对外
+   * 清理入口都是 cancel()（index.ts:1007/1376/1390/1409/1665）——cancel 按设计必须保留
+   * 队列对象，故 turn 退出路径下这张表只增不减（量级 = 历史会话数，非本次回归）。
+   * 真正的回收点只能是「队列已排空、泵已收工」的那一刻。
+   *
+   * 【不变式：seq 单调】回收绝不能让某会话的 sentenceId 归零或回退——client 的
+   * rejectSeqUpTo（client.tsx:1359/1385，`frame.sentenceId <= rejectLine` 即丢弃）记的是
+   * 「本会话已见过的最大句号」，新句必须**大于**它，否则新回复前 N 句被静默丢弃（静音）。
+   * 这正是 index.ts:1376/1409 与 setEngine B1 都写明「用 cancel 而非 prune 保 seq 连续」
+   * 的同一条理由，也是不用 prune() 回收的直接原因。
+   * 故 seq 已上移为本类的全局计数器（见下方 seq），会话维度不再持有任何 seq 状态——
+   * 这样「回收」与「seq 不归零」不再互相排斥：会话回来时拿到的必然是一个比它历史上
+   * 任何一句都大的句号（全局单调在会话上的投影必然严格递增）。
+   */
   private readonly queues = new Map<string, SessionQueue>()
+  /**
+   * 句序号发号器（**全局**，非每会话）。
+   *
+   * 为什么不是每会话：每会话 seq 必须活到会话彻底消失，可任何「活到会话消失」的形态
+   * （墓碑表、有界 LRU 淘汰）都只是把同一张永不回收的表换个名字——LRU 淘汰后该会话再回来
+   * 仍会 seq 归零，仍撞 rejectSeqUpTo。全局计数器则让「会话维度 seq 状态」根本不存在，
+   * 回收得以无条件成立。
+   *
+   * 只在成功广播时自增（pump 的 `const sentenceId = this.seq++` 位于成功分支内），
+   * 与改动前逐字等价。client 只把 sentenceId 用于**比较**（`> rejectLine` 放行、
+   * `!== curSentenceId` 重建拼帧缓冲），从不假设连续或小值——见 client.tsx:1354
+   * 「host 的 sentenceId 跨回合单调递增，新回合必然 > 线」。
+   */
+  private seq = 0
   private readonly listeners = new Set<FrameListener>()
   private engine: TtsEngine
   /** TTS 全体不可达通知（每会话去重，成功后复位）。 */
@@ -339,6 +369,38 @@ export class TtsQueue {
     return !q || (!q.busy && q.pending.length === 0)
   }
 
+  /**
+   * R15（Issue #15 T-4）：回合作废——本轮**不会再有任何后续文本**，但与「回合正常结束」
+   * （noteTurnEnd）不同的一点是：**不补发 onIdle**。
+   *
+   * 为何队列侧无法自行判断 abort（宿主侧实测 + 本文件调用点实测）：
+   *  · 回合 abort 时宿主是 `catch → 直接重抛`：不派发 `agent/turn-stopping`、不派发
+   *    `agent/error`、不经本插件的任何入口——队列侧**收不到任何信号**，无法自愈；
+   *  · 唯一在队列侧与 abort「沾边」的入口是 cancel()，但它是五处语义完全不同的出口的
+   *    共同出口，对队列可见的输入**只有 sessionId 一个**：/cancel「停止朗读」与用户打断
+   *    (index.ts:1665)、进模式 (:1376)、退模式 (:1409)、会话让出 (:1007/:1390)。
+   *    在 cancel() 里清 openTurns，「停止朗读」后队列排空就会补发一条 tts-idle → 把
+   *    R15 Important-1（回合间空档误发致 mode:once 提前退出、后半段永不朗读）**重新
+   *    引进来**。故这里刻意不挂 cancel()，宁可把区分权交回 host。
+   *
+   * 语义（与 noteTurnEnd 唯一的差别就是不发 onIdle）：
+   *  · 只合闸门（清 openTurns）：此后该会话若还有句子读尽，pump finally 会正常补发；
+   *    下一回合的 enqueue 也照常重开闸门，语义与 noteTurnEnd 之后完全一致。
+   *  · 不主动补发：abort 时队列可能已空，此时该不该让 mode:once 立即收尾取决于 host
+   *    的上下文（用户是否马上又要开口），队列无从判断。若 host 判定「abort 前已读尽」，
+   *    在其后紧接一次 noteTurnEnd(sessionId) 即可补发（两次调用对 openTurns 幂等）。
+   *
+   * 接线点：宿主侧在判定回合被 abort / blocked / 空首步时调用（这三类路径都不派发
+   * agent/turn-stopping——error 半边已由 ctx.on('agent/error') 覆盖，见 index.ts:1112）。
+   */
+  abandonTurn(sessionId: string): void {
+    // 刻意**不**加 closed 守卫（与相邻 noteTurnEnd 的不对称是有意的）：本方法不发任何
+    // 对外信号，而 close() 已在最早期同步 openTurns.clear()，故 close 之后再调用它对
+    // 集合的操作恒为无操作——守卫无可观测后果。noteTurnEnd 的同守卫则确有后果（它会
+    // 发 onIdle）。本仓只保留能用复现证据论证的判序，故不加。
+    this.openTurns.delete(sessionId)
+  }
+
   /** 当前引擎音频 MIME（/preview 的 Content-Type 也用它）。 */
   get mime(): string {
     return this.engine.mime
@@ -356,8 +418,10 @@ export class TtsQueue {
    *     sentenceId 拒绝线（rejectSeqUpTo）是「旧会话遗留的最大句号」，新回复前 N 句
    *     全部 ≤ 线被静默丢弃——正是 /toggle 用 cancel 而非 prune 保 seq 连续的同一条
    *     不变式（index.ts:1177 进模式 cancel / :1191 让出旧会话 cancel(previous) / :1210 退出 cancel）。
-   * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身
-   * （seq 连续递增，跨引擎切换不归零）。
+   * 故此处与 cancel() 同构：逐队列 epoch++ + 清积压，但保留 SessionQueue 对象本身。
+   * R15 T-3 后这条顾虑的一半已由构造消除：seq 是**全局**发号器（不再随队列存亡），
+   * 故即便队列对象事后被回收，重入的会话拿到的句号仍必然 > 旧线；但 epoch 仍必须
+   * 逐队列提升才能压住孤儿泵，那部分保留原样。
    */
   setEngine(engine: TtsEngine): void {
     const old = this.engine
@@ -431,7 +495,7 @@ export class TtsQueue {
     if (this.awaitTurnEnd) this.openTurns.add(sessionId)
     let q = this.queues.get(sessionId)
     if (!q) {
-      q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 }
+      q = { pending: [], busy: false, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 }
       this.queues.set(sessionId, q)
     }
     // 队列上限（防病理性积压失控）。20 → 500：长回复流式文本比 Edge 合成快时，
@@ -467,7 +531,12 @@ export class TtsQueue {
       // 双重奏根治：孤儿泵不死——prune 只 delete queue 不提升 epoch 时，旧 q 的 pump
       // 继续合成并广播旧回合句子（item.epoch === q.epoch 对旧 q 永真），与新泵并行 →
       // 客户端同时收到旧/新两套句子（双重奏）。提升 epoch 让孤儿泵在下一句检查时
-      // break，停止广播；重入的新回合用新 queue（seq/epoch 从头）。
+      // break，停止广播。
+      // R15 T-3 注：本方法全仓零调用点（正是「用 cancel 而非 prune」那条不变式的代价）。
+      // 它当年之所以不能用于常规回收，是因为重入的新队列 seq 从 0 起算会撞 client 的
+      // rejectSeqUpTo；seq 上移为全局发号器后该顾虑已消失，但**常规回收仍不该走它**：
+      // prune 连 errorNotified 一起去重载体也丢掉，且不判「是否仍有在途泵」。日常回收
+      // 由 pump finally 的排空退休承担，此方法保留为显式清理口，行为不变。
       q.epoch++
       q.pending.length = 0
     }
@@ -519,7 +588,9 @@ export class TtsQueue {
         q.errorNotified = false // 有帧成功：复位不可达提示
         q.failStreak = 0
         q.backoff = 0 // 成功后退避清零，防下次失败时退避窗口无限递增
-        const sentenceId = q.seq++
+        // R15 T-3：发号器是全局的（会话维度不再持有 seq），故本会话的句号必然大于它
+        // 历史上的任何一句——即使中间的队列对象已被回收，见 queues 声明处的 seq 单调不变式。
+        const sentenceId = this.seq++
         const mime = this.engine.mime
         // 单 chunk（整句音频）+ final 帧（字幕文本）：客户端按句拼帧后解码起播。
         const dataFrame: TtsChunkFrame = {
@@ -586,6 +657,22 @@ export class TtsQueue {
             // 回调错误不影响队列
           }
         }
+        // R15（Issue #15 T-3）：排空即退休本队列——SessionQueue 只在有活时存在。
+        // 安全性（三条都必要）：
+        //  1) 只在 finally 的 pending===0 分支做：此分支不排退避 timer、不重启泵，
+        //     故退休后不可能再有本 q 的 pump 被唤醒（孤儿泵双播的那条老路因此仍被
+        //     「本 q 已收工」这条更强的前提关着，不必依赖 queues.get()===q 那道防御）；
+        //  2) finally 内从 q.busy=false 到此处全是同步代码，无 await 交错 → 退休与
+        //     enqueue 重建不会竞态；
+        //  3) finally 前段已 return 掉 queues.get()!==q（prune 后重入）与 closed 两条路，
+        //     退休只可能删掉仍在册的自身队列。
+        // 一并丢弃的还有 errorNotified（逐会话「不可达只通知一次」的去重载体）：本表中
+        // 该标志只在外层 catch 里置位，而外层 catch 按本文件 M6 注释自述「近乎不可达」
+        // （内层 for 已对每次 synthesize 做了 try/catch + 3 次重试）。为一条近乎不可达的
+        // 路径保留整张表的增长不值得——故不设例外。**语义变化**：极端情况下同一会话
+        // 的第二次 onError 现在会再通知一次（客户端 toast 逐次弹，而非整会话一次）；
+        // 这是「每次发生都值得告知」的合理方向，代价为零可观测性的正常路径。
+        this.queues.delete(sessionId)
       } else {
         // 失败退避：1s 指数递增至多 8s；成功/无错误即时。
         const delay = q.errorNotified ? q.backoff : 0

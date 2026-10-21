@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createScopeBridge, decayConfirmCount, eqPaintMode, handleReplaced, isEditingShortcut, isPrimaryPress, menuFocusIndex, onceFinished, registerScopeDispose, takeToggleSlot } from '../src/mic-gesture.ts'
+import { auxClickPending, cancelPayload, createScopeBridge, decayConfirmCount, eqPaintMode, focusFailureAction, handleReplaced, isEditingShortcut, isGestureEnd, isPrimaryPress, menuFocusIndex, onceFinished, registerScopeDispose, reportFocus, shouldReleaseStopLine, takeToggleSlot } from '../src/mic-gesture.ts'
 import { createHttpScope } from '../src/settings-http-scope.ts'
 
 let passed = 0
@@ -114,11 +114,17 @@ t('左键 pointerdown（button=0）：照常 arm，长按打断不被守卫误�
   assert.equal(pressArms(0), true, '主键按住仍走 beginHeld + 250ms 打断计时器')
   assert.equal(pressArms(0), true, '触屏/笔的 pointerdown 同为 0，按住说话手势不受影响')
 })
-t('onPointerUp 对称拦截：右键抬起不会被误读成手势松手', () => {
+t('onPointerUp 收尾判据：按「同 pointerId + 同按键」，右键抬起不是手势结束', () => {
   const body = handlerSrc('const onPointerUp = (e: React.PointerEvent): void => {')
-  const guard = body.indexOf(GUARD_LINE)
-  assert.notEqual(guard, -1, 'onPointerUp 必须与非主键抬起对称（鼠标所有按键共用一个 pointerId）')
-  assert.ok(guard < body.indexOf('holdPtrRef.current = null'), '守卫必须早于 holdPtrRef / 打断计时器的清理')
+  assert.ok(body.includes('isGestureEnd('), 'onPointerUp 未按 isGestureEnd 判定收尾')
+  assert.ok(
+    body.indexOf('isGestureEnd(') < body.indexOf('holdPtrRef.current = null'),
+    '收尾判定必须早于 holdPtrRef / 打断计时器的清理',
+  )
+  // 判据本身：鼠标所有按键共用一个 pointerId → 右键抬起（button=2）不是手势结束。
+  assert.equal(isGestureEnd({ id: 1, button: 0 }, { id: 1, button: 2 }), false, '右键抬起不是手势结束')
+  assert.equal(isGestureEnd({ id: 1, button: 0 }, { id: 1, button: 0 }), true, '主键抬起是手势结束')
+  assert.equal(isGestureEnd({ id: 1, button: 0 }, { id: 2, button: 0 }), false, '别的 pointer 的抬起不是手势结束')
 })
 
 // --------------------------------------------------------------------------
@@ -150,7 +156,7 @@ t('普通左键（无修饰键）→ 仍 arm（长按打断/按住说话不被�
 t('接线：client.tsx 的守卫按平台注入（mac 用 IS_MAC、修饰键用 e.ctrlKey）', () => {
   const body = handlerSrc('const onPointerDown = (e: React.PointerEvent): void => {')
   assert.ok(body.includes('{ mac: IS_MAC, ctrlKey: e.ctrlKey }'), '守卫未按平台/修饰键判定——macOS 的 ctrl+click 会绕过')
-  assert.equal(clientSrc.split(GUARD_LINE).length - 1, 2, '守卫应恰好出现在 onPointerDown / onPointerUp 两处')
+  assert.equal(clientSrc.split(GUARD_LINE).length - 1, 1, 'isPrimaryPress 守卫应只在 onPointerDown 一处（onPointerUp 改按「同 pointerId + 同按键」判定收尾）')
 })
 t('右键菜单仍能开：守卫只落在 pointerdown/up，未波及 onContextMenu', () => {
   assert.ok(clientSrc.includes('onContextMenu={(e) => {'), '按钮仍绑定 onContextMenu')
@@ -160,8 +166,8 @@ t('右键菜单仍能开：守卫只落在 pointerdown/up，未波及 onContextM
   )
   assert.equal(
     clientSrc.split('isPrimaryPress(e.button').length - 1,
-    2,
-    '守卫只应出现在 onPointerDown / onPointerUp 两处',
+    1,
+    'isPrimaryPress 守卫只在 onPointerDown 一处（onPointerUp 改按「同 pointerId + 同按键」判定收尾）',
   )
 })
 
@@ -480,6 +486,247 @@ t('接线：client.tsx 的 createHttpScope 分支把 scope 挂到 ctx.effect（�
     '底层 scope 的自建资源未挂到宿主 effect 生命周期 → 每次热重载泄漏一个常驻 window focus 监听器',
   )
   assert.ok(body.includes('createScopeBridge(raw)'), '底层 scope 应以具名引用传入桥（否则拿不到 dispose）')
+})
+
+// --------------------------------------------------------------------------
+// C-9：「停止朗读」拒绝线的解除口径。host 侧按**回合**解禁，客户端早期按**流**解禁
+// → 回合内 step2 的流（工具调用后的后续作答）把 client 侧这半道防线撤掉。
+// 客户端拿不到 host 的回合号（'turn' 只带 { sessionId, state }），同回合的后续 step
+// 靠 host 广播的 'tool' 事件识别。
+// 下面的模拟按 client.tsx 的真实判定顺序驱动**真实的** shouldReleaseStopLine。
+// --------------------------------------------------------------------------
+t('C-9：回合内两条流（step1 / step2）——step1 后停止朗读，step2 到达不得解除拒绝线', () => {
+  const STOP = Number.MAX_SAFE_INTEGER
+  // 客户端的拒绝线状态（与 client.tsx 同构：line / untilNextRun / toolPending）
+  const st = { line: null, untilNextRun: false, toolPending: false }
+  const onTool = () => {
+    st.toolPending = true // host 的 'tool' 广播
+  }
+  const onAgentSpeaking = () => {
+    // client.tsx 的 'turn' handler 顺序：先取同回合标记并消费，再判定是否解除
+    const sameRoundContinuation = st.toolPending
+    st.toolPending = false
+    if (
+      shouldReleaseStopLine({
+        hasStopLine: st.line === STOP,
+        untilNextRun: st.untilNextRun,
+        sameRoundContinuation,
+      })
+    ) {
+      st.line = null
+    }
+  }
+  // 回合内 step1：LLM 开口 → 工具调用 → 回合内 step2 继续作答
+  onAgentSpeaking()
+  onTool()
+  st.line = STOP // 用户在 step1 期间点「停止朗读」（默认路径：untilNextRun 未开）
+  st.untilNextRun = false
+  onAgentSpeaking() // step2 的 agent-speaking（**同一回合**）
+  assert.equal(st.line, STOP, '同一回合的后续 step 不得解除拒绝线——否则这次回复的剩余句子照旧出声')
+  // 真正的新回合（无工具调用）→ 应解除
+  onAgentSpeaking()
+  assert.equal(st.line, null, '真正的新回合应解除拒绝线（否则「停止朗读」永不放）')
+})
+t('C-9：「等到下一回合才解除」模式（宿主提供 running）不得被 agent-speaking 解除', () => {
+  const STOP = Number.MAX_SAFE_INTEGER
+  assert.equal(
+    shouldReleaseStopLine({ hasStopLine: true, untilNextRun: true, sameRoundContinuation: false }),
+    false,
+    'untilNextRun 路径由 runStarted（回合边界）解除，agent-speaking 一律不解除',
+  )
+  assert.equal(
+    shouldReleaseStopLine({ hasStopLine: true, untilNextRun: false, sameRoundContinuation: false }),
+    true,
+    '默认路径的新回合应解除',
+  )
+  assert.equal(
+    shouldReleaseStopLine({ hasStopLine: false, untilNextRun: false, sameRoundContinuation: false }),
+    false,
+    '没有拒绝线时无事可做',
+  )
+})
+t('接线：client.tsx 的 tool 广播标记同回合、turn 事件走 shouldReleaseStopLine', () => {
+  const toolBody = srcBetween("source.addEventListener('tool'", '\n    })\n')
+  assert.ok(/toolPending\.add\(p\.sessionId\)/.test(toolBody), "'tool' 广播未标记同回合——回合内 step2 会解除拒绝线")
+  const turnBody = srcBetween("source.addEventListener('turn'", '\n    })\n')
+  assert.ok(/shouldReleaseStopLine\(/.test(turnBody), "'turn' 事件未走 shouldReleaseStopLine 判定")
+  assert.ok(
+    /sameRoundContinuation/.test(turnBody) && /toolPending\.has\(ev\.sessionId\)/.test(turnBody),
+    "'turn' 事件未消费同回合标记",
+  )
+})
+
+// --------------------------------------------------------------------------
+// C-10：/focus 的 403 被完全静默吞掉 → 焦点静默失败、readAloud=always 整页不朗读。
+// 区分「可恢复的瞬时」（网络失败 → 静默）与「语义拒绝」（403 → 补报一次，仍拒才留痕）。
+// --------------------------------------------------------------------------
+await ta('C-10：/focus 返回 403 → 补报一次；仍被拒才留痕（不是被完全静默吞掉）', async () => {
+  const warns = []
+  let calls = 0
+  const res = await reportFocus({
+    sessionId: 'sess-1',
+    fetchImpl: async () => {
+      calls++
+      return { status: 403 }
+    },
+    wait: async () => {},
+    warn: (d) => warns.push(d),
+  })
+  assert.equal(calls, 2, '403 应补报一次（host 会话表可能滞后）')
+  assert.equal(res.reported, true, '403 未留痕——焦点静默失败且无任何可观测信号')
+  assert.equal(warns.length, 1, '留痕次数不对（应恰好一次，避免制造噪音）')
+  assert.equal(warns[0].status, 403, '留痕应点明 403')
+  assert.equal(warns[0].sessionId, 'sess-1', '留痕应带会话 id')
+})
+await ta('C-10：403 补报后成功 → 不留痕（可恢复的瞬时，不制造噪音）', async () => {
+  const warns = []
+  let calls = 0
+  const res = await reportFocus({
+    sessionId: 'sess-1',
+    fetchImpl: async () => {
+      calls++
+      return { status: calls === 1 ? 403 : 200 }
+    },
+    wait: async () => {},
+    warn: (d) => warns.push(d),
+  })
+  assert.equal(calls, 2, '应补报一次')
+  assert.equal(res.ok, true, '补报成功即视为已接受')
+  assert.deepEqual(warns, [], '补报成功不应留痕（瞬时 403 不制造噪音）')
+})
+await ta('C-10：网络失败 / 其它状态 → 静默（fire-and-forget 的既有语义）', async () => {
+  const warns = []
+  const netFail = await reportFocus({
+    sessionId: 'sess-1',
+    fetchImpl: async () => {
+      throw new Error('network down')
+    },
+    wait: async () => {},
+    warn: (d) => warns.push(d),
+  })
+  assert.equal(netFail.reported, false, '网络失败不该留痕（瞬时）')
+  assert.deepEqual(warns, [], '网络失败不该留痕')
+  const other = await reportFocus({
+    sessionId: 'sess-1',
+    fetchImpl: async () => ({ status: 500 }),
+    wait: async () => {},
+    warn: (d) => warns.push(d),
+  })
+  assert.equal(other.reported, false, '500 不该按 403 处理')
+  assert.deepEqual(warns, [], '500 不该留痕')
+})
+t('C-10 判定表：403 首次补报、二次留痕；其余静默', () => {
+  assert.equal(focusFailureAction(403, 1), 'retry-later')
+  assert.equal(focusFailureAction(403, 2), 'report-once')
+  assert.equal(focusFailureAction(200, 1), 'silent')
+  assert.equal(focusFailureAction(null, 1), 'silent', '网络失败 → 静默')
+})
+t('接线：client.tsx 的 postFocus 不再无条件 .catch(() => {}) 吞掉状态码', () => {
+  const body = srcBetween('const postFocus = (sessionId: string | null): void => {', '\n  }\n')
+  assert.ok(body.includes('reportFocus('), 'postFocus 未走 reportFocus——403 仍被静默吞掉')
+  assert.ok(/status: r\.status/.test(body), 'postFocus 未把响应状态码交给 reportFocus')
+  assert.ok(!/\.catch\(\(\) => \{\}\)/.test(body), 'postFocus 仍在无条件静默吞掉')
+  // 403 必须有可观测出口：reportFocus 的 warn 通道要被真正接上（否则仍是无声失败）。
+  assert.ok(/warn:\s*\(/.test(body), 'postFocus 未接 reportFocus 的 warn 通道——403 仍无任何可观测信号')
+  assert.ok(/console\.warn\(/.test(body), 'warn 通道未留痕（console.warn）——403 仍被静默吞掉')
+})
+
+
+// --------------------------------------------------------------------------
+// C-11：host 侧已把权威回合号广播出来（'turn' 载荷带 turn 键）→ 客户端优先用它判
+// 同回合；载荷缺 turn 键（老宿主 / 回合号不可得）时退回 'tool' 代理与 untilNextRun。
+// --------------------------------------------------------------------------
+t('C-11：载荷带 turn 时用它判同回合（回合内两个 step 的 turn 相同 → 拒绝线不解除）', () => {
+  const release = (turn, lastTurn, sameRoundContinuation) =>
+    shouldReleaseStopLine({ hasStopLine: true, untilNextRun: false, turn, lastTurn, sameRoundContinuation })
+  assert.equal(release(7, 7, false), false, '同一回合（turn 相同）不得解除拒绝线')
+  assert.equal(release(8, 7, false), true, '新回合（turn 不同）应解除拒绝线')
+})
+t('C-11 兼容：载荷不带 turn 时退回代理路径（同回合仍不解除，老宿主行为不回归）', () => {
+  const release = (turn, lastTurn, sameRoundContinuation) =>
+    shouldReleaseStopLine({ hasStopLine: true, untilNextRun: false, turn, lastTurn, sameRoundContinuation })
+  assert.equal(release(undefined, undefined, true), false, "回合号不可得时退回 'tool' 代理：同回合仍不解除")
+  assert.equal(release(undefined, undefined, false), true, '回合号不可得且无代理信号 → 旧行为（解除），老宿主不回归')
+  assert.equal(release(undefined, 7, true), false, '本次事件不带 turn → 退回代理')
+})
+t('C-11 接线：client.tsx 消费 turn 载荷的回合号并维护每会话最近回合号', () => {
+  const body = srcBetween("source.addEventListener('turn'", '\n    })\n')
+  assert.ok(/turn\?: number/.test(body), "'turn' 载荷未声明回合号字段")
+  assert.ok(/typeof ev\.turn === 'number'/.test(body), '未按「turn 键可能缺席」解析（缺席是键不存在，不是 null）')
+  assert.ok(/currentTurn\.get\(ev\.sessionId\)/.test(body), '未取该会话最近一次的回合号')
+  assert.ok(/currentTurn\.set\(ev\.sessionId, turn\)/.test(body), '未记录该会话的回合号')
+  assert.ok(/lastTurn/.test(body), '未把最近回合号交给判定')
+})
+
+// --------------------------------------------------------------------------
+// C-12：/cancel 载荷带 reason，区分「停止朗读」与「用户打断」——host 侧靠它决定是否
+// abandonTurn（回合闸门）。两者 keepAsr 都可能是 true，载荷本身区分不了。
+// --------------------------------------------------------------------------
+t('C-12：/cancel 载荷带 reason（停止朗读 / 用户打断）', () => {
+  assert.deepEqual(JSON.parse(cancelPayload({ sessionId: 's1', keepAsr: true, reason: 'stop-reading' })), {
+    sessionId: 's1',
+    keepAsr: true,
+    reason: 'stop-reading',
+  })
+  assert.deepEqual(JSON.parse(cancelPayload({ sessionId: 's1', keepAsr: false, reason: 'interrupt' })), {
+    sessionId: 's1',
+    keepAsr: false,
+    reason: 'interrupt',
+  })
+})
+t('C-12 接线：两个 /cancel 调用点分别带 stop-reading 与 interrupt', () => {
+  const stop = srcBetween('stopReading(untilNextRun = false) {', '\n    },\n  }')
+  assert.ok(/cancelPayload\(\{/.test(stop), '「停止朗读」的 /cancel 未走 cancelPayload')
+  assert.ok(/reason: 'stop-reading'/.test(stop), '「停止朗读」的 /cancel 未带 reason=stop-reading')
+  const hard = srcBetween('const cancelP = fetch(', '\n        })\n')
+  assert.ok(/cancelPayload\(\{/.test(hard), '打断的 /cancel 未走 cancelPayload')
+  assert.ok(/reason: 'interrupt'/.test(hard), '打断的 /cancel 未带 reason=interrupt')
+})
+
+// --------------------------------------------------------------------------
+// C-13：macOS Safari 的 ctrl+click（辅助点击）**同时**派发 contextmenu 与 click →
+// 右键开菜单会顺带切一次语音模式（最坏是打开麦克风）。
+// --------------------------------------------------------------------------
+t('C-13：mac + ctrl+click（辅助点击）→ 随后的 click 必须被忽略（不得 toggle）', () => {
+  let pending = auxClickPending(0, { mac: true, ctrlKey: true })
+  assert.equal(pending, true, '辅助点击未被识别（mac 的 ctrl+click，button 仍是 0）')
+  const ignore = pending // click：消费标志 → 不 toggle
+  pending = false
+  assert.equal(ignore, true, '辅助点击派发的 click 不得触发 toggle（否则右键开菜单会顺带进出语音模式）')
+  pending = auxClickPending(0, { mac: true, ctrlKey: false })
+  assert.equal(pending, false, 'mac + 普通左键：click 不得被误抑制')
+})
+t('C-13：Blink/Gecko 的 ctrl+click 不派发 click → 残留标志不得误抑制之后的正常左键', () => {
+  let pending = auxClickPending(0, { mac: true, ctrlKey: true })
+  assert.equal(pending, true, '辅助点击应置位标志')
+  pending = auxClickPending(0, { mac: true, ctrlKey: false }) // 正常左键按下 → 覆盖残留
+  assert.equal(pending, false, '正常 pointerdown 必须清掉残留标志，否则后续正常左键 click 会被误抑制')
+  assert.equal(auxClickPending(0, { mac: false, ctrlKey: true }), false, '非 mac 的 ctrl+click 不是辅助点击')
+  assert.equal(auxClickPending(2, { mac: true, ctrlKey: true }), false, 'button=2 不是辅助点击')
+})
+t('C-13 接线：client.tsx 的 pointerdown 记标志（赋值式）、click 消费标志', () => {
+  const down = handlerSrc('const onPointerDown = (e: React.PointerEvent): void => {')
+  assert.ok(/auxClickRef\.current = auxClickPending\(/.test(down), 'pointerdown 未按赋值式写辅助点击标志（非辅助点击必须清残留）')
+  const click = srcBetween('onClick={(e: React.MouseEvent) => {', '\n        }}\n')
+  assert.ok(/if \(auxClickRef\.current\) \{/.test(click), 'click 未消费辅助点击标志')
+  assert.ok(/auxClickRef\.current = false/.test(click), 'click 未清掉标志')
+})
+
+// --------------------------------------------------------------------------
+// C-14：onPointerUp 的守卫须按「是否是我们 arm 的那次按下」判定，不能按「抬起是不是
+// 主键」——arm 的是主键时，抬手时 Ctrl 仍按下也必须收尾（否则计时器不清、holding 不退、
+// 引擎持续收音）。
+// --------------------------------------------------------------------------
+t('C-14：arm（主键）→ 按下 Ctrl → 主键抬起（ctrlKey 仍为 true）→ 状态必须收尾', () => {
+  const armed = { id: 1, button: 0 }
+  assert.equal(isGestureEnd(armed, { id: 1, button: 0 }), true, '主键抬起必须收尾（否则打断计时器不清、holding 不退、引擎持续收音）')
+  assert.equal(isGestureEnd(armed, { id: 1, button: 2 }), false, '右键抬起不是手势结束')
+})
+t('C-14 接线：client.tsx 的 pointerdown 记下 arm 的按键，pointerup 按它判定收尾', () => {
+  const down = handlerSrc('const onPointerDown = (e: React.PointerEvent): void => {')
+  assert.ok(/button: e\.button/.test(down), 'pointerdown 未记下 arm 的按键（收尾判据要比按键）')
+  const up = handlerSrc('const onPointerUp = (e: React.PointerEvent): void => {')
+  assert.ok(/isGestureEnd\(p, \{ id: e\.pointerId, button: e\.button \}\)/.test(up), 'pointerup 未按「同 pointerId + 同按键」判定收尾')
 })
 
 console.log(`\nmic-gesture：${passed} 项通过`)

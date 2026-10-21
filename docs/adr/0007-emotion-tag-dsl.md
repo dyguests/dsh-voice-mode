@@ -56,7 +56,7 @@ export interface TtsEngine {
 ```
 
 **`src/tts-local.ts` 加 `normalizeEmotionTags(text: string, engine: TtsEngine): string`**：
-- 在 `enqueue` 之前调一次（`src/tts-queue.ts:427` 接口 `enqueue(sessionId, text)` / 调用点 `src/index.ts:1902`（首句）与 `:1921`（工具结果句）；原写 `:357`/`:1716,1735` 已漂移 Δ70 / Δ186 / Δ186——2026-10-21 按符号定位刷新）
+- 在 `enqueue` 之前调一次（`src/tts-queue.ts` 的 `enqueue` 接口 `enqueue(sessionId, text)` / 调用点 `src/index.ts` 的 `tapActiveStream` 内两处 `queue.enqueue(sessionId, s)`——首句与工具结果句；原写 `:357`/`:1716,1735`、以及 2026-10-21 前快照的 `src/tts-queue.ts:427` / `src/index.ts:1902`、`:1921` 均已漂移——2026-10-21 R15-J 改按**符号锚**重锚，行号待最终 HEAD 稳定后统一回填）
 - 解析 `<\w+(?:\s+\d+ms)?>` → 按引擎映射替换为对应 SSML/停顿/emoji
 - 返回**纯字符串**（注意：Edge 引擎后续需走 `rawToFile`/`rawToStream` 路径而非 `_SSMLTemplate`，因为后者的 `<prosody>` 包裹破坏 `<mstts:express-as>` 嵌入）
 
@@ -65,7 +65,7 @@ export interface TtsEngine {
 - 不含：走原 `synthesize` 路径
 - 含：切换到 rawSSML 路径（用 **`MsEdgeTTS.rawToFile` 或 `rawToStream`**（按符号定位；2026-09-14 时点 L122/L132，安装版 2.1.0 时点实测 :136 `rawToFile` / :146 `rawToStream`）—— 仓库公开 API；私有 `_rawSSMLRequest` 不可直接调用）—— 无需 fork
 
-**`src/index.ts:1883` `tapActiveStream`**（定义，async 生成器；唯一调用点 `:1000` `apply` 内 `return tapActiveStream(`；原写 `:1699` 已漂移 Δ184——该行现是 `/focus` 路由的 400 响应，原「调用点 :918」实为 `settingsScope.watch` 挂载行，均已漂移；2026-10-21 按符号定位刷新）：
+**`src/index.ts` 的 `tapActiveStream` 定义**（`async function* tapActiveStream`；唯一调用点为 `apply` 内的 `return tapActiveStream(`；原写 `:1699`、以及 2026-10-21 前快照的 `src/index.ts:1883`、`:1000` 均已漂移——2026-10-21 R15-J 改按**符号锚**重锚，行号待最终 HEAD 稳定后统一回填）：
 - 在 `segmenter.feed(chunk.text)` 之前调 `normalizeEmotionTags(chunk.text, engine)`，把抽取到的情绪信息塞到 `enqueue` 路径
 - `SentenceSegmenter.feed` (`src/segmenter.ts:69` 类 / `:115` feed（`feed(chunk: string): string[]`，:116 调 `plainText`）) 内部 `plainText` 必须在情绪标签抽取之后调——**顺序敏感**（类锚点 `:69` 未漂移；feed 锚点原写 `:78` 已漂移 Δ37，该行实为 `private fenced = ''`）
 
