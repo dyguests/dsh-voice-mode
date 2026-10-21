@@ -404,17 +404,58 @@ console.log('R14：tts-local 引擎级 closed 闸门（post-close fork）+ 探�
 
 const r14Tmp = join(tmpdir(), 'dsh-vm-r14-fix')
 mkdirSync(r14Tmp, { recursive: true })
-// 只让第一次 ensureModelFile 挂起（制造模型校验窗），后续立即 true（spec.files 有多项）
+// 模型桩：默认「第一次 ensureModelFile 挂起」（= R14 用例的模型校验窗），后续立即 true
+// （spec.files 有多项）。arm('tree') 切换到 Kokoro 的 espeak-ng-data 整树窗——R15 用例需要
+// 独立控制「哪一次 ensure 挂起」，否则 Kokoro 分支永远等不到窗口（vits 不进该分支）。
 writeFileSync(join(r14Tmp, 'models-stub.mjs'), `
+let mode = 'file'
 let n = 0
 let rel = null
-globalThis.__r14m = { release: () => rel?.(true) }
-export async function ensureModelFile() { if (n++ === 0) return new Promise((res) => { rel = res }); return true }
-export async function ensureModelTree() { return true }
+let entered = 0
+globalThis.__r14m = {
+  arm: (m) => { mode = m; n = 0; rel = null; entered = 0 },
+  entered: () => entered,
+  release: () => rel?.(true),
+}
+export async function ensureModelFile() { if (mode === 'file' && n++ === 0) { entered++; return new Promise((res) => { rel = res }) } return true }
+export async function ensureModelTree() { if (mode === 'tree') { entered++; return new Promise((res) => { rel = res }) } return true }
 `)
+// 子进程桩：fork 可计数（泄漏的直接可观测量）。IPC 做成最小可用回路：
+//   · send({type:'init'})  → 挂起不答（模拟 worker 加载模型的同步 CPU 阶段），由测试手动放行；
+//   · send({type:'close'}) → 立即应答（否则 close() 会挂在无应答的 await 上，测不到后续断言）；
+//   · kill()               → 只记账不派发 exit（真实 SIGTERM→exit 是异步的，会打回在途
+//                            init 请求；桩里去掉该噪声，让「init 窗口内 close」可精确构造）。
+//   · emitExit(i)          → 补发第 i 个子进程的 exit（M4 身份校验用例需要制造迟到的旧事件）。
 writeFileSync(join(r14Tmp, 'cp-stub.mjs'), `
 globalThis.__r14forks = 0
-export function fork() { globalThis.__r14forks++; return { on: () => {}, send: () => {}, kill: () => {}, stderr: { on: () => {} } } }
+globalThis.__r14killed = []
+globalThis.__r14kids = []
+const parkedInit = []
+export function fork() {
+  const handlers = {}
+  const kid = {
+    id: globalThis.__r14kids.length + 1,
+    on(ev, fn) { if (fn) handlers[ev] = fn },
+    stderr: { on() {} },
+    kill() { globalThis.__r14killed.push(kid.id) },
+    send(msg) {
+      if (msg.type === 'init') { parkedInit.push({ kid, id: msg.id }); return }
+      if (msg.type === 'close') setTimeout(() => kid.fire('message', { id: msg.id, ok: true }), 0)
+    },
+    fire(ev, payload) { handlers[ev]?.(payload) },
+  }
+  globalThis.__r14forks++
+  globalThis.__r14kids.push(kid)
+  return kid
+}
+globalThis.__r14c = {
+  initParked: () => parkedInit.length,
+  releaseInit: (payload = { ok: true }) => {
+    for (const p of parkedInit.splice(0)) p.kid.fire('message', { id: p.id, ...payload })
+  },
+  emitExit: (i, code = 0) => globalThis.__r14kids[i - 1].fire('exit', code),
+  reset() { globalThis.__r14kids.length = 0; globalThis.__r14killed.length = 0; globalThis.__r14forks = 0; parkedInit.length = 0 },
+}
 `)
 writeFileSync(join(r14Tmp, 'tts-runtime-stub.mjs'), `
 export class NativeRuntimeUnavailableError extends Error {}
@@ -439,7 +480,7 @@ await build({
   ],
   logLevel: 'silent',
 })
-const { createSherpaVitsEngine } = await import(pathToFileURL(r14Bundle).href)
+const { createSherpaVitsEngine, createSherpaKokoroEngine } = await import(pathToFileURL(r14Bundle).href)
 
 await t('R14：冷引擎模型校验窗内 close → 放行后不得 fork（无 post-close 孤儿子进程）', async () => {
   const eng = createSherpaVitsEngine({ kind: 'vits', cacheDir: r14Tmp, modelHost: () => '', allowCustomHost: false, broadcast: () => {} })
@@ -464,6 +505,121 @@ await t('R14：冷引擎模型校验窗内 close → 放行后不得 fork（无 
     'post-close fork：模型校验窗内 close 后 IIFE 仍续跑到 fork——孤儿子进程携带完整模型、无人再 close（热重载每代泄漏一个）',
   )
   assert.ok(/closed/.test(rejected), `close 后 synthesize 应 reject（实际: ${JSON.stringify(rejected)}）`)
+})
+
+// ---------------------------------------------------------------------------
+// R15（Issue #15 Important-1，第 8 道门）：ensureReady IIFE 的 await 点逐点普查。
+// 既有 R14 锁只够到 ensureModelFile 那一条：它用的是 vits 引擎，根本不进 kokoro 分支，
+// 而 ensureModelTree（Kokoro 补 espeak-ng-data 整树约 355 个语音表，秒级到分钟级）是
+// **排在 fork 之前的最后一段等待**，此处曾无 closed 判序 → close 落进该窗口后 IIFE 仍
+// 续跑到 fork → 携完整模型（int8 109MB / fp32 311MB）的孤儿子进程，无人再 close。
+// 台架复用上段 bundle：arm('tree') 把 ensureModelTree 变成可手动放行的等待窗。
+// ---------------------------------------------------------------------------
+console.log('R15 I-1：ensureModelTree 等待窗的 closed 判序（第 8 道门）')
+
+await t('R15 I-1：Kokoro espeak-ng-data 整树窗内 close → 放行后不得 fork', async () => {
+  globalThis.__r14c.reset()
+  globalThis.__r14m.arm('tree')
+  const eng = createSherpaKokoroEngine({ cacheDir: r14Tmp, modelHost: () => '', allowCustomHost: false, broadcast: () => {} })
+  let rejected = ''
+  const p = eng.synthesize('第一句').then(
+    () => {},
+    (e) => { rejected = e instanceof Error ? e.message : String(e) },
+  )
+  // 轮询进入整树窗（不靠固定 sleep，防慢机误判）：entered 是「确实挂住了」的反证量。
+  const t0 = Date.now()
+  while (globalThis.__r14m.entered() === 0 && Date.now() - t0 < 3000) await sleep(10)
+  assert.equal(globalThis.__r14m.entered(), 1, '前置条件：应挂在 ensureModelTree 整树窗内')
+  assert.equal(globalThis.__r14forks, 0, '前置条件：整树窗内尚未 fork')
+  await eng.close() // queue.close() 的真实路径：child 原为 null，只置空标志
+  assert.equal(globalThis.__r14forks, 0, '前置条件：close 返回时不应有 fork')
+  globalThis.__r14m.release() // 放行整树补全 → IIFE 续跑（修复前会走到 fork）
+  await Promise.race([p, sleep(400)])
+  assert.equal(
+    globalThis.__r14forks,
+    0,
+    'post-close fork：整树补全窗内 close 后 IIFE 仍续跑到 fork——孤儿子进程携带完整模型、无人再 close（Kokoro 首次使用即可能命中，热重载每代泄漏一个）',
+  )
+  assert.ok(/closed/.test(rejected), `close 后 synthesize 应 reject（实际: ${JSON.stringify(rejected)}）`)
+  globalThis.__r14m.arm('file') // 还原默认档（后续用例若复用同一桩）
+})
+
+await t('R15 I-1：init 等待窗内 close → 不置 childInit、不广播 tts-ready（await 点普查第 2 条）', async () => {
+  globalThis.__r14c.reset()
+  globalThis.__r14m.arm('off') // 文件/整树都立即通过：把窗口精确挪到 call({type:'init'})
+  const events = []
+  const eng = createSherpaKokoroEngine({
+    cacheDir: r14Tmp,
+    modelHost: () => '',
+    allowCustomHost: false,
+    broadcast: (ev) => events.push(ev),
+  })
+  let rejected = ''
+  const p = eng.synthesize('第一句').then(
+    () => {},
+    (e) => { rejected = e instanceof Error ? e.message : String(e) },
+  )
+  const t0 = Date.now()
+  while (globalThis.__r14c.initParked() === 0 && Date.now() - t0 < 3000) await sleep(10)
+  assert.equal(globalThis.__r14forks, 1, '前置条件：已进入 init 等待窗（fork 已发生）')
+  assert.equal(globalThis.__r14c.initParked(), 1, '前置条件：init 请求已发出且未应答')
+  await eng.close() // close 最早期置位 → 清 child/childInit/ready → kill
+  globalThis.__r14c.releaseInit() // 放行 init 应答（桩 child 不派发 exit，避免打回在途请求）
+  await Promise.race([p, sleep(300)])
+  assert.ok(/closed/.test(rejected), `close 后 synthesize 应 reject（实际: ${JSON.stringify(rejected)}）`)
+  // 无判序时：init 放行 → childInit 被重新置位（status().ready 对已 close 的引擎报就绪）
+  // 且 tts-ready 被打到已无人接收的 SSE。
+  assert.equal(
+    eng.status().ready,
+    false,
+    'close 落进 init 等待窗后仍报 ready——childInit 被陈旧置位（status() 对已 close 的引擎谎报就绪）',
+  )
+  assert.equal(
+    events.filter((e) => e === 'tts-ready').length,
+    0,
+    'close 落进 init 等待窗后仍广播 tts-ready——信号打到已无人接收的 SSE',
+  )
+  globalThis.__r14m.arm('file')
+})
+
+// M4：exit/error 回调无条件写闭包变量 `child`。respawnChild（interrupt 路径）置空 child
+// 后若已 fork 出新子进程，旧子进程迟到的 exit 会把新子进程的引用清空 → 下次再 fork →
+// 新子进程成为携完整模型、无人再 close 的孤儿（与 I-1 同一条泄漏链的另一入口）。
+await t('R15 M4：旧子进程迟到的 exit 不得清空新子进程的引用（否则多余 fork 出孤儿）', async () => {
+  globalThis.__r14c.reset()
+  globalThis.__r14m.arm('off')
+  const eng = createSherpaKokoroEngine({ cacheDir: r14Tmp, modelHost: () => '', allowCustomHost: false, broadcast: () => {} })
+  // 合成请求在桩 child 里永不回包（send 忽略 synth），故一律 catch 掉，防止未处理拒绝。
+  const synth = (txt) => { void eng.synthesize(txt).catch(() => {}) }
+  const waitFor = async (pred, what) => {
+    const t0 = Date.now()
+    while (!pred() && Date.now() - t0 < 3000) await sleep(10)
+    assert.ok(pred(), `前置条件：应${what}`)
+  }
+  synth('第一句')
+  await waitFor(() => globalThis.__r14c.initParked() === 1, 'fork 出 1 号子进程并挂起 init')
+  globalThis.__r14c.releaseInit() // 1 号 init 完成 → 引擎就绪
+  await waitFor(() => eng.status().ready === true, '1 号子进程完成 init')
+
+  eng.interrupt() // = respawnChild：kill 1 号、child 置空、ready/childInit 置空
+  assert.deepEqual(globalThis.__r14killed, [1], '前置条件：interrupt 应杀掉 1 号子进程')
+  synth('第二句')
+  await waitFor(() => globalThis.__r14forks === 2, 'fork 出 2 号子进程')
+  globalThis.__r14c.releaseInit()
+  await waitFor(() => eng.status().ready === true, '2 号子进程完成 init')
+
+  // 1 号子进程的 exit 迟到（真实 SIGTERM→exit 异步，落进新子进程已在役的窗口）。
+  globalThis.__r14c.emitExit(1)
+  await sleep(50)
+  synth('第三句')
+  await sleep(100)
+  assert.equal(
+    globalThis.__r14forks,
+    2,
+    `多余 fork 到 ${globalThis.__r14forks} 个：旧子进程迟到的 exit 清空了新子进程的引用——它将成为携完整模型、无人再 close 的孤儿`,
+  )
+  await eng.close()
+  globalThis.__r14m.arm('file')
 })
 
 await t('R14 探针 A：在途合成被 close 打回后，catch 不得再建 retrySleep timer', async () => {
@@ -508,6 +664,133 @@ await t('PR #16 once：队列排空才 onIdle（每批一次）；isIdle 反映�
   assert.deepEqual(idles, ['s1'], '两句播完只应 onIdle 一次')
   assert.equal(q.isIdle('s1'), true)
   await q.close()
+})
+
+// ---------------------------------------------------------------------------
+// R15（Issue #15 Important-2）：tts-idle 在「回合之间的空档」也发 → mode:once 提前退出。
+//
+// 链路（逐行核对 8c0368a）：host 在**每一条** llm/stream 的 finally 都把 turn 打回
+// listening（index.ts:1875，于是一条流结束 = 回合结束）；而 onIdle 原义「队列排空一次即发」。
+// 带工具调用的 agent 在第一轮流结束与第二轮开始之间有秒级到分钟级的空档：第一段排空 →
+// tts-idle → 客户端 ttsDrained=true → 播完 playing=false → mic-gesture.onceFinished 成立
+// → 维持 ONCE_SETTLE_MS=1.2s 后 exitMode('manual') → /toggle off → queue.cancel；第二轮
+// llm/stream 因 activeVoiceSession 已空不再被 tap（index.ts:957）→ 后半段回复永不朗读。
+//
+// 本用例把客户端 once 判定状态机（client.tsx checkOnce + mic-gesture.onceFinished）一并
+// 建模：onIdle 真接到 ttsDrained 上，故「队列排空 → once 判定」这条因果链是被真实走过的，
+// 而非只断言队列内部计数。
+// ---------------------------------------------------------------------------
+console.log('R15 I-2：tts-idle 的回合闸门（回合间空档不得发）')
+
+const { onceFinished } = await import('../src/mic-gesture.ts')
+
+await t('R15 I-2：回合未确认结束时空档排空不发 tts-idle；noteTurnEnd 后才发', async () => {
+  // 客户端 once 模式判定状态的最小模型。
+  const ui = { turn: 'agent-speaking', ttsDrained: false, playing: false }
+  const o = { sawRun: false }
+  const idles = []
+  const q = new TtsQueue({
+    engine: makeEngine('a'),
+    onIdle: (sid) => {
+      idles.push(sid)
+      if (!ui.ttsDrained) ui.ttsDrained = true // 镜像 client.tsx:1189-1190
+    },
+    awaitTurnEnd: true,
+  })
+  const frames = []
+  q.subscribe((f) => frames.push(f))
+  // 镜像 client.tsx:2260-2266 checkOnce 的判定（不模拟 1.2s 计时器本身，只判条件是否成立）。
+  const onceReady = () => {
+    const running = ui.turn === 'agent-speaking'
+    if (running) o.sawRun = true
+    return onceFinished(o, running, ui.ttsDrained, ui.playing)
+  }
+
+  // —— 第 1 轮（工具调用前）：一段文本 ——
+  q.enqueue('s1', '第一段。')
+  await waitFrames(frames, 2)
+  assert.equal(onceReady(), false, '前置条件：正在作答，onceFinished 不应成立')
+  ui.playing = false // 客户端播完
+  ui.turn = 'listening' // host：每条 llm/stream 的 finally 都把 turn 打回 listening
+  await sleep(80) // 等 pump finally 跑完（此刻队列已排空）
+  assert.deepEqual(
+    idles,
+    [],
+    '回合仍在进行（工具未返回）时排空就发 tts-idle —— 那是轮次间空档，不是朗读结束',
+  )
+  assert.equal(
+    onceReady(),
+    false,
+    '回合间空档里 onceFinished 成立 —— mode:once 会在 1.2s 后 exitMode，第二轮回复永不朗读（v0.7.27 头号特性在工具型 agent 上失效）',
+  )
+
+  // —— 第 2 轮（工具返回后）：又一段文本 ——
+  ui.turn = 'agent-speaking'
+  ui.playing = true
+  q.enqueue('s1', '第二段。')
+  await waitFrames(frames, 4)
+  ui.playing = false
+  ui.turn = 'listening'
+  await sleep(80)
+  assert.deepEqual(idles, [], '第二轮排空同样不得发（回合仍未确认结束）')
+  assert.equal(onceReady(), false)
+
+  // —— 回合真正结束：host 在 agent/turn-stopping 调 noteTurnEnd ——
+  q.noteTurnEnd('s1')
+  assert.deepEqual(idles, ['s1'], '回合确认结束、队列已排空 → 必须补发一次 tts-idle')
+  assert.equal(onceReady(), true, '回合结束 + 队列排空后 onceFinished 才成立')
+
+  // —— 第 2 个回合：验证 enqueue 会重新打开闸门，且每回合至多发一次 ——
+  ui.turn = 'agent-speaking'
+  ui.ttsDrained = false
+  q.enqueue('s1', '第三段。')
+  await waitFrames(frames, 6)
+  ui.turn = 'listening'
+  await sleep(80)
+  assert.deepEqual(idles, ['s1'], '新一轮排空又只是候选空闲——enqueue 未重新打开回合闸门')
+  q.noteTurnEnd('s1')
+  assert.deepEqual(idles, ['s1', 's1'], '第二个回合结束应再发一次（不能因上一回合已发过而漏发）')
+  await q.close()
+})
+
+await t('R15 I-2：noteTurnEnd 落在在途合成上不抢发；close 后不再发；闸门缺省关闭=旧语义', async () => {
+  const idles = []
+  let release
+  const gate = new Promise((r) => {
+    release = r
+  })
+  const q = new TtsQueue({ engine: makeEngine('a', gate), onIdle: (sid) => idles.push(sid), awaitTurnEnd: true })
+  const frames = []
+  q.subscribe((f) => frames.push(f))
+  q.enqueue('s1', '一')
+  const t0 = Date.now()
+  while (q.isIdle('s1') && Date.now() - t0 < 2000) await sleep(5)
+  assert.equal(q.isIdle('s1'), false, '前置条件：合成在途')
+  q.noteTurnEnd('s1')
+  assert.deepEqual(idles, [], '仍有在途合成时抢发 tts-idle —— 客户端会误判朗读已结束')
+  release()
+  await waitFrames(frames, 2)
+  const t1 = Date.now()
+  while (idles.length === 0 && Date.now() - t1 < 2000) await sleep(5)
+  assert.deepEqual(idles, ['s1'], '排空时由 pump finally 补发一次（不得两次）')
+  await q.close()
+  q.noteTurnEnd('s1')
+  assert.deepEqual(idles, ['s1'], 'close 后 noteTurnEnd 仍在对外发信号')
+
+  // 闸门缺省关闭（awaitTurnEnd 未传）：保持「排空即发」的旧语义，未接回合结束钩子的宿主
+  // 零行为变化——既有 PR #16 用例亦覆盖 onIdle 本身，此处锁住 noteTurnEnd 自身不越权发信号。
+  const legacyIdles = []
+  const legacy = new TtsQueue({ engine: makeEngine('b'), onIdle: (sid) => legacyIdles.push(sid) })
+  const legacyFrames = []
+  legacy.subscribe((f) => legacyFrames.push(f))
+  legacy.enqueue('s2', '甲')
+  await waitFrames(legacyFrames, 2)
+  const t2 = Date.now()
+  while (legacyIdles.length === 0 && Date.now() - t2 < 2000) await sleep(5)
+  assert.deepEqual(legacyIdles, ['s2'], '闸门缺省关闭时排空仍应发 tts-idle（旧语义不得被本改动破坏）')
+  legacy.noteTurnEnd('s2')
+  assert.deepEqual(legacyIdles, ['s2'], '闸门缺省关闭时 noteTurnEnd 不得额外发信号')
+  await legacy.close()
 })
 
 console.log(`\ntts-queue-engine：${passed} 项通过`)

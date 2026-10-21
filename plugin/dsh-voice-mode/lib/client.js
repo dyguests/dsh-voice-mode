@@ -2228,6 +2228,9 @@ function takeToggleSlot(history, now) {
 function onceFinished(o, running, ttsDrained, playing) {
   return o.sawRun && !running && ttsDrained && !playing;
 }
+function isPrimaryPress(button) {
+  return button === 0;
+}
 
 // src/runtime-boot.ts
 var runtimeBoot = null;
@@ -3463,7 +3466,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "8c0368a";
+var BUILD_TAG = "87e491e";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -5687,6 +5690,7 @@ function MicButton({
     return () => el.removeEventListener("touchstart", onTouchStart);
   }, []);
   const onPointerDown = (e) => {
+    if (!isPrimaryPress(e.button)) return;
     lockSelection();
     holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId };
     e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -5727,6 +5731,7 @@ function MicButton({
     }
   };
   const onPointerUp = (e) => {
+    if (!isPrimaryPress(e.button)) return;
     const p = holdPtrRef.current;
     holdPtrRef.current = null;
     clearBreakTimer();

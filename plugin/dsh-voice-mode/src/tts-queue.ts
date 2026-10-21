@@ -227,8 +227,34 @@ export class TtsQueue {
   /** 单句合成重试耗尽被跳过通知（每句一次；此前是静默丢句——真机「回复偶尔不朗读」根因之一）。 */
   private readonly onSkip?: (sessionId: string, text: string, streak: number) => void
   /** 某会话队列跑空（无在途、无积压）：「说完就关」据此判定朗读真正结束——客户端只能看到
-   *  句间的播放空档，分不清「后面还有句子在合成」与「已全部读完」。 */
+   *  句间的播放空档，分不清「后面还有句子在合成」与「已全部读完」。
+   *
+   *  R15（Issue #15 Important-2）：本回调的口径取决于 awaitTurnEnd，见下方 openTurns。 */
   private readonly onIdle?: (sessionId: string) => void
+  /**
+   * R15（Issue #15 Important-2）：回合闸门——「队列排空」≠「回合结束」。
+   *
+   * 缺陷（逐行核对 8c0368a）：onIdle 原义「排空一次即发」，无「回合是否真正结束」约束。
+   * 而 host 在**每一条** llm/stream 的 finally 都把 turn 打回 listening（index.ts:1875，
+   * 于是一条流结束 = 回合结束）。带工具调用的 agent 在第一轮流结束与第二轮开始之间存在
+   * 秒级到分钟级的空档：第一段文本排空 → tts-idle → 客户端 ttsDrained=true；播完、playing
+   * =false → mic-gesture.onceFinished（sawRun && !running && ttsDrained && !playing）成立
+   * → 维持 ONCE_SETTLE_MS=1.2s 后 exitMode('manual') → /toggle off → queue.cancel；第二轮
+   * llm/stream 因 activeVoiceSession 已空不再被 tap（index.ts:957）→ **后半段回复永不朗读**，
+   * 麦克风在 AI 还在干活时熄灭。非工具场景的等价触发是句间停顿 >1.2s。
+   *
+   * 修法：onIdle 降级为「候选空闲」，真正的结束信号由 host 在**回合真正结束**时确认——
+   * 即宿主 dsh 的 `agent/turn-stopping`（契约原文「the model owes no response: no live
+   * tool calls, no fresh steering」，正是工具空档与真回合结束的判别式），在那儿调
+   * noteTurnEnd(sessionId)。队列侧：enqueue 视为「新回合在途」标记，pump finally 的排空
+   * 回调在该标记存在时**不发**（那只是句间空档）；回合结束标记被清且队列已排空时补发。
+   *
+   * awaitTurnEnd 缺省 false = 闸门关闭，保持原语义（排空即发），供尚未接回合结束钩子的
+   * 宿主零行为变化地兼容；置 true 后本集合才被 enqueue 填充。
+   */
+  private readonly awaitTurnEnd: boolean
+  /** awaitTurnEnd 开启时：某会话当前有一轮可能仍在进行（已入队过文本、回合尚未确认结束）。 */
+  private readonly openTurns = new Set<string>()
   /**
    * M7②（Issue #15 R11）：退避重启计时器句柄集。
    *
@@ -273,11 +299,38 @@ export class TtsQueue {
     onError?: (sessionId: string) => void
     onSkip?: (sessionId: string, text: string, streak: number) => void
     onIdle?: (sessionId: string) => void
+    /**
+     * R15（Issue #15 Important-2）：置 true 后 onIdle 只在 host 确认回合结束
+     * （noteTurnEnd）后发出——修「回合间空档误发致 mode:once 提前退出」。缺省 false。
+     */
+    awaitTurnEnd?: boolean
   }) {
     this.engine = options.engine
     this.onError = options.onError
     this.onSkip = options.onSkip
     this.onIdle = options.onIdle
+    this.awaitTurnEnd = options.awaitTurnEnd === true
+  }
+
+  /**
+   * R15（Issue #15 Important-2）：host 确认该会话的一轮作答**真正结束**（不会再有新的
+   * llm/stream）时调用，接线点为宿主 dsh 的 `agent/turn-stopping`。
+   *
+   * 置 awaitTurnEnd 后：关闭该会话的在途标记；若队列此刻已排空则立即补发一次 onIdle
+   * ——回合结束时 pump 的 finally 可能早已过去（最后一句播完时就发过「候选空闲」被
+   * 闸门拦下），此时没有后续回调可等，必须在此补发。
+   * 幂等/重复调用无害：重复触发时消费侧有 `!ttsDrained` 去重护栏（client.tsx:1189）。
+   */
+  noteTurnEnd(sessionId: string): void {
+    if (this.closed) return // I-1 同构：close 后不得再对外发信号
+    this.openTurns.delete(sessionId)
+    if (!this.awaitTurnEnd) return
+    if (!this.isIdle(sessionId)) return // 仍有在途/积压：排空时由 pump finally 发
+    try {
+      this.onIdle?.(sessionId)
+    } catch {
+      // 回调错误不影响队列
+    }
   }
 
   /** 该会话当前无在途合成、无积压（未建队列也算空闲）。 */
@@ -373,6 +426,9 @@ export class TtsQueue {
   /** 为某会话入队一句；若泵空闲则启动。 */
   enqueue(sessionId: string, text: string): void {
     if (this.closed) return // I-1：关闭后不入队、不起泵（否则会以 closed 状态再调 synthesize）
+    // R15：有文本到达 = 本轮仍在产出，旧的「回合已结束」标记作废。此后到 host 的
+    // noteTurnEnd 之间，队列排空只是句间/轮次间的空档，不得据此判定朗读结束。
+    if (this.awaitTurnEnd) this.openTurns.add(sessionId)
     let q = this.queues.get(sessionId)
     if (!q) {
       q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 }
@@ -415,6 +471,7 @@ export class TtsQueue {
       q.epoch++
       q.pending.length = 0
     }
+    this.openTurns.delete(sessionId) // R15：随队列一并回收，防 openTurns 随会话数增长
     this.queues.delete(sessionId)
   }
 
@@ -519,10 +576,15 @@ export class TtsQueue {
       // 不得再有新 timer 入集，否则又是同一条泄漏链）。
       if (this.closed) return
       if (q.pending.length === 0) {
-        try {
-          this.onIdle?.(sessionId)
-        } catch {
-          // 回调错误不影响队列
+        // R15（Issue #15 Important-2）：回合仍在进行时，本次排空只是轮次间的空档
+        // （工具执行 / 长思考），不是「朗读结束」——此时不发 onIdle，否则 mode:once
+        // 会在空档里提前 exitMode，后半段回复永不朗读。等 host 的 noteTurnEnd 确认。
+        if (!this.openTurns.has(sessionId)) {
+          try {
+            this.onIdle?.(sessionId)
+          } catch {
+            // 回调错误不影响队列
+          }
         }
       } else {
         // 失败退避：1s 指数递增至多 8s；成功/无错误即时。
@@ -553,6 +615,7 @@ export class TtsQueue {
     // 插件已卸载却留下孤儿子进程（热重载常态路径，非异常路径）。dispose 路径只
     // void queue.close() 不 cancel 不 prune，故闸门必须自成闭环。
     this.closed = true
+    this.openTurns.clear() // R15：回合标记一并清空（close 后不得再有回合结束信号）
     // M7②：先取消所有待触发的退避重启，再关引擎——否则计时器会在 close 后触发 pump，
     // 让本地引擎 ensureReady() 重新 fork 出一个孤儿子进程（热重载泄漏）。
     for (const timer of this.backoffTimers) clearTimeout(timer)

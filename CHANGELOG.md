@@ -7,14 +7,15 @@
 
 ## [Unreleased]
 
-### Issue #15 R15 轮（v0.7.27 基线上的文档与口径收口，2026-10-21）
+### Issue #15 R15 轮（v0.7.27 基线上的文档与口径收口 + 三个 Blocker 域修复，2026-10-21）
 
-> 本轮**无用户可见行为变更**（纯文档/口径），代码与测试未改。主要是发版后才发现的文档漂移与账本断裂的补正。
+> 本轮含**用户可见行为变更**：第九次独立 sweep 的 5 个 Blocker 中三个域（segmenter 跨 delta 围栏状态机 / 麦克风按钮右键误触打断 / TTS 链 Kokoro 闸门 + tts-idle 回合闸门）已修并补行为锁；其余为发版后才发现的文档漂移与账本断裂的补正（纯文档/口径）。
 
 - **基线纠正**：本轮开工时本地 `main` 落后 `origin/main` 18 个提交（含 v0.7.26 / v0.7.27 两次发版），此前基于 `58c9ffd` 的取证全部作废并重做。教训：动手前先 `git fetch` 核对 `origin/main`。
 - **文档漂移修复 7 项**：根 README「完整 25 项设置表」→ **28 项**（schema 实测 28 键）；计数 624→653 的现行口径漏刷 5 处（v0.7.27 发版只更新了 `docs/CONTEXT.md`）；根 `CONTEXT.md` 补 PR #16 新增 3 键（`readAloud` / `showStatusBar` / `showCaptions`）与 `mode:once`、补 `mic-gesture.ts`；三处随 `client.tsx`(+799) / `index.ts`(+174) 重写失效的 file:line 锚点刷新（`asr.ts` / `segmenter.ts` 侧经实测未漂移、未动）。
 - **账本补记**：CHANGELOG 补记 R14 段（第 7 道门 tts-local 引擎级 closed 闸门）——R14 随 v0.7.26 一同发布但**当时未记**；v0.7.26 段计数行 624→**627**（实测：R14 在 v0.7.26 树内且二者之间 `test/` 未变）；STATE 闭合 R13 验真轮悬空句、补 R14 账本条目、记 v0.7.26 / v0.7.27 两轮发版承载。
-- **行为级计数口径升级（87 → 368，勿误读为新增 281 项测试）**：统计口径从「fix-test scope 13 个文件」扩到「全 52 文件逐用例判定」；R13 口径 13 文件子集现值 **103**（原 87）。合同级/静态守卫 285 项，368 + 285 = 653。权威口径 = 运行时各文件「N 项通过」求和——静态扫 `t(` 调用点在 3 个文件各多 1 条注释/字面量里的假用例、package-install 少 3 条（for 循环展开），数值巧合相同、构成不同。
+- **行为级计数口径升级（87 → 368，勿误读为新增 281 项测试）**：统计口径从「fix-test scope 13 个文件」扩到「全 52 文件逐用例判定」；R13 口径 13 文件子集现值 **103**（原 87）。合同级/静态守卫 285 项，368 + 285 = 653。权威口径 = 运行时各文件「N 项通过」求和——静态扫 `t(` 调用点在 3 个文件各多 1 条注释/字面量里的假用例、package-install 少 3 条（for 循环展开），数值巧合相同、构成不同。**（此为口径升级子步的数值；三个 Blocker 域落库后的现行口径见下条「计数刷新」）**。
+- **计数刷新（653 → 669，R15-D）**：三个 Blocker 域（segmenter 跨 delta 围栏状态机 / 麦克风按钮右键误触打断 / TTS 链 Kokoro 闸门 + tts-idle 回合闸门）的代码与行为锁落库，全套件 653 → **669 ✓ / 52 文件**（文件数不变；segmenter 16→23、mic-gesture 6→10、tts-queue-engine 11→16，合计 +16）。**16 条新用例逐条复核判定：14 行为级 / 2 合同级**——2 条合同级 = mic-gesture 的「onPointerUp 对称拦截」与「右键菜单仍能开」，二者**全程只做 `src/client.tsx` 源码文本 / regex 匹配**（`readFileSync` 后 `indexOf`/`search`/`split` 匹配守卫位置与调用次数）、**未调用任何真实函数**，属静态守卫；其余 14 条均为真编译 src、真驱动真逻辑、断言可观察行为。据此行为级 368 → **382**、合同级 285 → **287**，算术自洽 **382 + 287 = 669**；R13 口径 13 文件子集 103 → **108**（+5 全部来自子集内 tts-queue-engine 4→11→16）。全仓「现行口径」计数（徽章 / README 正文与博客表 / `docs/CONTEXT.md` 计数+沿革 / `docs/qa/*` / `docs/plan/*` / `docs/mkdocs.yml` 头部 / STATE 计数与沿革链）按此刷新；历史时点值（583/603/611/616/618/622/624/627、v0.7.26 的 627/51 等）一律未动。
 - **复核新发现 2 项 Minor（代码正确，锁保真度缺口，已登记待处理）**：① R14「四层判序」实为**两层独立锁定 + 两层纵深防御**——删 `tts-local.ts:278`（IIFE 入口判序）或 `:433`（synthesize 前判序）单独删除后全套件仍绿（分别被 `:293` / `:437` 掩蔽），而这两层的 commit/CHANGELOG 措辞未作区分；② PR #16 SSE 同 tabId 去重的**焦点保持不变量**（`index.ts:1741` 判 `latestConnByTab` 认主）依赖「`res.end()` 的 `'close'` 晚于 handler 同步体」这一隐式时序——主会话用独立探针实测该前提在真实 Node 下**成立**（现行代码正确），但该不变量**零测试锁定**且现有假 res 桩结构上无法锁定（其 `end()` 从不自动触发 `'close'`），故任何使 `'close'` 同步化或调换 `latestConnByTab.set` 顺序的改动都会静默破坏「刷新后 `readAloud=always` 仍朗读」而全套件仍绿。
 
 ### 规划中
@@ -55,7 +56,7 @@ dyguests 在自己的分支上直接改运行产物（`lib/`）做出了整套�
 - **activity 槽位被遮住时兜底**：activity 是单槽位，被别的注册者（如 dsh 实验性语音输入）遮住时原实现两处都不渲染，麦克风与快捷键一起消失；改为 activity 按钮连续 1.5 秒没挂上才由 right 兜底，会话切换的短暂卸载不会闪出第二个按钮。
 - **设置 scope 改显式转发**：原型继承式包装在宿主 scope 使用私有字段时会让方法里的 `this` 失效。
 - hold 模式未按住时显示麦克风图标（此时没有实时电平，竖条会停在旧值）。
-- 验证：npm test 52 套件 / 653 项全绿；`smoke-client` 断言「恰好一个 mic 按钮」+ 右键菜单；真实闭环新增 `--always`（不进语音模式发打字消息 → 本页朗读 → 点按钮停止、不误进语音、余句不再播）与 `--once`（读完自动退出）；dsh 0.2.1-rc.2 / 0.1.6-alpha.2 冒烟通过；0.1.1-rc.2 的全新安装核心在本机启动即报「user patch-layer watching requires the Cordis HMR service」退出，v0.7.26 在同一核心上表现相同，属核心安装环境问题，与本次改动无关（锚点检查 0.1.1-rc.2 / 0.1.2-alpha.4 通过）。
+- 验证：npm test 52 套件 / 653 项全绿（**v0.7.27 发布时实测口径**；R15 三个 Blocker 域落库后为 669 项，见 `[Unreleased]` 的 R15-D 计数刷新）；`smoke-client` 断言「恰好一个 mic 按钮」+ 右键菜单；真实闭环新增 `--always`（不进语音模式发打字消息 → 本页朗读 → 点按钮停止、不误进语音、余句不再播）与 `--once`（读完自动退出）；dsh 0.2.1-rc.2 / 0.1.6-alpha.2 冒烟通过；0.1.1-rc.2 的全新安装核心在本机启动即报「user patch-layer watching requires the Cordis HMR service」退出，v0.7.26 在同一核心上表现相同，属核心安装环境问题，与本次改动无关（锚点检查 0.1.1-rc.2 / 0.1.2-alpha.4 通过）。
 
 ## [0.7.26] - 2026-10-20
 
@@ -147,7 +148,7 @@ R2 验真轮发现 6 个新 Important（其中 2 个是 R2 修复自身引入的
 **测试与口径（终态）**
 
 - 计数（**R4 时点**；终态 627 ✓ / 51 文件（本版 v0.7.26 的实测终态，R14 后 627）——R9 后 616（+5 barge-in-detect-behavior）、R11 后 618（+2 M7）、R12 后 622（+4 I-1/M7①/warmupSense）、R13 后 624（+2 第 6 道门/Minor-8）、R14 后 627（+3 第 7 道门引擎级闸门，tts-queue-engine 7→10），沿革见 STATE 账本）：`npm test` exit 0 / **611 ✓ / 50 文件**（两种求和法一致；`scripts.test` 链 50 个文件调用）。沿革：R1 41 文件/518 项 → R2 48 文件/583 项 → R3 49 文件/603 项（+20）→ R4 50 文件/611 项（**+8 = asr-lifecycle 5 + correct-cycle-behavior 9→11 + host-fixes 15→16**）。
-- **行为级测试 74 项**（fix-test scope 枚举口径，**R4 时点**；终态 **368 项**（**全 52 文件逐用例判定**口径，R15 升级；**非新增 281 项测试**——87→368 是统计口径从「fix-test scope 13 文件」扩到「全 52 文件逐用例判定」，同期全套件仅 624→653；R13 口径 13 文件子集现值 **103 项**，与 368 不混用；判定分布与计数陷阱见 STATE 账本））：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（R4 时点；**现值 7/20**——R12 后 host-fixes 行为级 +4 = M7① 入口判序双路径 3 + warmupSense 1（I-1 闸门锁在 tts-queue-engine、不计入 host-fixes；全套件 +4 breakdown 见 STATE 账本），余 13 条合同级；其余各文件计数与 R4 时点一致，现值以 STATE 账本枚举为准）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
+- **行为级测试 74 项**（fix-test scope 枚举口径，**R4 时点**；终态 **382 项**（**全 52 文件逐用例判定**口径，R15 升级；**非新增 281 项测试**——87→368 是统计口径从「fix-test scope 13 文件」扩到「全 52 文件逐用例判定」（同期全套件仅 624→653），368→382 是 R15-D 三个 Blocker 域的 16 条新用例中 14 条判行为级的真实增量（同期全套件 653→669，合同级 285→287，382+287=669）；R13 口径 13 文件子集现值 **108 项**，与 382 不混用；判定分布与计数陷阱见 STATE 账本））：fail-streak-notice 4/4、partial-gating 3/3、asr-lifecycle 5/5、steer-submit-behavior 9/9、correct-cycle-behavior 11/11、host-security-behavior 13/15（余 2 条为源码常量锁）、host-fixes 3/16（R4 时点；**现值 7/20**——R12 后 host-fixes 行为级 +4 = M7① 入口判序双路径 3 + warmupSense 1（I-1 闸门锁在 tts-queue-engine、不计入 host-fixes；全套件 +4 breakdown 见 STATE 账本），余 13 条合同级；其余各文件计数与 R4 时点一致，现值以 STATE 账本枚举为准）、download 4/4、barge-in-manual 8/8、detect-route 6/6、sense-worker 8/8；镜像级（hold-clear 5/11、backchannel 5/31）不计。**与全套件 50 文件/611 项是两个口径，勿混用**。
 
 ### Issue #15 R5 修复轮（R4 验真轮 2 Important；2026-10-20，`0763966`）
 

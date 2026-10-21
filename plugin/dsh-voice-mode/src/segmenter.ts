@@ -72,8 +72,10 @@ export class SentenceSegmenter {
   /** 是否处在 ``` 代码块内（跨 delta 有效：流式 delta 只有几个 token，代码块总是被切碎送达，
    *  plainText 的整块正则匹配不到，代码会被逐句念出——「总是朗读」覆盖打字会话后尤其明显）。 */
   private inFence = false
-  /** delta 末尾悬挂的 1-2 个反引号（可能是被切开的 ``` 前半）。 */
+  /** delta 末尾悬挂的 1-2 个反引号（被切开的 ``` 前半；连续 3 个及以上是完整围栏，不悬挂）。 */
   private ticks = ''
+  /** 围栏内被抑制的内容暂存：流结束时若仍未闭合则回退输出（宁可念代码，也不吞掉整回合正文）。 */
+  private fenced = ''
 
   constructor(options: SegmenterOptions = {}) {
     this.maxChars = options.maxSentenceChars ?? 200
@@ -83,21 +85,29 @@ export class SentenceSegmenter {
   private dropFences(chunk: string): string {
     let s = this.ticks + chunk
     this.ticks = ''
-    const hang = /`{1,2}$/.exec(s)
-    if (hang) {
-      this.ticks = hang[0]
-      s = s.slice(0, -hang[0].length)
+    // 悬挂判定只针对「被切开的围栏」——尾部连续 1-2 个反引号（跨 delta 的 1+2 / 2+1 形态）。
+    // 连续 3 个及以上是完整围栏标记，必须整段留下交给下面的扫描：若像 v0.7.27 那样无条件
+    // 把尾部 1-2 个挪进 ticks，围栏就永不被识别——代码被逐句念出，且可能让 inFence 卡死。
+    const trail = /`+$/.exec(s)
+    const hang = trail ? trail[0].length : 0
+    if (hang > 0 && hang <= 2) {
+      this.ticks = s.slice(-hang)
+      s = s.slice(0, -hang)
     }
     let out = ''
     for (;;) {
-      const i = s.indexOf('```')
-      if (i < 0) {
-        if (!this.inFence) out += s
+      // 整段连续反引号算一个围栏标记（` ``` ` / ` ```` ` / ` `````` ` 都按一个标记翻转）。
+      const m = /`{3,}/.exec(s)
+      if (!m) {
+        if (this.inFence) this.fenced += s
+        else out += s
         return out
       }
-      if (!this.inFence) out += s.slice(0, i) + '\n'
+      if (this.inFence) this.fenced += s.slice(0, m.index)
+      else out += s.slice(0, m.index) + '\n'
       this.inFence = !this.inFence
-      s = s.slice(i + 3)
+      if (!this.inFence) this.fenced = '' // 围栏正常闭合 → 暂存的代码作废（代码块本就不该念）
+      s = s.slice(m.index + m[0].length)
     }
   }
 
@@ -124,12 +134,18 @@ export class SentenceSegmenter {
     return out
   }
 
-  /** 收尾：flush 剩余缓冲（流结束）。 */
+  /**
+   * 收尾：flush 剩余缓冲（流结束）。
+   * 整回合未见闭合围栏 → 把围栏内被抑制的内容回退输出（v0.7.27 之前未配对围栏零损失，
+   * 全靠这一条守住；否则一个孤立的 ``` 会静默吞掉本回合剩余正文）。
+   */
   flush(): string[] {
+    if (this.inFence) this.buffer = plainText(this.buffer + this.fenced)
     const t = sanitizeForTts(this.buffer).trim()
     this.buffer = ''
     this.inFence = false
     this.ticks = ''
+    this.fenced = ''
     if (t && !SKIP_PREFIX.test(t)) return [t]
     return []
   }

@@ -24,3 +24,12 @@ export function takeToggleSlot(history: number[], now: number): boolean {
 export function onceFinished(o: { sawRun: boolean }, running: boolean, ttsDrained: boolean, playing: boolean): boolean {
   return o.sawRun && !running && ttsDrained && !playing
 }
+
+/** pointerdown/up 是否为主键——只有主键才允许启动手势（长按打断 / 按住说话）。
+ *  Pointer Events 对右键、中键同样派发 pointerdown/up，若不拦截：用户右键开快捷设置菜单时
+ *  （macOS 上的常规动作就是「按住不放等菜单弹出」，≥250ms 是必然而非偶然）会 arm 长按打断
+ *  并中止正在生成的回复、朗读静默。右键语义由 onContextMenu 独占，故这里只放行主键。
+ *  触屏/笔不报 hover，其 pointerdown/up 的 button 恒为 0——按住说话手势不受影响。 */
+export function isPrimaryPress(button: number): boolean {
+  return button === 0
+}

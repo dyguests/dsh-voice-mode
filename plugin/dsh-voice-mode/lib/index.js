@@ -1069,8 +1069,10 @@ var SentenceSegmenter = class {
   /** 是否处在 ``` 代码块内（跨 delta 有效：流式 delta 只有几个 token，代码块总是被切碎送达，
    *  plainText 的整块正则匹配不到，代码会被逐句念出——「总是朗读」覆盖打字会话后尤其明显）。 */
   inFence = false;
-  /** delta 末尾悬挂的 1-2 个反引号（可能是被切开的 ``` 前半）。 */
+  /** delta 末尾悬挂的 1-2 个反引号（被切开的 ``` 前半；连续 3 个及以上是完整围栏，不悬挂）。 */
   ticks = "";
+  /** 围栏内被抑制的内容暂存：流结束时若仍未闭合则回退输出（宁可念代码，也不吞掉整回合正文）。 */
+  fenced = "";
   constructor(options = {}) {
     this.maxChars = options.maxSentenceChars ?? 200;
   }
@@ -1078,21 +1080,25 @@ var SentenceSegmenter = class {
   dropFences(chunk) {
     let s = this.ticks + chunk;
     this.ticks = "";
-    const hang = /`{1,2}$/.exec(s);
-    if (hang) {
-      this.ticks = hang[0];
-      s = s.slice(0, -hang[0].length);
+    const trail = /`+$/.exec(s);
+    const hang = trail ? trail[0].length : 0;
+    if (hang > 0 && hang <= 2) {
+      this.ticks = s.slice(-hang);
+      s = s.slice(0, -hang);
     }
     let out = "";
     for (; ; ) {
-      const i = s.indexOf("```");
-      if (i < 0) {
-        if (!this.inFence) out += s;
+      const m = /`{3,}/.exec(s);
+      if (!m) {
+        if (this.inFence) this.fenced += s;
+        else out += s;
         return out;
       }
-      if (!this.inFence) out += s.slice(0, i) + "\n";
+      if (this.inFence) this.fenced += s.slice(0, m.index);
+      else out += s.slice(0, m.index) + "\n";
       this.inFence = !this.inFence;
-      s = s.slice(i + 3);
+      if (!this.inFence) this.fenced = "";
+      s = s.slice(m.index + m[0].length);
     }
   }
   /** 喂入一段 raw delta，返回它补全的完整句子。 */
@@ -1116,12 +1122,18 @@ var SentenceSegmenter = class {
     }
     return out;
   }
-  /** 收尾：flush 剩余缓冲（流结束）。 */
+  /**
+   * 收尾：flush 剩余缓冲（流结束）。
+   * 整回合未见闭合围栏 → 把围栏内被抑制的内容回退输出（v0.7.27 之前未配对围栏零损失，
+   * 全靠这一条守住；否则一个孤立的 ``` 会静默吞掉本回合剩余正文）。
+   */
   flush() {
+    if (this.inFence) this.buffer = plainText(this.buffer + this.fenced);
     const t = sanitizeForTts(this.buffer).trim();
     this.buffer = "";
     this.inFence = false;
     this.ticks = "";
+    this.fenced = "";
     if (t && !SKIP_PREFIX.test(t)) return [t];
     return [];
   }
@@ -1212,8 +1224,34 @@ var TtsQueue = class {
   /** 单句合成重试耗尽被跳过通知（每句一次；此前是静默丢句——真机「回复偶尔不朗读」根因之一）。 */
   onSkip;
   /** 某会话队列跑空（无在途、无积压）：「说完就关」据此判定朗读真正结束——客户端只能看到
-   *  句间的播放空档，分不清「后面还有句子在合成」与「已全部读完」。 */
+   *  句间的播放空档，分不清「后面还有句子在合成」与「已全部读完」。
+   *
+   *  R15（Issue #15 Important-2）：本回调的口径取决于 awaitTurnEnd，见下方 openTurns。 */
   onIdle;
+  /**
+   * R15（Issue #15 Important-2）：回合闸门——「队列排空」≠「回合结束」。
+   *
+   * 缺陷（逐行核对 8c0368a）：onIdle 原义「排空一次即发」，无「回合是否真正结束」约束。
+   * 而 host 在**每一条** llm/stream 的 finally 都把 turn 打回 listening（index.ts:1875，
+   * 于是一条流结束 = 回合结束）。带工具调用的 agent 在第一轮流结束与第二轮开始之间存在
+   * 秒级到分钟级的空档：第一段文本排空 → tts-idle → 客户端 ttsDrained=true；播完、playing
+   * =false → mic-gesture.onceFinished（sawRun && !running && ttsDrained && !playing）成立
+   * → 维持 ONCE_SETTLE_MS=1.2s 后 exitMode('manual') → /toggle off → queue.cancel；第二轮
+   * llm/stream 因 activeVoiceSession 已空不再被 tap（index.ts:957）→ **后半段回复永不朗读**，
+   * 麦克风在 AI 还在干活时熄灭。非工具场景的等价触发是句间停顿 >1.2s。
+   *
+   * 修法：onIdle 降级为「候选空闲」，真正的结束信号由 host 在**回合真正结束**时确认——
+   * 即宿主 dsh 的 `agent/turn-stopping`（契约原文「the model owes no response: no live
+   * tool calls, no fresh steering」，正是工具空档与真回合结束的判别式），在那儿调
+   * noteTurnEnd(sessionId)。队列侧：enqueue 视为「新回合在途」标记，pump finally 的排空
+   * 回调在该标记存在时**不发**（那只是句间空档）；回合结束标记被清且队列已排空时补发。
+   *
+   * awaitTurnEnd 缺省 false = 闸门关闭，保持原语义（排空即发），供尚未接回合结束钩子的
+   * 宿主零行为变化地兼容；置 true 后本集合才被 enqueue 填充。
+   */
+  awaitTurnEnd;
+  /** awaitTurnEnd 开启时：某会话当前有一轮可能仍在进行（已入队过文本、回合尚未确认结束）。 */
+  openTurns = /* @__PURE__ */ new Set();
   /**
    * M7②（Issue #15 R11）：退避重启计时器句柄集。
    *
@@ -1251,6 +1289,26 @@ var TtsQueue = class {
     this.onError = options.onError;
     this.onSkip = options.onSkip;
     this.onIdle = options.onIdle;
+    this.awaitTurnEnd = options.awaitTurnEnd === true;
+  }
+  /**
+   * R15（Issue #15 Important-2）：host 确认该会话的一轮作答**真正结束**（不会再有新的
+   * llm/stream）时调用，接线点为宿主 dsh 的 `agent/turn-stopping`。
+   *
+   * 置 awaitTurnEnd 后：关闭该会话的在途标记；若队列此刻已排空则立即补发一次 onIdle
+   * ——回合结束时 pump 的 finally 可能早已过去（最后一句播完时就发过「候选空闲」被
+   * 闸门拦下），此时没有后续回调可等，必须在此补发。
+   * 幂等/重复调用无害：重复触发时消费侧有 `!ttsDrained` 去重护栏（client.tsx:1189）。
+   */
+  noteTurnEnd(sessionId) {
+    if (this.closed) return;
+    this.openTurns.delete(sessionId);
+    if (!this.awaitTurnEnd) return;
+    if (!this.isIdle(sessionId)) return;
+    try {
+      this.onIdle?.(sessionId);
+    } catch {
+    }
   }
   /** 该会话当前无在途合成、无积压（未建队列也算空闲）。 */
   isIdle(sessionId) {
@@ -1330,6 +1388,7 @@ var TtsQueue = class {
   /** 为某会话入队一句；若泵空闲则启动。 */
   enqueue(sessionId, text) {
     if (this.closed) return;
+    if (this.awaitTurnEnd) this.openTurns.add(sessionId);
     let q = this.queues.get(sessionId);
     if (!q) {
       q = { pending: [], busy: false, seq: 0, epoch: 0, errorNotified: false, backoff: 0, failStreak: 0 };
@@ -1361,6 +1420,7 @@ var TtsQueue = class {
       q.epoch++;
       q.pending.length = 0;
     }
+    this.openTurns.delete(sessionId);
     this.queues.delete(sessionId);
   }
   async pump(sessionId, q) {
@@ -1438,9 +1498,11 @@ var TtsQueue = class {
       if (this.queues.get(sessionId) !== q) return;
       if (this.closed) return;
       if (q.pending.length === 0) {
-        try {
-          this.onIdle?.(sessionId);
-        } catch {
+        if (!this.openTurns.has(sessionId)) {
+          try {
+            this.onIdle?.(sessionId);
+          } catch {
+          }
         }
       } else {
         const delay = q.errorNotified ? q.backoff : 0;
@@ -1457,6 +1519,7 @@ var TtsQueue = class {
   }
   async close() {
     this.closed = true;
+    this.openTurns.clear();
     for (const timer of this.backoffTimers) clearTimeout(timer);
     this.backoffTimers.clear();
     for (const timer of this.retryTimers) clearTimeout(timer);
@@ -1888,6 +1951,7 @@ function createSherpaLocalEngine(options) {
                 allowCustomHost,
                 broadcast: trackedBroadcast
               });
+              if (closed) return;
               if (!treeOk) throw new Error("local TTS model download failed: espeak-ng-data");
             }
             if (!child) {
@@ -1897,6 +1961,7 @@ function createSherpaLocalEngine(options) {
                 stdio: ["ignore", "ignore", "pipe", "ipc"],
                 ...runtime.execPath ? { execPath: runtime.execPath, env: runtime.env } : {}
               });
+              const me = child;
               let stderrTail = "";
               child.stderr?.on("data", (chunk) => {
                 stderrTail += String(chunk);
@@ -1918,12 +1983,14 @@ function createSherpaLocalEngine(options) {
               });
               child.on("error", (e) => {
                 rejectAll(e instanceof Error ? e : new Error(String(e)));
+                if (child !== me) return;
                 child = null;
                 childInit = false;
                 ready = null;
               });
               child.on("exit", (code) => {
                 rejectAll(new Error(`tts child exited with code ${code}`));
+                if (child !== me) return;
                 child = null;
                 childInit = false;
                 ready = null;
@@ -1931,6 +1998,7 @@ function createSherpaLocalEngine(options) {
             }
             if (!childInit) {
               const init = await call({ type: "init", kind: options.kind, paths: spec.workerPaths(repoDir) });
+              if (closed) return;
               if (!init.ok) throw new Error(init.error ?? "tts child init failed");
               childInit = true;
             }
@@ -2823,6 +2891,7 @@ function apply(ctx, config) {
   let activeTabId = null;
   let activeVoiceLang = "zh";
   let ownerYieldTimer = null;
+  const readMuted = /* @__PURE__ */ new Set();
   const turnStates = /* @__PURE__ */ new Map();
   const setTurn = (sessionId, state) => {
     if (turnStates.get(sessionId) === state) return;
@@ -2834,6 +2903,7 @@ function apply(ctx, config) {
     setTurn(sessionId, "idle");
     turnStates.delete(sessionId);
     turnGen.delete(sessionId);
+    readMuted.delete(sessionId);
   };
   const sessions = ctx.get("sessions");
   const limiter = new RateLimiter();
@@ -3001,7 +3071,12 @@ function apply(ctx, config) {
     // 单句重试耗尽被跳过：显式下行（客户端提示 + 诊断），不再静默丢句。
     // streak = 连续被跳过的句数：客户端据此区分偶发抖动与「云端整体不可用」（如服务端拒绝握手）。
     onSkip: (sessionId, text, streak) => broadcast("tts-skip", { sessionId, text: text.slice(0, 80), streak }),
-    onIdle: (sessionId) => broadcast("tts-idle", { sessionId })
+    onIdle: (sessionId) => broadcast("tts-idle", { sessionId }),
+    // R15（Issue #15 Important-2 host 侧接线）：onIdle 降级为「候选空闲」——「队列排空」不等于
+    // 「回合结束」。带工具调用的回合会在工具执行期间把队列排空一次，据此发 tts-idle 会让
+    // mode:once 在空档里提前 exitMode（麦克风熄灭、后半段回复永不朗读）。置 true 后 tts-idle
+    // 只在 host 经 `agent/turn-stopping` 确认回合真正结束后才发（见下方钩子）。
+    awaitTurnEnd: true
   });
   queue.updateVoice(vset.voice, vset.rate);
   const unsubscribe = queue.subscribe((frame) => broadcast("audio", frame));
@@ -3069,10 +3144,11 @@ function apply(ctx, config) {
     const rawSessionId = options.sessionId;
     if (!config.enabled || rawSessionId === void 0 || options.purpose !== void 0) return next();
     const sessionId = rawSessionId;
-    const alwaysRead = vset.readAloud === "always" && focusedSessionId === sessionId;
+    const alwaysRead = vset.readAloud === "always" && focusedSessionId === sessionId && activeVoiceSession === null;
     if (activeVoiceSession !== sessionId && !alwaysRead) return next();
     const gen = (turnGen.get(sessionId) ?? 0) + 1;
     turnGen.set(sessionId, gen);
+    readMuted.delete(sessionId);
     return tapActiveStream(
       sessionId,
       next(),
@@ -3081,11 +3157,12 @@ function apply(ctx, config) {
       (state) => {
         if ((turnGen.get(sessionId) ?? 0) !== gen) return;
         setTurn(sessionId, state);
-        if (state === "listening" && queue.isIdle(sessionId)) broadcast("tts-idle", { sessionId });
       },
-      vset.readAloud !== "off"
+      vset.readAloud !== "off",
+      () => readMuted.has(sessionId)
     );
   });
+  ctx.on("agent/turn-stopping", ({ agent }) => queue.noteTurnEnd(agent.id));
   const base = BASE_PATH;
   ctx.effect(
     () => ctx.webServer.register({
@@ -3510,6 +3587,7 @@ function apply(ctx, config) {
               return;
             }
             queue.cancel(sessionId);
+            readMuted.add(sessionId);
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId);
           }
           respondJson2(res, 200, { ok: true });
@@ -3751,7 +3829,7 @@ function collectBody(req, res, maxBytes, onBody) {
   req.on("error", () => {
   });
 }
-async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn, speak = true) {
+async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn, speak = true, muted = () => false) {
   const segmenter = new SentenceSegmenter();
   let firstTokenBroadcast = false;
   let firstSentenceBroadcast = false;
@@ -3761,7 +3839,7 @@ async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn, spea
     if (flushed) return;
     flushed = true;
     for (const s of segmenter.flush()) {
-      if (speak) queue.enqueue(sessionId, s);
+      if (speak && !muted()) queue.enqueue(sessionId, s);
     }
   };
   try {
@@ -3777,7 +3855,7 @@ async function* tapActiveStream(sessionId, inner, queue, broadcast, onTurn, spea
             firstSentenceBroadcast = true;
             broadcast("latency", { sessionId, stage: "first-sentence-text" });
           }
-          if (speak) queue.enqueue(sessionId, s);
+          if (speak && !muted()) queue.enqueue(sessionId, s);
         }
       }
       if (chunk.type === "tool-call-delta" && chunk.name) {

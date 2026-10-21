@@ -225,6 +225,12 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
    * synthesize() 同窗口同型暴露。
    * 修法：close() 最早期置位；ensureReady 的 IIFE 在每个 await 之后判序（至少 fork
    * 之前）；synthesize 的 call() 前判序。与 TtsQueue.closed 同构，两层各自闭环。
+   *
+   * R15（Issue #15 Important-1）：本不变式此前只兑现了 2/3 个 await 点——漏了
+   * `await ensureModelTree`（Kokoro 补 espeak-ng-data 整树，秒级到分钟级，排在 fork
+   * 之前的最后一段等待上），即「第 8 道门」。现已逐点普查补齐：ensureReady 的 IIFE
+   * 共 3 个 await（ensureModelFile 循环 / ensureModelTree / call init），全部带判序，
+   * 见下面三处判序注释。
    */
   let closed = false
 
@@ -295,6 +301,12 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
           }
           // 1b) Kokoro：espeak-ng-data 是按目录分发的 ~355 个语音表文件，spec 只列
           //     phontab 作哨兵；必须整树补全，否则 worker 报 "phonindex does not exist"。
+          // R15（Issue #15 Important-1，第 8 道门）：此处曾**没有** closed 判序——它是
+          // 排在 fork 之前的最后一段等待，窗口（秒级到分钟级）内 close 到达后 IIFE 仍会
+          // 续跑到下面的 `if (!child) fork(...)`，造出携完整模型（int8 109MB / fp32 311MB）
+          // 且无人再 close 的孤儿子进程——正是 R14 声明要根治的同一条泄漏链，只在 Kokoro
+          // 路径未闭环（vits 不进该分支，故既有测试全绿也抓不到）。
+          // 与 :293 同构：先判序再判失败（close 已到达时失败与否已无意义）。
           if (options.kind === 'kokoro') {
             const treeOk = await ensureModelTree({
               repo: repoName,
@@ -304,6 +316,7 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
               allowCustomHost,
               broadcast: trackedBroadcast,
             })
+            if (closed) return // R15：整树补全窗内 close → 不 fork（同上）
             if (!treeOk) throw new Error('local TTS model download failed: espeak-ng-data')
           }
           // 2) 子进程：加载模型并合成（同步 CPU 在子进程内，不阻塞主线程；
@@ -316,6 +329,11 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
               stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
               ...(runtime.execPath ? { execPath: runtime.execPath, env: runtime.env } : {}),
             })
+            // R15 M4：登记本子进程身份。exit/error 回调是无条件写闭包变量 `child` 的——
+            // 旧子进程的**迟到** exit（respawnChild 里 kill 后到事件循环派发之间，
+            // 若已 fork 出新子进程）会把新子进程的引用清空 → 下次再 fork → 后者成为携
+            // 完整模型、无人再 close 的孤儿（与 I-1 同一条泄漏链的另一入口）。
+            const me = child
             // 过滤 sherpa 原生 addon 的已知噪音日志（英文句每句一条 "Skip unknown phonemes"）；
             // 其余 stderr 原样转发，便于诊断真实错误。
             // 注意：stderr 分块可能把一行劈成两半，必须按行缓冲后再过滤，否则
@@ -340,13 +358,18 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
               else p.reject(new Error(m.error ?? 'tts child error'))
             })
             child.on('error', (e) => {
+              // R15 M4：rejectAll 仍无条件执行——respawnChild/interrupt 置空 child 后
+              // 正是靠本回调打回在途 synthesize，否则泵会永久挂在 await 上。
               rejectAll(e instanceof Error ? e : new Error(String(e)))
+              if (child !== me) return // 迟到的旧子进程事件：不得清掉新子进程的引用
               child = null
               childInit = false
               ready = null
             })
             child.on('exit', (code) => {
               rejectAll(new Error(`tts child exited with code ${code}`))
+              if (child !== me) return // 同上：close() 已置空 child 时 child !== me，
+              // 此时只需打回在途请求，引用清理早已由 close() 完成。
               child = null
               childInit = false
               ready = null
@@ -354,6 +377,13 @@ export function createSherpaLocalEngine(options: LocalEngineOptions): TtsEngine 
           }
           if (!childInit) {
             const init = await call({ type: 'init', kind: options.kind, paths: spec.workerPaths(repoDir) })
+            // R15：全 await 点判序普查的第二个发现点。init 是「模型已在子进程内加载」的
+            // 同步 CPU 阶段（kokoro 首次可达数秒），close 会落进该 await；放行后若继续
+            // 往下走，会在 close 已清空 child/childInit/ready 之后重新置位 childInit
+            // （陈旧标志：status().ready 对已 close 的引擎报就绪），并把 tts-ready 广播
+            // 打到已无人接收的 SSE。fork 已在上一道判序之后完成，故这里不涉泄漏，
+            // 但同属「每个 await 之后判序」这条不变式，一并补齐。
+            if (closed) return
             if (!init.ok) throw new Error(init.error ?? 'tts child init failed')
             childInit = true
           }

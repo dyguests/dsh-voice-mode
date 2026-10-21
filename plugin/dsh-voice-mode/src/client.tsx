@@ -17,7 +17,7 @@ import { fixtureRecorder } from './fixture-recorder.ts'
 import { errorText } from './error-text.ts'
 import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
 import { composeDraft, shouldWritePartial } from './draft-compose.ts'
-import { isEditingShortcut, onceFinished, takeToggleSlot } from './mic-gesture.ts'
+import { isEditingShortcut, isPrimaryPress, onceFinished, takeToggleSlot } from './mic-gesture.ts'
 import { setRuntimeBoot } from './runtime-boot.ts'
 import { activeLocale, bindLocale, t, useLang, type TKey } from './i18n.ts'
 
@@ -3220,6 +3220,10 @@ export function MicButton({
   }, [])
 
   const onPointerDown = (e: React.PointerEvent): void => {
+    // Issue #15 R2 Blocker：非主键（右/中键）不启动任何手势。右键语义由 onContextMenu
+    // 独占开快捷设置，若这里照 arm，用户按住等菜单弹出（≥250ms 必然成立）就会触发长按
+    // 打断，取消正在生成的回复。触屏/笔的 button 恒为 0，按住说话不受影响。
+    if (!isPrimaryPress(e.button)) return
     lockSelection()
     holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId }
     ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
@@ -3267,6 +3271,10 @@ export function MicButton({
     }
   }
   const onPointerUp = (e: React.PointerEvent): void => {
+    // 与 onPointerDown 对称：非主键的抬起不是手势结束。鼠标所有按键共用同一个 pointerId，
+    // 左键按住中再按下并松开右键时，若不拦会把右键抬起误读成松手（清掉打断计时器 +
+    // endHeld 提前定稿一段话）。
+    if (!isPrimaryPress(e.button)) return
     const p = holdPtrRef.current
     holdPtrRef.current = null
     clearBreakTimer() // 松手即取消未到阈值的打断（短按不得取消回复）
