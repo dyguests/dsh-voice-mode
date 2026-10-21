@@ -510,6 +510,7 @@ function createAsrEngine(config, sessionId) {
   let preRollStartWall = 0;
   let preRollSeedWall = null;
   let wasPlaying = false;
+  let gateQueryScope = false;
   let partialFailStreak = 0;
   let detectFailStreak = 0;
   let salvagedSegment = false;
@@ -560,6 +561,14 @@ function createAsrEngine(config, sessionId) {
     return out;
   };
   const sliceSince = (from) => sliceChunks(segment, from);
+  const deliverIsSpeech = (speech) => {
+    gateQueryScope = true;
+    try {
+      config.onIsSpeech?.(speech);
+    } finally {
+      gateQueryScope = false;
+    }
+  };
   const requestPartial = async () => {
     if (partialInFlight || segment.length === 0) return;
     await resetGate;
@@ -624,6 +633,7 @@ function createAsrEngine(config, sessionId) {
       if (epoch !== segmentEpoch) return;
       if (state === "wake" && wakeEnabled) {
         uploadedSamples = Math.max(uploadedSamples, from + samples.length);
+        partialFailStreak = 0;
         emit(partialListeners, out.text ?? "");
         if (matchWakeWord(out.text ?? "", wakeWord)) {
           wakeConsumed = true;
@@ -633,7 +643,7 @@ function createAsrEngine(config, sessionId) {
         }
         return;
       }
-      if (out.isSpeech !== void 0) config.onIsSpeech?.(out.isSpeech);
+      if (out.isSpeech !== void 0) deliverIsSpeech(out.isSpeech);
       if (state === "loading-model") setState("speech");
       uploadedSamples = Math.max(uploadedSamples, from + samples.length);
       partialFailStreak = 0;
@@ -683,8 +693,8 @@ function createAsrEngine(config, sessionId) {
       if (!res.ok) return;
       const out = await res.json();
       if (epoch !== segmentEpoch || gen !== detectGeneration) return;
-      if (out.isSpeech !== void 0) config.onIsSpeech?.(out.isSpeech);
       if (out.isSpeech === true && preRollSeedWall === null) preRollSeedWall = reqBodyStartWall - 250;
+      if (out.isSpeech !== void 0) deliverIsSpeech(out.isSpeech);
       detectFailStreak = 0;
       detectSent += samples.length;
       while (detectChunks.length > 0 && detectSent >= detectChunks[0].length) {
@@ -1192,10 +1202,15 @@ function createAsrEngine(config, sessionId) {
     get holding() {
       return holdActive;
     },
-    /** A2.5 回声门控：当前残差是否明显高于回声地板（marginDb 默认 6dB）——判用户人声而非回声。 */
+    /** A2.5 回声门控：当前残差是否明显高于回声地板（marginDb 默认 6dB）——判用户人声而非回声。
+     *  Issue #15 R15-5：本方法是客户端回声门控的**唯一询问点**——客户端在「本次检测达到
+     *  打断确认帧数」的瞬间问本方法，答 false 即「放弃本次检测（判为回声，不打断）」。
+     *  引擎据此作废抢救种子：被拒检测的窗口不得成为下次真打断的锚点（种子陈旧会被
+     *  Math.max 钳到环起点 → 整环 2s AI 音频并入用户消息）。作用域限定见 gateQueryScope。 */
     aboveEchoFloor(marginDb = 6) {
-      if (echoFloorRms === 0) return false;
-      return echoPeak > echoFloorRms * Math.pow(10, marginDb / 20);
+      const pass = echoFloorRms > 0 && echoPeak > echoFloorRms * Math.pow(10, marginDb / 20);
+      if (!pass && gateQueryScope) preRollSeedWall = null;
+      return pass;
     },
     echoLevels() {
       return { floorRms: echoFloorRms, residualRms: latestResidualRms, peakRms: echoPeak };
@@ -1459,10 +1474,11 @@ var NlmsAec = class {
           idx = (idx - 1 + bufLen) % bufLen;
         }
         const e = d - y;
-        out[i] = Number.isFinite(e) ? e : 0;
+        const eSafe = Number.isFinite(e) ? e : 0;
+        out[i] = eSafe;
         if (norm > MIN_REF_NORM && !this.frozen) {
           const denom = norm + this.eps;
-          const gain = this.mu * e / denom;
+          const gain = this.mu * eSafe / denom;
           idx = (cursor - this.delay + bufLen) % bufLen;
           for (let t3 = 0; t3 < this.filterLength; t3++) {
             this.w[t3] += gain * xBuf[idx];
@@ -1611,7 +1627,7 @@ var zh = {
   startFail: "\u8BED\u97F3\u6A21\u5F0F\u542F\u52A8\u5931\u8D25\uFF1A{err}",
   holdDots: "\u6309\u4F4F\u8BF4\u8BDD\u2026",
   exit: "\u9000\u51FA",
-  configUnavailableNote: "\uFF08\u8BBE\u7F6E\u6587\u6863\u672A\u5C31\u7EEA\uFF0C\u9762\u677F\u5C31\u7EEA\u540E\u4F1A\u81EA\u52A8\u51FA\u73B0\uFF09\u3002",
+  configUnavailableNote: "\uFF08\u8BBE\u7F6E\u6587\u6863\u672A\u5C31\u7EEA\uFF0C\u6B63\u5728\u91CD\u8BD5\uFF1B\u9762\u677F\u5C31\u7EEA\u540E\u4F1A\u81EA\u52A8\u51FA\u73B0\uFF09\u3002",
   // settings-form
   previewNameFirst: "\u8BF7\u5148\u586B\u5199\u97F3\u8272\u540D\uFF08ShortName\uFF09",
   previewDisabled: "\u8BED\u97F3\u6A21\u5F0F\u5DF2\u7981\u7528\uFF08\u63D2\u4EF6 enabled=false\uFF09\uFF0C\u65E0\u6CD5\u8BD5\u542C",
@@ -1706,7 +1722,7 @@ var zh = {
   descShowStatusBar: "\u5728\u8F93\u5165\u6846\u4E0A\u65B9\u663E\u793A\u8BED\u97F3\u72B6\u6001\u6761\uFF08\u6CE2\u5F62\u3001\u8BC6\u522B\u6587\u5B57\u3001\u8BA1\u65F6\u3001\u63D0\u793A\u3001\u9000\u51FA\uFF09\uFF1B\u5173\u95ED\u540E\u72B6\u6001\u53EA\u5728\u9EA6\u514B\u98CE\u6309\u94AE\u4E0A\u663E\u793A",
   descWakeWord: "\u5524\u9192\u8BCD\uFF08\u9ED8\u8BA4\u5173\uFF1B\u5982\u300C\u4F60\u597D\u5C0FD\u300D\uFF09\uFF1A\u8BF4\u51FA\u8BCD\u5934\u624D\u8FDB\u5165\u8BC6\u522B\uFF0C\u907F\u514D\u8BEF\u89E6\u3002\u53EF\u4E0E\u547D\u4EE4\u8FDE\u8BF4\uFF08\u300C\u4F60\u597D\u5C0FD\uFF0C\u5E2E\u6211\u67E5\u5929\u6C14\u300D\u2014\u2014\u8BCD\u5934\u4F1A\u81EA\u52A8\u5265\u6389\u3001\u4E0D\u8FDB\u6D88\u606F\uFF09\uFF1B\u6BCF\u53E5\u65AD\u53E5\u6216\u6253\u65AD\u540E\u9700\u91CD\u8BF4\uFF1B\u4EC5 toggle \u6A21\u5F0F\u751F\u6548\uFF08hold / \u624B\u52A8\u6253\u65AD\u4E0B\u4E0D\u751F\u6548\uFF1Bdetect \u81EA\u52A8\u63A2\u6D4B\u672A\u751F\u6548\u3001\u56DE\u843D manual \u65F6\u540C\u6837\u4E0D\u751F\u6548\u2014\u2014Safari \u7B49\u65E0\u539F\u751F\u56DE\u58F0\u6D88\u9664\u7684\u673A\u5668\u4F1A\u9ED8\u8BA4\u843D\u5230\u8FD9\u4E00\u6863\uFF09\uFF1B\u6717\u8BFB\u671F\u8BF4\u5524\u9192\u8BCD\u4E0D\u89E6\u53D1\uFF08\u6253\u65AD\u4ECD\u6309 VAD \u5F00\u53E3\u5373\u6253\u65AD\uFF09\u3002\u5339\u914D\u5E26\u5BB9\u9519\uFF08\u540C\u97F3\u5B57 / \u524D\u5BFC\u8BED\u6C14\u8BCD\uFF09\uFF0C\u5EFA\u8BAE 3-4 \u5B57\uFF1B\u975E\u4E13\u7528 KWS \u5F15\u64CE\uFF0C\u5608\u6742\u73AF\u5883\u53EF\u80FD\u5EF6\u8FDF\u6216\u8BEF\u6FC0\u6D3B",
   wakePlaceholder: "\u5982\uFF1A\u4F60\u597D\u5C0FD",
-  settingsCardDesc: "\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u9759\u97F3\u505C\u987F / \u7A7A\u95F2\u8D85\u65F6 / \u6A21\u578B\u955C\u50CF / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u9006\u6587\u672C\u5F52\u4E00\u5316 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519",
+  settingsCardDesc: "\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / \u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u9759\u97F3\u505C\u987F / \u7A7A\u95F2\u8D85\u65F6 / \u6A21\u578B\u955C\u50CF / \u81EA\u52A8\u53D1\u9001 / \u6717\u8BFB\u56DE\u590D / \u72B6\u6001\u6761 / \u5B57\u5E55\u6D6E\u5C42 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u9006\u6587\u672C\u5F52\u4E00\u5316 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519",
   settingsEffectiveNote: "\u751F\u6548\u65F6\u673A\u5206\u56DB\u6863\uFF1A\u2460 \u5373\u65F6\u2014\u2014\u6717\u8BFB\u5F15\u64CE / \u97F3\u8272 / \u8BED\u901F / Kokoro \u6A21\u578B\u7CBE\u5EA6\uFF08\u5DF2\u7F13\u5B58\u5219\u5373\u65F6\uFF0C\u5426\u5219\u4E0B\u6B21\u4E0B\u8F7D\uFF09/ \u53E3\u8BED\u5316\u63D0\u793A\u8BCD\uFF08\u5BF9\u540E\u7EED\u56DE\u590D\u751F\u6548\uFF09/ \u6717\u8BFB\u56DE\u590D / \u72B6\u6001\u6761 / \u5B57\u5E55\u6D6E\u5C42 / \u6A21\u578B\u955C\u50CF\uFF08\u4E0B\u6B21\u4E0B\u8F7D\u5C1D\u8BD5\u5373\u751F\u6548\uFF09\uFF1B\u2461 \u4E0B\u6B21\u8BC6\u522B\u65F6\u2014\u2014\u5B9A\u7A3F\u91CD\u8BD1\uFF08SenseVoice\uFF09/ \u9006\u6587\u672C\u5F52\u4E00\u5316\uFF1B\u2462 \u4E0B\u4E00\u6BB5\u8BDD\u2014\u2014\u9759\u97F3\u5224\u5B9A\u65F6\u957F\uFF08\u65AD\u53E5\u7AEF\u70B9\uFF1B\u53D1\u9001\u7B49\u5F85\u56FA\u5B9A 1.2 \u79D2\u4E0D\u53D7\u5F71\u54CD\uFF09\uFF1B\u2463 \u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u2014\u2014\u6253\u65AD\u7075\u654F\u5EA6 / \u6253\u65AD\u65B9\u5F0F / \u56DE\u58F0\u95E8\u63A7 / \u5FEB\u6377\u952E / \u81EA\u52A8\u53D1\u9001 / \u81EA\u52A8\u6062\u590D / \u4EA4\u4E92\u6A21\u5F0F / \u5524\u9192\u8BCD / \u5DE5\u5177\u63D0\u793A\u97F3 / \u5B57\u5E55\u5B57\u53F7 / \u5B57\u5E55\u5BBD\u5EA6 / \u77ED\u5E94\u7B54\u8BA9\u4F4D / \u8BA9\u4F4D\u7A97\u53E3 / \u6253\u65AD\u8BED\u97F3\u62A2\u6551 / LLM \u7EA0\u9519 / \u7A7A\u95F2\u65F6\u957F\u3002\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u624D\u751F\u6548\u7684\u9879\u4F1A\u5217\u5728\u5361\u7247\u9876\u90E8\uFF08\u542B\u5F53\u524D\u751F\u6548\u503C\uFF09\u3002",
   effectivePending: "\u6709 {count} \u9879\u4FEE\u6539\u5C06\u5728\u4E0B\u6B21\u8FDB\u5165\u8BED\u97F3\u6A21\u5F0F\u65F6\u751F\u6548\uFF1A{items}",
   valueOn: "\u5F00",
@@ -1885,7 +1901,7 @@ var en = {
   startFail: "Voice mode failed to start: {err}",
   holdDots: "Hold to talk\u2026",
   exit: "Exit",
-  configUnavailableNote: " (settings document not ready; the panel will appear when it is).",
+  configUnavailableNote: " (settings document not ready; retrying \u2014 the panel will appear when it is).",
   previewNameFirst: "Enter a voice ShortName first",
   previewDisabled: "Voice mode disabled (plugin enabled=false); preview unavailable",
   // 批 G 任务 6：本地 TTS 引擎未下载模型时禁用试听按钮 + 提示。
@@ -1977,7 +1993,7 @@ var en = {
   descShowStatusBar: "Show the voice status bar above the composer (waveform, transcript, timer, notices, exit); when off, state shows only on the mic button",
   descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
-  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
+  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / read replies / status bar / caption overlay / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
   settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / read replies / status bar / caption overlay / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
   effectivePending: "{count} change(s) will apply next time you enter voice mode: {items}",
   valueOn: "On",
@@ -3385,39 +3401,69 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
 
 // src/settings-http-scope.ts
 var SETTINGS_URL = "/voice-mode/settings";
+var RETRY_BASE_MS = 500;
+var RETRY_MAX_MS = 1e4;
 function createHttpScope(origin = location.origin, fetchImpl = fetch) {
   let snap = { status: "loading", value: {} };
   const subs = /* @__PURE__ */ new Set();
-  let started = false;
+  let inFlight = false;
+  let writing = 0;
+  let retryTimer = null;
+  let retryDelay = 0;
   const emit = (next) => {
     snap = next;
     for (const fn of [...subs]) fn();
   };
+  const clearRetry = () => {
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
   const load = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    clearRetry();
     try {
       const res = await fetchImpl(origin + SETTINGS_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      emit({ status: "ready", value: data.value ?? {} });
+      retryDelay = 0;
+      if (writing === 0) emit({ status: "ready", value: data.value ?? {} });
     } catch {
       emit({ status: "unavailable", value: snap.value });
+      scheduleRetry();
+    } finally {
+      inFlight = false;
     }
   };
-  return {
+  const scheduleRetry = () => {
+    if (subs.size === 0 || retryTimer !== null) return;
+    retryDelay = retryDelay === 0 ? RETRY_BASE_MS : Math.min(retryDelay * 2, RETRY_MAX_MS);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void load();
+    }, retryDelay);
+  };
+  const scope = {
     getSnapshot: () => snap,
     subscribe(fn) {
+      const first = subs.size === 0;
       subs.add(fn);
-      if (!started) {
-        started = true;
+      if (first) {
+        retryDelay = 0;
         void load();
       }
       return () => {
         subs.delete(fn);
+        if (subs.size === 0) clearRetry();
       };
     },
     async set(field, value) {
       const before = snap;
+      writing++;
       emit({ status: "ready", value: { ...snap.value, [field]: value } });
+      let ok = false;
       try {
         const res = await fetchImpl(origin + SETTINGS_URL, {
           method: "POST",
@@ -3427,12 +3473,21 @@ function createHttpScope(origin = location.origin, fetchImpl = fetch) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         emit({ status: "ready", value: data.value ?? before.value });
+        ok = true;
       } catch {
         emit(before);
-        await load();
+      } finally {
+        writing--;
       }
+      if (!ok) await load();
     }
   };
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("focus", () => {
+      if (subs.size > 0) void load();
+    });
+  }
+  return scope;
 }
 
 // src/client.tsx
@@ -3466,7 +3521,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "6c29f03";
+var BUILD_TAG = "080da15";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);

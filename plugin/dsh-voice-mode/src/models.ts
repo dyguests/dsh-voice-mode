@@ -304,7 +304,14 @@ export async function ensureModelTree(opts: {
       for (const host of hosts) {
         try {
           const url = host + '/' + repo + '/resolve/main/' + encodeURIComponent(rel)
-          const res = await fetch(url, { headers: { 'user-agent': 'dsh-voice-mode' }, redirect: 'follow' })
+          // M-1（Issue #15 R2）：补 headers 阶段超时——与 :182/:275 同构。
+          //  M4 修复漏掉了同一函数内最后一处裸 fetch：上游「接受连接后永不吐响应头」时
+          //  本 worker 的 await 永不 settle → Promise.all 永不 resolve → ensureModelTree
+          //  永不返回 → Kokoro espeak-ng-data 树（355 文件/8 路并发）加载永久挂起，
+          //  不抛错、不进 engineError、连日志都没有。
+          //  仍只限 headers 阶段：拿到 res 后才开始流式读 body，慢网合法续传不被误杀
+          //  （见 models.ts:152-154 与 fetchWithHeadersTimeout 头注）。
+          const res = await fetchWithHeadersTimeout(url, { headers: { 'user-agent': 'dsh-voice-mode' }, redirect: 'follow' })
           if (!redirectHostAllowed(res.url, allowCustomHost)) continue
           if (res.status !== 200) continue
           const sink = createWriteStream(partPath)

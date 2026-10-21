@@ -149,4 +149,33 @@ await t('I-3 护栏不误伤：正常等长纠错原样通过', async () => {
   assert.equal(await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '帮我查一下天气' }]), '帮我查一下天气', 'zh'), '帮我查一下天气')
 })
 
+// ── M-3（Issue #15 R2）：前言护栏不得被前导寒暄绕过 ──
+// 弱模型在说明头前加一句客套（"好的，""当然，""Sure,"）即越过 CORRECTION_PREAMBLE_RE
+// 的 ^ 锚，模型元叙述原样进入用户消息（autoSend 默认开会直接发出去）。
+// 长度护栏兜不住：下列形态都低于 max(3L, L+24) 阈值（各例已在前置断言里算明）。
+await t('M-3：带寒暄前缀的说明头（元叙述）→ 回退原文（不得进入用户消息）', async () => {
+  const src = '今天天气不错'
+  // 前置条件：长度护栏（max(3L, L+24) = 30）兜不住这些形态——必须由前言护栏兜住。
+  const zh1 = '好的，以下是修正后的文本：今天天气不错。'
+  const zh2 = '当然，这是修正结果：今天天气不错'
+  assert.equal(src.length, 6)
+  assert.ok(zh1.length < 30 && zh2.length < 30, '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）')
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: zh1 }]), src, 'zh'),
+    src,
+    '寒暄前缀绕过前言护栏：模型元叙述原样进入用户消息',
+  )
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: zh2 }]), src, 'zh'),
+    src,
+    '寒暄前缀绕过前言护栏：模型元叙述原样进入用户消息',
+  )
+  // 寒暄在前、说明头紧随其后（无「以下是/这是」引导词）同样应回退。
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '好的，修正后的文本：今天天气不错' }]), src, 'zh'),
+    src,
+    '寒暄前缀绕过前言护栏：模型元叙述原样进入用户消息',
+  )
+})
+
 console.log(`\nfinalize-ux：${passed} 项通过`)

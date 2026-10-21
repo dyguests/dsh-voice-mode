@@ -109,6 +109,21 @@ await t('回退⑤：空输入直返（不发请求）', async () => {
   assert.equal(called, false, '空输入不应发 LLM 请求')
 })
 
+await t('M-3：带寒暄前缀的说明头（英文侧）→ 回退原文（元叙述不得进入用户消息）', async () => {
+  // 弱模型在说明头前加一句客套（"OK, ""Sure,"）即越过前言护栏的 ^ 锚，元叙述原样
+  // 进入用户消息（autoSend 默认开会直接发出去）。长度护栏兜不住——见前置断言。
+  const src = 'hello world'
+  const threshold = Math.max(src.length * 3, src.length + 24)
+  for (const out of ['OK, corrected: hello world', 'Sure, corrected: hello world']) {
+    assert.ok(out.length < threshold, `前置条件：样例长度应低于长度护栏阈值 ${threshold}（否则本例测的是长度护栏）`)
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), src, 'en'),
+      src,
+      '寒暄前缀绕过前言护栏：模型元叙述原样进入用户消息',
+    )
+  }
+})
+
 await t('correctionSystem：双语提示含关键约束', () => {
   const zh = correctionSystem('zh')
   const en = correctionSystem('en')

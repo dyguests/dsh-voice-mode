@@ -89,13 +89,17 @@ export class NlmsAec {
         }
         const e = d - y
         // 发散防护：非有限误差收敛为 0（防 NaN/Inf 传染 RMS/打断/VAD 判定链）。
-        out[i] = Number.isFinite(e) ? e : 0
+        // 权重更新必须用**同一个**收敛值：用原始 e 更新时，一次非有限样本（麦克风
+        // 驱动异常 / y 溢出）会把 gain 变成 NaN/Inf → 256 个权重全部 NaN → 此后
+        // y=e=NaN、输出恒 0（AEC 无 reset、无发散检测）→ 永久不可打断且不可恢复。
+        const eSafe = Number.isFinite(e) ? e : 0
+        out[i] = eSafe
         // NLMS 权重更新：仅在参考能量足够时训练（近零参考/未播时不放大权重，
         // 防「麦大声 + 参考窗近零」导致 gain 爆炸 → 权重失稳发散）。
         // A2.5 双讲冻结：用户说话时暂停更新，防滤波器被带偏。
         if (norm > MIN_REF_NORM && !this.frozen) {
           const denom = norm + this.eps
-          const gain = (this.mu * e) / denom
+          const gain = (this.mu * eSafe) / denom
           idx = (cursor - this.delay + bufLen) % bufLen
           for (let t = 0; t < this.filterLength; t++) {
             this.w[t] += gain * xBuf[idx]

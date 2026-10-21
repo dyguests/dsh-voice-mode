@@ -80,6 +80,13 @@ const setResetDelay = (ms) => { RESET_DELAY_MS = ms }
 // 唤醒分支判据 state==='wake' 随即失效。
 let PARTIAL_202_LEFT = 0
 const armPartial202 = (n = 1) => { PARTIAL_202_LEFT = n }
+// Issue #15 R15-5（Minor B）：partial 状态码序列装置（连败计数行为锁用）——逐请求取下一个
+// 状态码（默认 200）；用尽后回到 200。用于构造「失败/成功交替」的非连续失败序列。
+const PARTIAL_FAIL_PATTERN = []
+const armPartialFailPattern = (codes) => {
+  PARTIAL_FAIL_PATTERN.length = 0
+  PARTIAL_FAIL_PATTERN.push(...codes)
+}
 // 观察项 2 装置（Issue #15 批 8）：AudioContext.close() 慢收尾 dial + close 计数 +
 // addModule 慢 dial——复现「stop 收尾在途时新 start 装配新 ctx，被旧收尾置空」竞态。
 // 真实浏览器 audioCtx.close() 可达数十 ms，而 getUserMedia/resume/addModule 在已授权
@@ -92,6 +99,13 @@ const setAddModuleDelay = (ms) => { ADD_MODULE_DELAY_MS = ms }
 const AI_PHRASE = '我明白了'
 const WAKE = '你好小李'
 const COMMAND = '给我说一百个字'
+// Issue #15 R15-5（回声门控台架）：AI 回声在 >0.2 频段（假 host 视其为纯回声、不触发 VAD）；
+// 用户「真打断」的洪亮语音在 >LOUD_AMP_MIN 频段。此前假 host 的 VAD 只认 [0.03,0.2)，
+// 无法表达真实的门控条件——门控放行要求「用户残差 > 回声地板 ×2（6dB）」，即用户音
+// 必须显著盖过回声电平，而回声又必须 >0.2 才不被假 VAD 当成语音。LOUD_AMP_MIN 夹在
+// 两者之间（0.3 回声 < 0.33 < 用户洪亮语音），两侧各留余量；既有用例的幅度 ≤0.3，不受影响。
+const LOUD_AMP_MIN = 0.33
+const LOUD_CHAR = '语' // 洪亮用户语音的转写标记（与回声/命令/唤醒字面量可区分）
 
 let capturedNode = null
 class FakeAudioWorkletNode {
@@ -209,7 +223,8 @@ function feed(epoch, offset, samples, final, padMs = 0) {
       // 均值≈0.02）落本频段产「嗯」而非落唤醒频段产「你」杂字；纯静音（0.0005）不产字。
       const amp = meanAbs(block)
       let ch = ''
-      if (amp > 0.2) ch = AI_PHRASE[st.aiIdx++ % AI_PHRASE.length]
+      if (amp > LOUD_AMP_MIN) ch = LOUD_CHAR
+      else if (amp > 0.2) ch = AI_PHRASE[st.aiIdx++ % AI_PHRASE.length]
       else if (amp >= 0.08) ch = COMMAND[st.cmdIdx++ % COMMAND.length]
       else if (amp >= 0.015 && amp < 0.05) ch = BC_CHAR
       else if (amp >= SPEECH_RMS) ch = WAKE[st.wakeIdx++ % WAKE.length]
@@ -259,7 +274,9 @@ globalThis.fetch = async (url, init = {}) => {
     const sub = Math.round(SR * 0.1)
     for (let off = 0; off + sub <= raw.length && !isSpeech; off += sub) {
       const a = meanAbs(raw.subarray(off, off + sub))
-      if (a >= 0.03 && a < 0.2) isSpeech = true
+      // 语音频段 [0.03,0.2)（回声频段 >0.2 不触发：Silero 不被纯回声触发，CONTEXT.md:59）
+      // ∪ 洪亮语音频段（>LOUD_AMP_MIN，用户声音盖过回声地板时的真实形态）。
+      if ((a >= 0.03 && a < 0.2) || a >= LOUD_AMP_MIN) isSpeech = true
     }
     return new Response(JSON.stringify({ isSpeech }), { status: 200 })
   }
@@ -273,6 +290,11 @@ globalThis.fetch = async (url, init = {}) => {
     return new Response(JSON.stringify({}), { status: 202 })
   }
   hostLog.partials++
+  // Issue #15 R15-5（Minor B）：按装置返回失败状态码（连败计数行为锁）。
+  if (PARTIAL_FAIL_PATTERN.length > 0) {
+    const code = PARTIAL_FAIL_PATTERN.shift()
+    if (code !== 200) return new Response(JSON.stringify({ error: 'boom' }), { status: code })
+  }
   return new Response(JSON.stringify({ text: feed(epoch, offset, raw, false), endpoint: false }), {
     status: 200,
   })
@@ -324,16 +346,18 @@ const sleep = async (ms) => {
 // 真实时间等待：引擎 202 重试用真实 setTimeout(5000)（台架假时钟推不动它），只能真等。
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-function makeEngine({ wakeWord = WAKE, isPlaying = () => false, bargeInSalvage } = {}) {
+function makeEngine({ wakeWord = WAKE, isPlaying = () => false, bargeInSalvage, onIsSpeech } = {}) {
   streams.clear()
   hostLog.partials = hostLog.resets = hostLog.detects = hostLog.finals = 0
   PARTIAL_202_LEFT = 0 // B1 装置不复用到下一用例（快照隔离）
+  armPartialFailPattern([]) // Minor B 装置不复用到下一用例（快照隔离）
   CTX_CLOSE_DELAY_MS = 0 // 观察项 2 装置默认快收尾（不影响他例）
   ADD_MODULE_DELAY_MS = 0
   ctxCloseCount = 0
   let state = 'idle'
   const segments = []
   const partials = []
+  const notices = []
   const engine = createAsrEngine(
     {
       silenceMs: 1500,
@@ -345,6 +369,8 @@ function makeEngine({ wakeWord = WAKE, isPlaying = () => false, bargeInSalvage }
       onIsPlaying: undefined,
       // Issue #15 批 1：bargeInSalvage 透传（不传 = 默认开，与 I10 豁免口径一致）。
       ...(bargeInSalvage !== undefined ? { bargeInSalvage } : {}),
+      // Issue #15 R15-5：假客户端的 VAD 回调（复刻 client.tsx 的打断确认 + 回声门控）。
+      ...(onIsSpeech ? { onIsSpeech } : {}),
     },
     'sess-test',
   )
@@ -353,10 +379,12 @@ function makeEngine({ wakeWord = WAKE, isPlaying = () => false, bargeInSalvage }
   })
   engine.onSegment((t) => segments.push(t))
   engine.onPartial((t) => partials.push(t))
+  engine.onNotice((k) => notices.push(k))
   return {
     engine,
     segments,
     partials,
+    notices,
     get state() {
       return state
     },
@@ -774,6 +802,78 @@ await t('wake 启用 + reset 慢（> silenceMs）：打断后静默，抢救段�
   } finally {
     setResetDelay(0)
   }
+})
+
+// ---------------------------------------------------------------- Issue #15 R15-5：抢救种子感知回声门拒绝
+console.log('Issue #15 R15-5：抢救种子必须感知回声门拒绝（被拒检测不得成为锚点）')
+await t('被门控拒绝的检测 → 随后真打断：抢救段不得含被拒检测窗口的音频（不得夹带整环 AI 音频）', async () => {
+  // 假客户端：复刻 client.tsx:2479-2530 的 onIsSpeech 分支——连续 confirmFrames 次 true
+  // 才判打断，且**先过回声门控**（engine.aboveEchoFloor）：门控否决 = 放弃本次检测。
+  const CONFIRM_FRAMES = 2 // 与 INT_CONFIRM_FRAMES[1]（interruptLevel 默认档）一致
+  const BUZZ_AMP = 0.08 // 弱语音：VAD 判真（命令频段），但残差远低于回声地板 6dB → 门控否决
+  const LOUD_AMP = 0.7 // 洪亮语音：残差盖过回声地板 6dB → 门控放行 → 真打断
+  let playing = true
+  let engine = null
+  let trueCount = 0
+  let falseRun = 0
+  const gateClient = (speech) => {
+    if (speech === true) {
+      falseRun = 0
+      trueCount++
+      if (trueCount >= CONFIRM_FRAMES) {
+        if (!engine.aboveEchoFloor(6)) {
+          trueCount = 0 // 门控否决：放弃本次检测（计数归零）
+          return
+        }
+        trueCount = 0
+        playing = false // hardBreak：AI 停播
+        void engine.discardSegment() // hardBreak 的引擎侧等价（抢救在此发生）
+      }
+    } else {
+      falseRun++
+      if (falseRun >= 2) {
+        falseRun = 0
+        trueCount = Math.max(0, trueCount - 1) // 迟滞衰减（同 client.tsx）
+      }
+    }
+  }
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true, onIsSpeech: gateClient })
+  engine = h.engine
+  await h.engine.start()
+  await say(ECHO_AMP, 4000) // AI 朗读（回声地板收敛；纯回声不触发 VAD）
+  await say(BUZZ_AMP, 500) // 被门控拒绝的检测（VAD 判真、门控否决）
+  await say(ECHO_AMP, 1500) // 空档：被拒检测的窗口若成了锚点，这段 AI 音频会被并入用户消息
+  await say(LOUD_AMP, 600) // 真打断：门控放行 → hardBreak → 抢救
+  await say(SIL_AMP, 2500) // 停口 → 定稿
+  assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）`)
+  const text = h.segments[0]
+  assert.ok(text.includes(LOUD_CHAR), `抢救段应含真打断时说的话（实际 "${text}"）——抢救未生效`)
+  // 判别式：被拒检测那次的语音（命令频段 → 「给」字）不得出现在定稿里。修复前该次检测
+  // 锁定的种子成为锚点 → 种子被 Math.max 钳到环起点 → 整环 2s AI 音频并入用户消息。
+  assert.ok(
+    !text.includes('给'),
+    `抢救段不得含被门控拒绝那次检测的窗口音频（实际 "${text}"）——R15-5：被拒检测的种子成了锚点 → 整环 AI 音频并入用户消息`,
+  )
+  await h.engine.stop()
+})
+
+// ---------------------------------------------------------------- Issue #15 R15-5（Minor B）：wake 待机态连败计数
+console.log('Issue #15 R15-5（Minor B）：wake 待机态 partial 连败计数')
+await t('待机态 partial 成功即清连败计数：失败/成功交替不得误触「识别通道持续断」', async () => {
+  const h = makeEngine({ wakeWord: '香蕉苹果' }) // 不命中唤醒词 → 停在 wake 待机态
+  // 失败/成功交替 ×3：修复前待机分支直接 return，绕过「成功即清零」→ 连败计数跨成功
+  // 累积到 3 → 误发 partialFail 提示（通道其实活着）。
+  armPartialFailPattern([500, 200, 500, 200, 500])
+  await h.engine.start()
+  await say(SPEECH_AMP, 1200) // 待机段累积（partial 上行需段长 ≥0.4s）
+  await say(SIL_AMP, 600)
+  await sleep(1200) // 让 partial 轮询走够几拍（失败/成功交替）
+  assert.equal(h.state, 'wake', `应仍在 wake 待机态（实际 ${h.state}）——前提不成立则本用例无区分度`)
+  assert.ok(
+    !h.notices.includes('partialFail'),
+    `非连续失败不得误触 partialFail 提示（实际 ${JSON.stringify(h.notices)}）——待机分支绕过了成功清零`,
+  )
+  await h.engine.stop()
 })
 
 rmSync(tmp, { recursive: true, force: true })

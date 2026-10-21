@@ -280,6 +280,11 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
   let preRollSeedWall: number | null = null
   /** 播放态边沿跟踪（播放入口重置种子记录）。 */
   let wasPlaying = false
+  /** 门控询问作用域（Issue #15 R15-5）：向客户端交付 VAD 结果期间为真。
+   *  作用域内客户端问 aboveEchoFloor() 得 false = 本次检测被回声门否决
+   *  （client.tsx 的回声门控是该方法的唯一询问点）→ 抢救种子须随之作废。
+   *  作用域限定：防 UI 侧同方法调用被误读成「本次检测被否决」。 */
+  let gateQueryScope = false
   // Issue #15 批 7：识别通道连败计数（瞬时失败下一拍自愈；连续 3 次才提示，防噪）
   let partialFailStreak = 0
   let detectFailStreak = 0
@@ -357,6 +362,19 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
 
   /** P1-4：从段内 from 样本起切片（增量上传；不做全量 concat）。 */
   const sliceSince = (from: number): Float32Array => sliceChunks(segment, from)
+
+  /** 交付一次 VAD 判真/判假给客户端（期间开启门控询问作用域）。
+   *  Issue #15 R15-5：作用域内客户端的回声门控询问（engine.aboveEchoFloor）若得 false，
+   *  即「本次检测被门控否决」→ 抢救种子作废：被拒检测的窗口不得成为下次真打断的锚点
+   *  （否则 Math.max 钳到环起点 → 整环 2s AI 音频并入用户消息，R15-5 报告症状）。 */
+  const deliverIsSpeech = (speech: boolean): void => {
+    gateQueryScope = true
+    try {
+      config.onIsSpeech?.(speech)
+    } finally {
+      gateQueryScope = false
+    }
+  }
 
   /**
    * partial 轮询：P1-4 只 POST 上次末帧后的新增 PCM（host 按 offset 只喂增量），
@@ -447,6 +465,9 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       // 唤醒词门：wake 待机态下 partial 只用于匹配，命中 → 转入聆听（**不丢段**）。
       if (state === 'wake' && wakeEnabled) {
         uploadedSamples = Math.max(uploadedSamples, from + samples.length)
+        // Issue #15 R15-5（Minor B）：待机分支此前在下方直接 return，绕过 :497 的成功清零
+        // → 连败计数跨「成功」累积，非连续失败也会攒满 3 次误触「识别通道持续断」提示。
+        partialFailStreak = 0 // 成功即清零（同正常路径口径：瞬时失败不计提示）
         // 待机态也显示实时转写（issue #10 问题 2）：用户看见「它听到了什么」，唤醒
         // 成败可自查；命中瞬间本条 partial 同时充当「已听到唤醒词」的确认反馈。
         emit(partialListeners, out.text ?? '')
@@ -469,7 +490,8 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       }
       // 打断根治：服务端 Silero VAD 帧级检测结果下行，客户端据此驱动打断
       // （替代 RMS 能量快路径）；仅非 final 响应携带，undefined 表示本次无 VAD 信息。
-      if (out.isSpeech !== undefined) config.onIsSpeech?.(out.isSpeech)
+      // Issue #15 R15-5：经 deliverIsSpeech 交付（带门控询问作用域）。
+      if (out.isSpeech !== undefined) deliverIsSpeech(out.isSpeech)
       if (state === 'loading-model') setState('speech')
       // P1-4：上传成功后才推进已传水位（失败/重试不推进，下一拍补传）。
       uploadedSamples = Math.max(uploadedSamples, from + samples.length)
@@ -552,13 +574,15 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       if (!res.ok) return
       const out = (await res.json()) as { isSpeech?: boolean }
       if (epoch !== segmentEpoch || gen !== detectGeneration) return
-      if (out.isSpeech !== undefined) config.onIsSpeech?.(out.isSpeech)
       // Issue #15 批 1（ADR-0012）：VAD 首真 → 记录抢救种子起点。锚**请求体起点-250ms**
       // （非 sentAt/响应到达）：VAD 首真只证明「语音在本次请求窗内」，窗内位置不定；RTT 大时
       // 在途抑制把 cadence 拉长（p99≈430ms → 窗≈430ms），sentAt 滞后语音起点多达一个窗长，
       // 锚 sentAt 会切句首（台架 detect 延迟档实测抓红）。锚窗头保证永不切，代价是多带
       // ≤一个检测窗的 AI 尾音——由 AEC 残差水平与 bargeInSalvage 逃生口兜底。
+      // Issue #15 R15-5：锁定**前置于**交付客户端——门控否决要在本次交付内作废刚锁的种子
+      // （顺序反了则被拒检测仍留下种子，其窗口成为下次真打断的锚点）。
       if (out.isSpeech === true && preRollSeedWall === null) preRollSeedWall = reqBodyStartWall - 250
+      if (out.isSpeech !== undefined) deliverIsSpeech(out.isSpeech)
       detectFailStreak = 0 // Issue #15 批 7：成功即清零
       detectSent += samples.length
       // 释放已消费帧（长朗读下防缓冲无界增长）。
@@ -1284,13 +1308,19 @@ const startRecorder = async (): Promise<void> => {
     get holding() {
       return holdActive
     },
-    /** A2.5 回声门控：当前残差是否明显高于回声地板（marginDb 默认 6dB）——判用户人声而非回声。 */
+    /** A2.5 回声门控：当前残差是否明显高于回声地板（marginDb 默认 6dB）——判用户人声而非回声。
+     *  Issue #15 R15-5：本方法是客户端回声门控的**唯一询问点**——客户端在「本次检测达到
+     *  打断确认帧数」的瞬间问本方法，答 false 即「放弃本次检测（判为回声，不打断）」。
+     *  引擎据此作废抢救种子：被拒检测的窗口不得成为下次真打断的锚点（种子陈旧会被
+     *  Math.max 钳到环起点 → 整环 2s AI 音频并入用户消息）。作用域限定见 gateQueryScope。 */
     aboveEchoFloor(marginDb = 6) {
       // 无地板（刚开播）→ 保守拒绝打断：放行会让外放回声在首播秒内误触发自打断
       // （实测外放 auto 根因之一）；代价是首播前 ~2s 无法自动打断（真机可接受）。
-      if (echoFloorRms === 0) return false
       // 用峰值（跨音节间隙）而非瞬时值：瞬时值在音节停顿处掉回回声水平被误拒。
-      return echoPeak > echoFloorRms * Math.pow(10, marginDb / 20)
+      const pass = echoFloorRms > 0 && echoPeak > echoFloorRms * Math.pow(10, marginDb / 20)
+      // Issue #15 R15-5：门控否决（pass=false）= 客户端放弃本次检测 → 抢救种子作废。
+      if (!pass && gateQueryScope) preRollSeedWall = null
+      return pass
     },
     echoLevels() {
       return { floorRms: echoFloorRms, residualRms: latestResidualRms, peakRms: echoPeak }

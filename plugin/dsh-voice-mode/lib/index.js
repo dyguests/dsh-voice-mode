@@ -321,7 +321,7 @@ async function ensureModelTree(opts) {
       for (const host of hosts) {
         try {
           const url = host + "/" + repo + "/resolve/main/" + encodeURIComponent(rel);
-          const res = await fetch(url, { headers: { "user-agent": "dsh-voice-mode" }, redirect: "follow" });
+          const res = await fetchWithHeadersTimeout(url, { headers: { "user-agent": "dsh-voice-mode" }, redirect: "follow" });
           if (!redirectHostAllowed(res.url, allowCustomHost)) continue;
           if (res.status !== 200) continue;
           const sink = createWriteStream(partPath);
@@ -424,6 +424,7 @@ function createAsrRuntime(options) {
   const finalizing = /* @__PURE__ */ new Map();
   const resetGen = /* @__PURE__ */ new Map();
   let recognizer = null;
+  let recognizerDisposed = false;
   let modelsReady = false;
   let modelsLoading = null;
   let asrFailAt = 0;
@@ -449,7 +450,9 @@ function createAsrRuntime(options) {
     return modelsLoading;
   };
   const getRecognizer = async () => {
+    if (recognizerDisposed) return null;
     if (!await ensureModels()) return null;
+    if (recognizerDisposed) return null;
     if (recognizer) return recognizer;
     const t = (f) => join2(repoDir, f);
     recognizer = createOnlineRecognizer({
@@ -830,6 +833,7 @@ function createAsrRuntime(options) {
     dispose: () => {
       clearInterval(sweepTimer);
       senseDisposed = true;
+      recognizerDisposed = true;
       let w = senseWorker;
       senseWorker = null;
       senseWorkerSyncing = null;
@@ -2239,7 +2243,7 @@ var en = {
   startFail: "Voice mode failed to start: {err}",
   holdDots: "Hold to talk\u2026",
   exit: "Exit",
-  configUnavailableNote: " (settings document not ready; the panel will appear when it is).",
+  configUnavailableNote: " (settings document not ready; retrying \u2014 the panel will appear when it is).",
   previewNameFirst: "Enter a voice ShortName first",
   previewDisabled: "Voice mode disabled (plugin enabled=false); preview unavailable",
   // 批 G 任务 6：本地 TTS 引擎未下载模型时禁用试听按钮 + 提示。
@@ -2331,7 +2335,7 @@ var en = {
   descShowStatusBar: "Show the voice status bar above the composer (waveform, transcript, timer, notices, exit); when off, state shows only on the mic button",
   descWakeWord: 'Wake word (default off; e.g. "Hey D"): recognition starts only after you say it, to avoid accidental triggers. You may say it together with your command ("Hey D, check the weather" \u2014 the wake word is stripped and never sent); it must be repeated after each utterance split or barge-in; toggle mode only (inactive in hold / manual barge-in \u2014 and equally inactive when the detect probe fails and falls back to manual, the default on machines without native echo cancellation such as Safari); saying it while the agent is reading does not trigger (barge-in stays VAD-based). Fault-tolerant matching (homophones / leading fillers); 3-4 characters recommended; not a dedicated KWS engine \u2014 noisy environments may delay or falsely trigger',
   wakePlaceholder: "e.g. Hey D",
-  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
+  settingsCardDesc: "Engine / voice / rate / interrupt / barge-in / echo gate / silence / idle / model host / auto-send / read replies / status bar / caption overlay / auto-resume / mode / wake word / tool beep / ITN / caption font / caption width / yielding / yield window / barge-in salvage / LLM correction",
   settingsEffectiveNote: "When settings apply, in four tiers: \u2460 immediately \u2014 engine / voice / rate / Kokoro model precision (immediate when cached, else next download) / spoken format (applies to later replies) / read replies / status bar / caption overlay / model mirror (next download attempt); \u2461 next recognition \u2014 finalization re-transcription (SenseVoice) / ITN; \u2462 next utterance \u2014 silence threshold (endpoint; the send wait stays a fixed 1.2s); \u2463 next time you enter voice mode \u2014 interrupt sensitivity / barge-in mode / echo gate / shortcut / auto-send / auto-resume / interaction mode / wake word / tool beep / caption font / caption width / backchannel yielding / yield window / barge-in salvage / LLM correction / idle timeout. Items that take effect next time you enter voice mode are listed at the top of this card with their current effective values.",
   effectivePending: "{count} change(s) will apply next time you enter voice mode: {items}",
   valueOn: "On",
@@ -2462,6 +2466,7 @@ function correctionSystem(lang) {
   return lang === "en" ? "You are a speech-recognition corrector. The user text comes from ASR and may contain homophone errors, typos, or missing/wrong punctuation. Make only minimal fixes: correct typos/homophones and fix punctuation, preserving the original meaning and colloquial style. Do not rewrite sentences, do not add content, do not answer questions, and do not alter numbers or proper nouns. Output only the corrected text, with no explanation. If the input has no obvious errors, return it unchanged." : "\u4F60\u662F\u4E2D\u6587\u8BED\u97F3\u8BC6\u522B\u7EA0\u9519\u5668\u3002\u7528\u6237\u7684\u8BDD\u6765\u81EA\u8BED\u97F3\u8BC6\u522B\uFF08ASR\uFF09\uFF0C\u53EF\u80FD\u6709\u540C\u97F3\u5B57\u3001\u9519\u522B\u5B57\u3001\u6807\u70B9\u7F3A\u5931\u6216\u9519\u8BEF\u3002\u8BF7\u53EA\u505A\u6700\u5C0F\u4FEE\u6B63\uFF1A\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57\u3001\u8865\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\u4E0E\u53E3\u8BED\u98CE\u683C\uFF1B\u4E0D\u8981\u6539\u5199\u53E5\u5B50\u3001\u4E0D\u8981\u8865\u5145\u5185\u5BB9\u3001\u4E0D\u8981\u56DE\u7B54\u95EE\u9898\u3001\u4E0D\u8981\u6539\u53D8\u6570\u5B57\u548C\u4E13\u4E1A\u672F\u8BED\u3002\u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u6587\u672C\uFF0C\u4E0D\u8981\u4EFB\u4F55\u89E3\u91CA\u3002\u5982\u679C\u539F\u6587\u6CA1\u6709\u660E\u663E\u9519\u8BEF\uFF0C\u539F\u6837\u8FD4\u56DE\u3002";
 }
 var CORRECTION_PREAMBLE_RE = /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i;
+var CORRECTION_FILLER_PREFIX_RE = /^(?:(?:当然可以|当然|好吧|好的?|行吧|是的|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi)(?:\s*[,，、:：.。!！?？)）]|\s))+/;
 async function correctText(ctx, text, lang) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) return text;
@@ -2486,6 +2491,8 @@ async function correctText(ctx, text, lang) {
     const corrected = out.trim();
     if (corrected.length > Math.max(trimmed.length * 3, trimmed.length + 24)) return text;
     if (CORRECTION_PREAMBLE_RE.test(corrected)) return text;
+    const noFiller = corrected.replace(CORRECTION_FILLER_PREFIX_RE, "").trimStart();
+    if (noFiller !== corrected && CORRECTION_PREAMBLE_RE.test(noFiller)) return text;
     return corrected || text;
   } catch {
     return text;

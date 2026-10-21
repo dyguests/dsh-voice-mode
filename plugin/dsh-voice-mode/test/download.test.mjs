@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureModelFile, sha256OfFile } from '../src/models.ts'
+import { ensureModelFile, ensureModelTree, sha256OfFile } from '../src/models.ts'
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 const DATA = Buffer.alloc(1000, 7)
@@ -26,8 +26,31 @@ const DATA_SHA = sha256(DATA)
 // --------------------------------------------------------------------------
 let fetchMode = 'missing'
 const fetchCalls = []
-globalThis.fetch = async (url) => {
+/** M-1：逐文件下载那一次 fetch 的 init（用于断言是否带 signal——headers 阶段超时的载体）。 */
+let fileFetchInit = null
+globalThis.fetch = async (url, init) => {
   fetchCalls.push(String(url))
+  // M-1：模型树桩——清单列举正常，逐文件下载「接受连接后永不吐响应头」。
+  if (fetchMode === 'hang-file') {
+    if (String(url).includes('/api/models/')) {
+      return {
+        url: String(url),
+        status: 200,
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({ siblings: [{ rfilename: 'espeak-ng-data/zh_dict' }] }),
+        body: null,
+      }
+    }
+    // 逐文件下载：带 signal → abort 时 reject（模拟 headers 超时）；不带 signal → 永不
+    // settle（模拟裸 fetch 挂起——这正是 M-1 修复前的形态）。
+    fileFetchInit = init
+    return new Promise((_resolve, reject) => {
+      const sig = init && init.signal
+      if (!sig) return
+      sig.addEventListener('abort', () => reject(sig.reason ?? new Error('aborted')))
+    })
+  }
   if (fetchMode === 'missing') {
     return { url: String(url), status: 404, headers: { get: () => null }, body: null }
   }
@@ -104,6 +127,67 @@ await t('ensureModelFile：下载→SHA 校验→落盘全路径（受控 200 �
     assert.equal(await sha256OfFile(p), DATA_SHA)
     assert.ok(!existsSync(`${p}.part`), '成功后不应残留 .part')
   } finally {
+    fetchMode = 'missing'
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// --------------------------------------------------------------------------
+// M-1（Issue #15 R2）：ensureModelTree 的逐文件下载必须走「仅 headers 阶段」超时。
+//
+// 真实失效形态：清单列举（/api/models/…）正常返回，但逐文件下载（/resolve/main/…）的
+// 上游「接受连接后永不吐响应头」→ 该 worker 的 await 永不 settle → Promise.all 永不
+// resolve → ensureModelTree 永不返回 → tts-local.ts:299 的 await 永不返回 →
+// Kokoro espeak-ng-data 树（355 文件 / 8 路并发）加载永久挂起：不抛错、不进
+// engineError、连日志都没有（与 M4 当初修掉的 ASR「麦克风无响应、控制台无错」同型）。
+//
+// 桩：清单返回 1 个条目；逐文件 fetch 带 signal → abort 时 reject（模拟超时），
+// 不带 signal → 永不 settle（模拟裸 fetch 挂起）。
+// 时钟：models.ts 的 headers 超时是 60s 常量（MODEL_FETCH_HEADERS_TIMEOUT_MS），
+// 真等 60s × 3 个上游不现实——测试窗口内把 setTimeout 的延迟前移到 0（只改「何时
+// 触发」，不改「是否触发」：带 signal 的 fetch 仍要等 abort 才失败）。未修复时
+// （裸 fetch 无 signal）仍会永久挂起——本用例必须红。
+// --------------------------------------------------------------------------
+await t('M-1：逐文件下载上游挂起（接受连接后不吐响应头）→ ensureModelTree 有界 settle（不永久挂起）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dm-tree-'))
+  fetchCalls.length = 0
+  fileFetchInit = null
+  fetchMode = 'hang-file'
+  const realSetTimeout = globalThis.setTimeout
+  const realClearTimeout = globalThis.clearTimeout
+  // 压缩时钟：只前移 setTimeout 的触发时刻，不改触发与否。
+  globalThis.setTimeout = (fn, _ms, ...rest) => realSetTimeout(fn, 0, ...rest)
+  let guardTimer = null
+  try {
+    const p = ensureModelTree({
+      repo: 'kokoro-onnx',
+      repoDir: dir,
+      subdir: 'espeak-ng-data',
+      primaryHost: 'https://mirror.invalid',
+      allowCustomHost: true,
+      broadcast: () => {},
+    })
+    // 兜底闸门：3s 内没有 settle 即判「永久挂起」（用例必须红，而不是把测试挂死）。
+    const guard = new Promise((r) => {
+      guardTimer = realSetTimeout(() => r('HUNG'), 3000)
+    })
+    const res = await Promise.race([p, guard])
+    assert.equal(
+      res,
+      false,
+      'ensureModelTree 在上游「接受连接后不吐响应头」时永久不 settle——Kokoro 模型加载永久挂起（不抛错、不进 engineError、连日志都没有）',
+    )
+    assert.ok(
+      fetchCalls.some((u) => u.includes('/resolve/main/')),
+      '前置条件：应已发起逐文件下载请求（清单列举路径没走到，本用例失去意义）',
+    )
+    assert.ok(
+      fileFetchInit && fileFetchInit.signal,
+      '逐文件下载未带 AbortSignal——裸 fetch 无 headers 阶段超时（修复前形态）',
+    )
+  } finally {
+    if (guardTimer) realClearTimeout(guardTimer)
+    globalThis.setTimeout = realSetTimeout
     fetchMode = 'missing'
     rmSync(dir, { recursive: true, force: true })
   }

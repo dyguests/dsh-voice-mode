@@ -62,4 +62,34 @@ t('tts.error 不再原样渲染', () => {
   assert.ok(!/:\s*tts\.error\}/.test(s), '设置面板仍直接渲染 tts.error 原文')
 })
 
+// H5（Issue #15 R2 M-1）：models.ts 的全部 fetch 调用点必须走「仅 headers 阶段」超时包装。
+// 背景：M4 修复给 ensureModelFile(:182) 与 ensureModelTree 清单列举(:275) 补了超时，
+// 却漏掉同一函数内最后一处——ensureModelTree 逐文件下载是裸 fetch（无 signal/无超时）：
+// 上游「接受连接后不吐响应头」→ worker 的 await 永不 settle → Promise.all 永不
+// resolve → Kokoro 模型加载永久挂起（不抛错、不进 engineError、连日志都没有）。
+console.log('H5 models.ts 的 fetch 调用点全走 headers 阶段超时包装')
+t('models.ts 只有包装体内一处裸 fetch（其余调用点全走包装）', () => {
+  const s = src('models.ts')
+  // 去注释后统计：裸 fetch( 只允许出现在 fetchWithHeadersTimeout 包装体内
+  const code = s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+  const raw = code.match(/\bfetch\s*\(/g) ?? []
+  assert.equal(
+    raw.length,
+    1,
+    `models.ts 应只有 1 处裸 fetch（fetchWithHeadersTimeout 包装体内），实际 ${raw.length} 处——有调用点绕过了超时包装`,
+  )
+  assert.ok(code.includes('fetchWithHeadersTimeout'), '缺 fetchWithHeadersTimeout 包装')
+})
+t('fetchWithHeadersTimeout 只约束 headers 阶段（带 signal + 拿到响应即 clearTimeout）', () => {
+  const s = src('models.ts')
+  const i = s.indexOf('async function fetchWithHeadersTimeout')
+  assert.ok(i > 0, '缺 fetchWithHeadersTimeout 包装')
+  const body = s.slice(i, s.indexOf('\n}\n', i))
+  assert.ok(/signal:\s*ac\.signal/.test(body), '包装未把 signal 传给 fetch（超时无法中止挂起的请求）')
+  assert.ok(
+    /clearTimeout\(timer\)/.test(body),
+    '包装未解除计时器——会给 body 流式读取加上总时长超时（慢网合法续传需数分钟，会被误杀）',
+  )
+})
+
 console.log(`\nhost-hardening：${passed} 项通过`)

@@ -238,6 +238,17 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
   const resetGen = new Map<string, number>()
 
   let recognizer: SherpaRecognizer | null = null
+  /**
+   * M-2（Issue #15 R2）：dispose 后禁止 zipformer recognizer 懒重建。
+   *
+   * 漏洞（与 senseDisposed/M7① 同型，但 zipformer 侧此前没有守卫）：dispose() 只 free
+   * **当时已存在**的 recognizer；而在途的 ensureModels()（首用要下 153MB encoder，窗口
+   * 以秒计）完成后，getRecognizer 会新建 recognizer 并赋值回闭包——这个 dispose 完全
+   * 不知道的 ~150MB WASM 块再无人 free（热重载每代泄漏一块，长命 host 进程内线性累积）。
+   * 修法：dispose 置位本标志；getRecognizer 在 await 之后、创建之前判序，已 dispose
+   * 则返回 null，绝不新建（与 senseDisposed 相同的「完成前判序」思路）。
+   */
+  let recognizerDisposed = false
   let modelsReady = false
   let modelsLoading: Promise<boolean> | null = null
   /** ASR 模型下载失败退避（与 vad/sense 一致）：源不可达时 60s 内不重试，
@@ -270,7 +281,12 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
   }
 
   const getRecognizer = async (): Promise<SherpaRecognizer | null> => {
+    // M-2：入口判序——dispose 之后不得再起 recognizer 初始化。
+    if (recognizerDisposed) return null
     if (!(await ensureModels())) return null
+    // M-2：await 期间 dispose 可能已到达（ensureModels 首用要下 153MB encoder）——
+    // 此时新建的 recognizer 无人 free，判序拦下，绝不赋值回闭包。
+    if (recognizerDisposed) return null
     if (recognizer) return recognizer
     const t = (f: string): string => join(repoDir, f)
     recognizer = createOnlineRecognizer({
@@ -800,6 +816,10 @@ export function createAsrRuntime(options: AsrRuntimeOptions): AsrRuntime {
       // M7①：先置位再清理——令在途的 getSenseWorker 初始化在完成前判序退出
       // （否则它会把一个 dispose 不知道的 Worker 赋值回 senseWorker，线程泄漏）。
       senseDisposed = true
+      // M-2：同样先置位再释放——令在途的 getRecognizer 在创建前判序退出
+      // （否则它会新建一个 dispose 不知道的 ~150MB WASM recognizer 并赋值回闭包，
+      //  该块再无人 free，热重载每代泄漏一块）。
+      recognizerDisposed = true
       // 释放 SenseVoice worker（terminate 常驻线程，防热重载后线程泄漏）。
       let w = senseWorker
       senseWorker = null

@@ -133,6 +133,39 @@ t('发散防护：麦大声 + 近零参考反复喂不产 NaN/Inf，且之后仍
   const out = aec.process(new Float32Array(block).fill(0.5), new Float32Array(block).fill(0.4))
   assert.ok(Number.isFinite(rms(out)), '收敛后输出非有限')
   assert.ok(rms(out) < 0.3, `发散防护后无法再收敛: rms=${rms(out).toFixed(3)}`)
+  // 权重有限性（Issue #15 R15-5 Minor C）：输出「无 NaN」不足以证明权重健康——
+  // 权重一旦被非有限样本毒化，y=e=NaN，输出恒 0（有限但死亡）→ 永久不可打断。
+  assert.ok(
+    Array.from(aec.w).every((v) => Number.isFinite(v)),
+    '权重出现非有限值——一次非有限样本即毒化全部权重',
+  )
+})
+
+t('非有限样本不得毒化权重：一次 NaN 麦克风样本后 AEC 仍能工作（不永久致聋）', () => {
+  const rng = noise(23)
+  const N2 = 32000
+  const ref = new Float32Array(N2)
+  for (let i = 0; i < N2; i++) ref[i] = rng() * 2 - 1
+  const aec = new NlmsAec({ delay: 64 })
+  const block = 1024
+  // 预热 + 正常训练（越过 delay+filterLength 的预热门槛，权重进入自适应）
+  for (let off = 0; off < 8192; off += block) {
+    const m = new Float32Array(block)
+    const r = ref.subarray(off, off + block)
+    for (let i = 0; i < block; i++) m[i] = (off + i >= 64 ? 0.6 * ref[off + i - 64] : 0) + (rng() * 2 - 1) * 0.02
+    aec.process(m, r)
+  }
+  // 一次非有限麦克风样本（驱动异常）
+  const bad = new Float32Array(block).fill(0.5)
+  bad[10] = NaN
+  aec.process(bad, ref.subarray(0, block))
+  assert.ok(
+    Array.from(aec.w).every((v) => Number.isFinite(v)),
+    '非有限样本把权重毒化成 NaN——AEC 永久失效（无 reset、无发散检测）',
+  )
+  // 症状级断言：此后 AEC 必须仍能工作（输出恒 0 = 已被毒化 → 永远检测不到用户语音）
+  const out = aec.process(new Float32Array(block).fill(0.5), new Float32Array(block).fill(0.4))
+  assert.ok(rms(out) > 0.05, `一次非有限样本后 AEC 永久失效（输出 rms=${rms(out).toFixed(4)}）——权重被毒化`)
 })
 
 t('短路径（耳机 5ms=80 samples）回声被消除——模拟真实 windowAt 预移位语义', () => {

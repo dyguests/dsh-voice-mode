@@ -101,7 +101,7 @@ t('settings-form（R1 I-1）：NEXT_ENTRY_FIELDS 五项枚举/数字字段全部
   const expect = {
     interruptLevel: ['sev0', 'sev1', 'sev2'],
     bargeInMode: ['bargeInDetect', 'bargeInAuto', 'bargeInManual'],
-    mode: ['modeToggle', 'modeHold'],
+    mode: ['modeToggle', 'modeHold', 'modeOnce'],
     captionFontSize: ['captionSizeS', 'captionSizeM', 'captionSizeL', 'captionSizeXL'],
     captionMaxWidth: ['captionWidth50', 'captionWidth70', 'captionWidth90'],
   }
@@ -201,6 +201,26 @@ t('strings（R1 M-3/M-4/文案 8）：effectiveNote 补 Kokoro 即时档、cardD
   }
   assert.ok(note.includes('下次进入语音模式才生效的项会列在卡片顶部'), 'effectiveNote 尾句未收窄（tier② 字段不进待生效列表）')
   assert.ok(!note.includes('已保存但未生效'), 'effectiveNote 仍有旧尾句')
+})
+
+t('strings（R2 Minor B）：settingsCardDesc 补 PR #16 三个新设置（与 settingsEffectiveNote 内部一致）', () => {
+  // 插件列表摘要行（client.tsx:528 渲染 settingsCardDesc）此前漏列 PR #16 的
+  // 朗读回复 / 状态条 / 字幕浮层，而生效说明（settingsEffectiveNote）已列——
+  // 两条文案内部不一致：用户从摘要行看不出这三个设置存在。
+  const cardZh = /settingsCardDesc: '([^']*)'/.exec(stringsSrc)[1]
+  for (const k of ['朗读回复', '状态条', '字幕浮层']) {
+    assert.ok(cardZh.includes(k), `插件摘要卡漏列 ${k}（PR #16 新增设置）`)
+  }
+  const enBlock = stringsSrc.slice(stringsSrc.indexOf('export const en'))
+  const cardEn = /settingsCardDesc: '([^']*)'/.exec(enBlock)[1]
+  for (const k of ['read replies', 'status bar', 'caption overlay']) {
+    assert.ok(cardEn.includes(k), `en 插件摘要卡漏列 ${k}（PR #16 新增设置）`)
+  }
+  // 内部一致性：这三项在生效说明里必须在（对照锚点，防止两边再次漂移）。
+  const note = /settingsEffectiveNote: '([^']*)'/.exec(stringsSrc)[1]
+  for (const k of ['朗读回复', '状态条', '字幕浮层']) {
+    assert.ok(note.includes(k), `settingsEffectiveNote 未列 ${k}（对照锚点缺失）`)
+  }
 })
 
 t('strings（R1 文案修正）：hold-only 披露 / detect 回落 / Ctrl 措辞 / 批次号清零 / 跳过本句 / 纠错口径', () => {

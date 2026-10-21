@@ -122,6 +122,134 @@ t('readLegacyVoiceSettings：白名单过滤；settings.yaml 优先于 .imported
   assert.deepEqual(S.readLegacyVoiceSettings(dir, ALLKEYS), { rate: 0.9 })
 })
 
+console.log('settings-http-scope 行为级单测')
+// R15-7：设置 scope 的拉取失败不得是不可逆终态——此前 load() 的 catch 直接进
+// `unavailable` 且 `started` 一生只 load 一次，用户首次打开设置面板那一次 GET
+// 瞬时失败后，只能刷新整页恢复（全仓唯一断言只是源码文本匹配，抓不住）。
+// 这里直接调 createHttpScope，注入 fetch 桩做行为级验证。
+const scopeOut = join(work, 'scope.mjs')
+await build({ entryPoints: [join(root, 'src/settings-http-scope.ts')], bundle: true, platform: 'node', format: 'esm', outfile: scopeOut, logLevel: 'silent' })
+const H = await import(pathToFileURL(scopeOut).href)
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+/** 轮询等待条件成立（比固定 sleep 稳，机器慢时不会误判）。 */
+const waitFor = async (fn, timeoutMs = 5000) => {
+  const t0 = Date.now()
+  for (;;) {
+    if (fn()) return true
+    if (Date.now() - t0 > timeoutMs) return false
+    await sleep(20)
+  }
+}
+const okJson = (value) => ({ ok: true, status: 200, json: async () => ({ value }) })
+const ta = async (name, fn) => { await fn(); n++; console.log(`  ✓ ${name}`) }
+
+await ta('首次 GET 失败后自动退避重试并恢复到 ready（不再是不可逆终态）', async () => {
+  let calls = 0
+  const fetchImpl = async () => {
+    calls++
+    if (calls === 1) throw new Error('boom')
+    return okJson({ rate: 1.2 })
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const un = scope.subscribe(() => {})
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'), '失败后未自动恢复到 ready')
+  assert.equal(scope.getSnapshot().value.rate, 1.2)
+  assert.ok(calls >= 2, `未发生重试（calls=${calls}）`)
+  un()
+})
+
+await ta('unavailable 之后重新挂载卡片可恢复（用户关掉再打开设置页）', async () => {
+  let fail = true
+  const fetchImpl = async () => {
+    if (fail) throw new Error('boom')
+    return okJson({ rate: 2 })
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const un1 = scope.subscribe(() => {})
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'unavailable'), '失败未落到 unavailable')
+  un1()
+  fail = false
+  const un2 = scope.subscribe(() => {})
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'), '重新挂载未恢复')
+  assert.equal(scope.getSnapshot().value.rate, 2)
+  un2()
+})
+
+await ta('卡片关闭（无订阅者）后不再后台重试', async () => {
+  let calls = 0
+  const fetchImpl = async () => { calls++; throw new Error('boom') }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const un = scope.subscribe(() => {})
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'unavailable'))
+  un()
+  const before = calls
+  await sleep(900) // > 首发退避 500ms
+  assert.equal(calls, before, `卡片关闭后仍在后台重试（calls ${before} → ${calls}）`)
+})
+
+await ta('set() 乐观更新 + 失败回滚（回滚后以服务端值兜底）', async () => {
+  const fetchImpl = async (_url, init) => {
+    if (init?.method === 'POST') throw new Error('post boom')
+    return okJson({ rate: 1 })
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const seen = []
+  const un = scope.subscribe(() => seen.push(scope.getSnapshot().value.rate))
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'))
+  await scope.set('rate', 9)
+  assert.ok(seen.includes(9), '乐观更新未生效')
+  assert.equal(scope.getSnapshot().value.rate, 1, '写失败后未回滚到服务端值')
+  un()
+})
+
+await ta('写在途时并发的读结果不回写（乐观值不被旧 GET 盖掉）', async () => {
+  let release = null
+  let gets = 0
+  const fetchImpl = async (_url, init) => {
+    if (init?.method === 'POST') return new Promise((r) => { release = () => r(okJson({ rate: 5 })) })
+    gets++
+    return okJson({ rate: 1 })
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const un = scope.subscribe(() => {})
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'))
+  const pending = scope.set('rate', 5) // POST 挂起
+  await sleep(20)
+  assert.equal(scope.getSnapshot().value.rate, 5, '乐观更新未生效')
+  const getsBefore = gets
+  un()
+  const un2 = scope.subscribe(() => {}) // 重挂载 → 触发并发 GET
+  assert.ok(await waitFor(() => gets > getsBefore), '并发 GET 未发出')
+  await sleep(20)
+  assert.equal(scope.getSnapshot().value.rate, 5, '在途写的值被并发的旧 GET 盖回')
+  release()
+  await pending
+  assert.equal(scope.getSnapshot().value.rate, 5)
+  un2()
+})
+
+await ta('窗口重新获得焦点 → 重拉一次（别的标签页改了设置，本页不再陈旧）', async () => {
+  const handlers = {}
+  const prevWindow = globalThis.window
+  globalThis.window = { addEventListener: (type, fn) => { handlers[type] = fn } }
+  try {
+    let gets = 0
+    const fetchImpl = async () => { gets++; return okJson({ rate: gets }) }
+    const scope = H.createHttpScope('http://scope.test', fetchImpl)
+    const un = scope.subscribe(() => {})
+    assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'))
+    const before = gets
+    assert.equal(typeof handlers.focus, 'function', '未注册窗口焦点重拉监听')
+    handlers.focus()
+    assert.ok(await waitFor(() => gets > before), '焦点回到本页未触发重拉')
+    un()
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window
+    else globalThis.window = prevWindow
+  }
+})
+
 console.log('结构守卫（防回归）')
 const clientSrc = readFileSync(join(root, 'src/client.tsx'), 'utf8')
 const indexSrc = readFileSync(join(root, 'src/index.ts'), 'utf8')

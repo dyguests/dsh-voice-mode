@@ -63,6 +63,14 @@ const CORRECTION_PREAMBLE_RE =
   /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i
 
 /**
+ * 前言护栏的寒暄前缀：弱模型爱在说明头前先来一句客套（"好的，""当然，""Sure,"）。
+ * 剥掉这段客套后再判说明头——否则加一句寒暄即绕过 ^ 锚（元叙述原样进用户消息）。
+ * 每个词后面必须跟分隔符（标点或空白），避免误剥正文词（"行""Hi" 是常用词/前缀）。
+ */
+const CORRECTION_FILLER_PREFIX_RE =
+  /^(?:(?:当然可以|当然|好吧|好的?|行吧|是的|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi)(?:\s*[,，、:：.。!！?？)）]|\s))+/
+
+/**
  * 纠错一条文本。任何失败（无 ctx.get / 无 llm 服务 / 无默认模型 / stream 抛错 /
  * 空结果）都原样返回——纠错不可用时行为与关闭设置一致（纯附加层）。
  */
@@ -107,6 +115,13 @@ export async function correctText(
     //   ② 前言前缀（「修正后：」「Corrected:」等说明头/元叙述）＝带说明输出。
     if (corrected.length > Math.max(trimmed.length * 3, trimmed.length + 24)) return text
     if (CORRECTION_PREAMBLE_RE.test(corrected)) return text
+    //   M-3（Issue #15 R2）：前言护栏不得被前导寒暄绕过——弱模型在说明头前加一句
+    //     「好的，」「当然，」「Sure,」即越过上面的 ^ 锚，模型元叙述原样进入用户消息
+    //     （autoSend 默认开会直接发出去；长度护栏也兜不住——「好的，以下是修正后的
+    //     文本：今天天气不错。」仅 20 字 < 阈值 30）。剥掉寒暄前缀后再判一次说明头，
+    //     命中即回退原文（护栏命中一律回退，不返回剥后的串）。
+    const noFiller = corrected.replace(CORRECTION_FILLER_PREFIX_RE, '').trimStart()
+    if (noFiller !== corrected && CORRECTION_PREAMBLE_RE.test(noFiller)) return text
     return corrected || text
   } catch {
     return text

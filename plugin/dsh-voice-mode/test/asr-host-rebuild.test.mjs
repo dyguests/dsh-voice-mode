@@ -35,6 +35,7 @@ writeFileSync(
   sherpaStub,
   `
 export function createOnlineRecognizer() {
+  globalThis.__sherpaRecognizerCreated = (globalThis.__sherpaRecognizerCreated || 0) + 1
   return {
     createStream: () => ({
       acceptWaveform: () => {},
@@ -201,5 +202,103 @@ await t('markStale 后 dispose 仍可调用（runtime 句柄未被破坏）', ()
   // 应复制 runtime 实例或重排顺序。本测试不再使用 runtime，可安全 dispose。
 })
 
+// ---------------------------------------------------------------------------
+// M-2（Issue #15 R2）：dispose 后禁止 zipformer recognizer 懒重建。
+//
+// 泄漏链（与 senseDisposed/M7① 同型，但 zipformer 侧此前没有守卫）：dispose() 只 free
+// **当时已存在**的 recognizer；而在途的 ensureModels()（首用要下 153MB encoder，窗口
+// 以秒计）完成后，getRecognizer 会新建 recognizer 并赋值回闭包——这个 dispose 完全
+// 不知道的 ~150MB WASM 块再无人 free（热重载每代泄漏一块，长命 host 进程内线性累积）。
+//
+// 本用例走查该时序：模型下载在途 → dispose → 放行下载（初始化完成回调在 dispose 之后
+// 到达）。桩：models.ensureModelFile 可控挂起；sherpa 桩计数 createOnlineRecognizer
+// 次数（新建次数是泄漏的直接可观测量——新建即无人 free）。
+// ---------------------------------------------------------------------------
+console.log('M-2：dispose 后 zipformer recognizer 不得懒重建（在途模型下载完成于 dispose 之后）')
+
+const m2Tmp = mkdtempSync(join(tmpdir(), 'dsh-vm-m2-dispose-'))
+const m2ModelsStub = join(m2Tmp, 'models-stub.mjs')
+writeFileSync(
+  m2ModelsStub,
+  `
+export const HOST_PRIMARY = 'https://huggingface.co'
+export function validateModelHost(h, _allow) {
+  return h || HOST_PRIMARY
+}
+let downloaded = false
+let pending = 0
+const waiters = []
+globalThis.__modelsPending = () => pending
+globalThis.__modelsRelease = () => {
+  downloaded = true
+  const ws = waiters.splice(0)
+  for (const w of ws) w()
+}
+export async function ensureModelFile() {
+  if (!downloaded) {
+    pending++
+    await new Promise((res) => { waiters.push(res) })  // 模拟 153MB encoder 下载窗口
+    pending--
+  }
+  return true
+}
+export async function ensureModelTree() { return true }
+`,
+)
+const m2Out = join(m2Tmp, 'asr-host.bundle.mjs')
+await build({
+  entryPoints: [join(here, '..', 'src', 'asr-host.ts')],
+  outfile: m2Out,
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  alias: { 'sherpa-onnx': sherpaStub },
+  plugins: [
+    {
+      name: 'stub-models-m2',
+      setup(build) {
+        build.onResolve({ filter: /\.\.?\/models\.ts$/ }, () => ({
+          path: m2ModelsStub,
+        }))
+      },
+    },
+  ],
+  logLevel: 'silent',
+})
+const { createAsrRuntime: createAsrRuntimeM2 } = await import(pathToFileURL(m2Out).href)
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+await t('M-2：在途模型下载完成于 dispose 之后 → 不得新建 recognizer（~150MB WASM 无人 free）', async () => {
+  globalThis.__sherpaRecognizerCreated = 0
+  const rt = createAsrRuntimeM2({
+    cacheDir: m2Tmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => false,
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto',
+  })
+  // 发起一次 feed → getRecognizer → ensureModels（模型下载在途，本用例的关键窗口）
+  const p = rt.feed('s-m2', new Float32Array(1600).fill(0.1), false, 0, 0, true)
+  await sleep(300)
+  assert.equal(globalThis.__modelsPending(), 1, '前置条件：应有一次 ensureModelFile 在途（模型下载窗口）')
+  assert.equal(globalThis.__sherpaRecognizerCreated, 0, '前置条件：下载未完成时不得已创建 recognizer')
+  // dispose 在在途下载期间到达。
+  rt.dispose()
+  // 放行下载：初始化完成回调在 dispose 之后才到达（本用例的核心时序）。
+  globalThis.__modelsRelease()
+  await p.catch(() => {})
+  await sleep(300)
+  assert.equal(
+    globalThis.__sherpaRecognizerCreated,
+    0,
+    'dispose 后在途的 getRecognizer 仍新建了 recognizer 并赋值回闭包——该 ~150MB WASM 块再无人 free（热重载每代泄漏一块，长命 host 进程内线性累积）',
+  )
+})
+
+rmSync(m2Tmp, { recursive: true, force: true })
 rmSync(tmp, { recursive: true, force: true })
 console.log(`\nasr-host-rebuild：${passed} 项通过`)

@@ -15,7 +15,7 @@
  *  6. 运行日志（console.*）必须英文（开发者录制工具 fixture-recorder 除外）。
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
 
@@ -180,6 +180,32 @@ t('UI/协议文件零中文字面量', () => {
   const bad = []
   for (const f of strict) for (const o of cjkLiterals(f)) bad.push(`${f}:${o.line} ${o.text}`)
   assert.deepEqual(bad, [], '这些文件的用户可见文案必须走词典（或改英文日志）')
+})
+// R2 Minor C：旧守卫只覆盖上面 10 个文件（硬编码白名单），其余源文件带中文文案
+// 不会被抓——属「运气」而非守卫。这里把默认收紧成「全源文件零中文」，只对确属
+// 数据 / 提示词 / 开发者工具的文件显式豁免（豁免理由写在表里，防表腐化）。
+const CJK_EXEMPT = {
+  'strings.ts': '词典本身（zh 键值就是文案）',
+  'asr.ts': '中文附和词表（运行时数据）',
+  'prompts.ts': '中文提示词（发往模型的固定文案）',
+  'llm-correct.ts': '中文纠错提示词（发往模型的固定文案）',
+  'voice-catalog.ts': '中文音色名（运行时数据）',
+  'tts-vits-worker.ts': '替换串里的中文顿号',
+  'fixture-recorder.ts': '开发者录制工具（中文标注）',
+}
+t('其余源文件默认零中文字面量（豁免仅限数据/提示词/开发者工具）', () => {
+  const files = readdirSync(join(root, 'src')).filter((f) => /\.tsx?$/.test(f))
+  const bad = []
+  for (const f of files) {
+    if (f in CJK_EXEMPT) continue
+    if (f === 'client.tsx') continue // 专项用例（3 处 NLMS/@keyframes 标注）单独守
+    for (const o of cjkLiterals(f)) bad.push(`${f}:${o.line} ${o.text}`)
+  }
+  assert.deepEqual(bad, [], `未豁免的源文件出现中文字面量（用户可见文案必须走词典）：${bad.join(' | ')}`)
+  // 豁免表防腐化：每个豁免文件必须真的含中文，否则从表里删掉（别留空豁免口子）。
+  for (const f of Object.keys(CJK_EXEMPT)) {
+    assert.ok(cjkLiterals(f).length > 0, `豁免文件 ${f} 已无中文字面量——应从豁免表删掉`)
+  }
 })
 t('client.tsx 仅允许开发者录制标注里的 3 处中文', () => {
   const bad = cjkLiterals('client.tsx').filter((o) => !/NLMS|@keyframes/.test(o.text))
