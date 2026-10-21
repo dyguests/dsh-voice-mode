@@ -30,6 +30,10 @@ declare module '@deepseek-ai/cordis' {
   interface Events {
     /** 回合即将关闭（模型不再欠回复：没有在跑的工具调用、没有新转向）；payload.agent.id 即会话 id。 */
     'agent/turn-stopping'(payload: { agent: { id: string } }): void
+    /** 回合在 error 处终止（abort 不派发）；payload.agent.id 即会话 id。 */
+    'agent/error'(payload: { agent: { id: string } }): void
+    /** 每个 step 开始前的水位（waterfall，必须透传 next）；turn 为该 step 所属回合号。 */
+    'agent/pre-step'(payload: { agent: { id: string }; turn: number; step: number }, next: () => Promise<unknown>): Promise<unknown>
   }
 }
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -592,10 +596,30 @@ export function apply(ctx: Context, config: Config): void {
    * （client.tsx:1169-1176）——用户马上发下一条，刚「停止」的回复尾巴就在下一条开头重新出声，
    * 且这段云端合成本是白付的。
    *
-   * 口径：静音只覆盖**当回合**——下一回合的 llm/stream 一进来就解禁（见 tap 内 delete），
-   * 与客户端拒绝线的解除时机同一边界。退出/让出时随 clearTurnState 一并回收（防集合增长）。
+   * 口径（R15 Important-6 校正）：静音**活到回合边界**，不是活到下一条流。值 = 静音时的回合号
+   * （`turnOfSession.get`，取不到则为 null = 回合号未知）；解禁判据见 llm/stream tap 入口。
+   * 早先按流解禁的写法在带工具调用的回合里形同虚设：回合内 step2 的流一进来就解禁，余句照旧出声。
+   * 退出/让出/焦点转移时随 dropTurnTables 一并回收（防集合增长）。
    */
-  const readMuted = new Set<string>()
+  const readMuted = new Map<string, number | null>()
+  /**
+   * R15（Issue #15 Important-6）：会话 → 当前回合号，由 `agent/pre-step` 维护
+   * （每个 step 派发一次，回合内不变、跨回合递增 —— 契约 payload 带 `turn`）。
+   *
+   * 它是「回合内的下一个 step」与「真正的下一个回合」的唯一可用判据：`llm/stream` 的
+   * `GenerateOptions` 不带 turn/step（实测 dsh-agent-loop 的 `buildRequest` 返回的请求对象里
+   * 没有这两个字段，turn/step 只用于 session 事件），回合身份只能从 agent 事件侧取。
+   * 取不到（老宿主不派发 / 非 agent 调用方）时为 undefined → 解禁退回按流解禁（即旧行为），
+   * 不会把静音变成永久。
+   */
+  const turnOfSession = new Map<string, number>()
+  /**
+   * R15（Issue #15 Important-4）：有 llm/stream tap 在途的会话（tap 创建即置位，
+   * tap 的 finally——onTurn('listening') 的唯一调用点——清位）。回收表项前据此避让：
+   * 删除 turnGen 会让该会话下一次 tap 的 gen 归 1，若旧 tap 仍在飞，它迟到的 finally
+   * 与新 tap 同值 → turnGen 的代际语义（"旧回合迟到的 finally 不得打回新回合"）失效。
+   */
+  const tapInFlight = new Set<string>()
 
   // --- P2-4 显式回合状态机（host 真相源）：idle | listening | finalizing | agent-speaking。 ---
   // 迁移点：/asr partial → listening；/asr final=1 → finalizing；llm 首 token → agent-speaking；
@@ -611,12 +635,43 @@ export function apply(ctx: Context, config: Config): void {
    *  M15（Issue #15 审查 Minor）：只增不删——会话退出/让出时与 turnStates 一并清掉，
    *  否则长命宿主里这个 Map 随历史会话数无限增长（每项仅一个数字，但永不回收）。 */
   const turnGen = new Map<string, number>()
-  /** 会话回合状态收尾（退出/让出/被抢占共用）：广播 idle 后清两张表 + 静音闸门。 */
-  const clearTurnState = (sessionId: string): void => {
-    setTurn(sessionId, 'idle')
+  /**
+   * 回合状态相关表的**统一删除点**（clearTurnState 与 reclaimFocusState 共用）。
+   *
+   * 物理上只此一处 delete：新增/移除表项时只改这里，且 test/host-fixes 的
+   * 「turnStates.delete 只出现一次」契约锁（其本意是「3 个语音侧收尾点不得各自内联
+   * setTurn + delete」）**一字不改继续成立**——R15 的 reclaimFocusState 若就地写三行
+   * delete 会把那条锁顶成 2 处，把「共用删除点」的不变式悄悄稀释掉。
+   */
+  const dropTurnTables = (sessionId: string): void => {
     turnStates.delete(sessionId)
     turnGen.delete(sessionId)
     readMuted.delete(sessionId) // R15：静音闸门随之回收（防集合随会话数增长）
+    turnOfSession.delete(sessionId) // R15（Important-6）：回合号随之回收（下次 pre-step 重建）
+  }
+  /** 会话回合状态收尾（退出/让出/被抢占共用）：广播 idle 后清全部回合表。 */
+  const clearTurnState = (sessionId: string): void => {
+    setTurn(sessionId, 'idle')
+    dropTurnTables(sessionId)
+  }
+  /**
+   * R15（Issue #15 Important-4）：回收「已不再是朗读对象」的会话表项（**静默**，不广播 idle）。
+   *
+   * 判据 = **焦点离开该会话**。always 朗读的命中条件是 `focusedSessionId === sessionId`
+   * （见 llm/stream tap），故焦点一走（/focus 换 sessionId、/focus 清空、或焦点标签页的
+   * SSE 断开），该会话就再也不会被 tap，其 turn 状态与静音态对任何消费者都无意义——
+   * 这就是 always 路径上的「让出」时刻。
+   *
+   * 与 clearTurnState 的分工：后者 3 个调用点全是语音模式专属（yieldActiveSession /
+   * 进模式让出旧会话 / 退出模式），且那些会话**仍可能是活跃语音会话**，需要广播 idle 让
+   * 客户端复位；本函数回收的会话已无监听方，广播只是噪音，故静默删表（只调 dropTurnTables）。
+   *
+   * 守卫 ①：仍在语音模式的会话不归本路径回收（语义不重叠，交给 clearTurnState）。
+   * 守卫 ②：tap 在途时暂缓——见 tapInFlight 声明处的理由；该会话会在自己的 tap finally 里补收。
+   */
+  const reclaimFocusState = (sessionId: string | null): void => {
+    if (sessionId === null || sessionId === activeVoiceSession || tapInFlight.has(sessionId)) return
+    dropTurnTables(sessionId)
   }
 
   // --- fork 加固：会话存在性校验（第 0 层）。 ---
@@ -994,15 +1049,30 @@ export function apply(ctx: Context, config: Config): void {
     if (activeVoiceSession !== sessionId && !alwaysRead) return next()
     const gen = (turnGen.get(sessionId) ?? 0) + 1
     turnGen.set(sessionId, gen)
-    // R15（Issue #15 Important-2）：新回合解除「停止朗读」静音——/cancel 只停**当回合**余句，
-    // 下一回合恢复朗读（与客户端拒绝线在同一回合边界解除同口径：client.tsx:1169-1176）。
-    readMuted.delete(sessionId)
+    // R15（Issue #15 Important-2 + Important-6 校正）：「停止朗读」的解禁判据是**回合边界**，
+    // 不是「下一条流」——回合内的 step2（工具调用后那轮流）必须继续静音，否则停止朗读
+    // 在带工具调用的回合里形同虚设（余句照旧合成下发并计费）。当前回合号由 agent/pre-step
+    // 维护；取不到（老宿主不派发 / 非 agent 调用方）时退回按流解禁 = 旧行为，不产生新回归。
+    if (readMuted.has(sessionId)) {
+      const mutedAt = readMuted.get(sessionId) ?? null
+      const curTurn = turnOfSession.get(sessionId)
+      if (mutedAt === null || curTurn === undefined || curTurn !== mutedAt) readMuted.delete(sessionId)
+    }
+    tapInFlight.add(sessionId) // R15（Important-4）：回收表项前据此避让仍在飞的流
     return tapActiveStream(
       sessionId,
       next(),
       queue,
       broadcast,
       (state) => {
+        if (state === 'listening') {
+          // onTurn('listening') 的唯一调用点是 tap 的 finally → 此刻该流确实结束。
+          tapInFlight.delete(sessionId)
+          // 焦点已离开且不在语音模式：趁此刻补收（焦点切换时若本流在途会被守卫②推迟到这里）。
+          if (focusedSessionId !== sessionId && activeVoiceSession !== sessionId) {
+            reclaimFocusState(sessionId)
+          }
+        }
         if ((turnGen.get(sessionId) ?? 0) !== gen) return
         setTurn(sessionId, state)
       },
@@ -1028,6 +1098,29 @@ export function apply(ctx: Context, config: Config): void {
   // 反过来在 host 侧按「当前是否被 tap」过滤，一旦焦点/语音归属中途变化就会把闸门
   // 留在关闭态（tts-idle 永不到，once 模式退 10s 兜底），比多发一条坏得多。
   ctx.on('agent/turn-stopping', ({ agent }) => queue.noteTurnEnd(agent.id))
+
+  // R15（Issue #15 Important-7）：回合以 **error** 收场时同样不派发 turn-stopping
+  // （实测 dsh-agent-loop：turn-stopping 只在 `if (turnEnds && inbox.nextStep.length === 0)`
+  // 内派发，error 走 catch → throwError 重抛），此时 openTurns 残留 → pump finally 的
+  // 排空回调恒被闸门拦下 → tts-idle 不发 → mode:once 退到 ONCE_STALL_MS=10s 才退出。
+  // agent/error 由 throwError 在**回合终止**的三条路径上派发（turn without driver
+  // reservation / turn/start 追加失败 / turn 循环 catch），不会在回合中途误发，
+  // 故此处 noteTurnEnd 不会造成「回合未结束就提前 tts-idle」。
+  // 未覆盖：**abort**（用户打断）在 catch 里直接重抛、不经 throwError，宿主侧无可用信号
+  // ——其影响也最轻（打断后用户正在说话，新回合一起来 running 变真，once 计时器被撤销；
+  // 且下一个正常回合的 noteTurnEnd 会自愈）。详见回报给主会话的跨域建议。
+  ctx.on('agent/error', ({ agent }) => queue.noteTurnEnd(agent.id))
+
+  // R15（Issue #15 Important-6）：回合号真源。`agent/pre-step` 每个 step 派发一次，
+  // payload 带 turn（回合内不变、跨回合递增），是 host 侧唯一能区分「回合内的下一个 step」
+  // 与「真正的下一个回合」的事件（llm/stream 的 GenerateOptions 不带 turn/step）。
+  // 只记我们关心的会话（语音模式 / 焦点），否则这张表会随宿主里全部 agent 增长；
+  // 回收走 dropTurnTables。waterfall：必须透传 next()。
+  ctx.on('agent/pre-step', ({ agent, turn }, next) => {
+    const sid = agent.id
+    if (sid === activeVoiceSession || sid === focusedSessionId) turnOfSession.set(sid, turn)
+    return next()
+  })
 
   // --- HTTP 面 ---
   const base = BASE_PATH
@@ -1570,10 +1663,11 @@ export function apply(ctx: Context, config: Config): void {
             // ASR 段（按住说的前半句已上行，松手定稿以同一 epoch 增量续传，
             // 若 reset 会把 host 流清空导致定稿缺前半句——对抗审查第三轮 Blocker）。
             queue.cancel(sessionId)
-            // R15（Issue #15 Important-2）：epoch 只作废**已入队**的句子，打断后仍在跑的
-            // llm/stream 会把余句继续送进来（新 epoch 不作废）。此处记下「本回合静音」，
-            // 余句一律不入队（不合成、不计费、不下发），下一回合解禁。
-            readMuted.add(sessionId)
+            // R15（Issue #15 Important-2 + Important-6 校正）：epoch 只作废**已入队**的句子，
+            // 打断后仍在跑的 llm/stream 会把余句继续送进来（新 epoch 不作废）。此处记下
+            // 「本回合静音 + 当时的回合号」，余句一律不入队（不合成、不计费、不下发）；
+            // 解禁只发生在回合边界（tap 入口比对回合号），回合内的下一个 step 不解禁。
+            readMuted.set(sessionId, turnOfSession.get(sessionId) ?? null)
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId)
           }
           respondJson(res, 200, { ok: true })
@@ -1693,6 +1787,7 @@ export function apply(ctx: Context, config: Config): void {
             // malformed body → 400 below
           }
           const { sessionId, tabId } = parsed
+          const prevFocus = focusedSessionId // R15（Important-4）：焦点转移的回收判据
           const validTab = typeof tabId === 'string' && tabId.length > 0 && tabId.length <= 64
           const validSid = typeof sessionId === 'string' && sessionId.length > 0 && sessionId.length <= 128
           if (!validTab || !(validSid || sessionId === null)) {
@@ -1700,12 +1795,22 @@ export function apply(ctx: Context, config: Config): void {
             return
           }
           if (validSid) {
+            // fork 加固：会话存在性校验（第 0 层），与 /toggle 同口径——否则 /focus 的受理面
+            // 是「任意 1–128 字符的字符串」，能把 focusedSessionId 占在一个不存在的会话上，
+            // 使 always 朗读的归属判定指向虚空。
+            if (sessions && !sessions.get(sessionId)) {
+              respondJson(res, 403, { code: 'unknown_session', error: 'unknown session' })
+              return
+            }
             focusedSessionId = sessionId
             focusedTabId = tabId
           } else if (tabId === focusedTabId) {
             focusedSessionId = null
             focusedTabId = null
           }
+          // R15（Issue #15 Important-4）：焦点离开的会话不再是朗读对象 → 回收其表项。
+          // 判据与守卫见 reclaimFocusState 声明处。
+          if (prevFocus !== null && prevFocus !== focusedSessionId) reclaimFocusState(prevFocus)
           broadcast('focus', { sessionId: focusedSessionId, tabId: focusedTabId })
           respondJson(res, 200, { ok: true, sessionId: focusedSessionId, tabId: focusedTabId })
         })
@@ -1803,8 +1908,12 @@ export function apply(ctx: Context, config: Config): void {
             // 焦点标签页断开（关页/刷新）：清焦点，免得 readAloud=always 继续给没人听的页面合成；
             // 只是断线的话，客户端重连 open 时会补报焦点。
             if (tabId === focusedTabId) {
+              const prevFocus = focusedSessionId
               focusedSessionId = null
               focusedTabId = null
+              // R15（Important-4）：焦点随标签页一起离开 → 该会话不再是朗读对象，回收其表项
+              // （与 /focus 清空同一条判据）。
+              reclaimFocusState(prevFocus)
               broadcast('focus', { sessionId: null, tabId: null })
             }
             // B2：owner tab 的 SSE 断开 → 8s 宽限内没重连则让出（防 transient blip 误让出）。

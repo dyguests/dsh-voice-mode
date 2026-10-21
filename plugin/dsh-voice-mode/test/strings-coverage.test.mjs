@@ -135,11 +135,104 @@ t('错误码表非空；每个码都有词典键映射', () => {
     assert.ok(m[1] in zh && m[1] in en, `码 ${c} 映射的键 ${m[1]} 不在词典`)
   }
 })
-t('index.ts / asr-host.ts 里出现的 code 字面量都在码表内', () => {
-  const used = new Set()
-  for (const f of ['index.ts', 'asr-host.ts']) for (const m of read(f).matchAll(/\bcode:\s*'([a-z_]+)'/g)) used.add(m[1])
-  assert.ok(used.size >= 8)
-  assert.deepEqual([...used].filter((c) => !codeUnion.includes(c)), [])
+
+/**
+ * 解析 host 源文件里所有 `code:` 发射点（TS AST）。
+ *
+ * 旧守卫只认字面量形态（`code: 'x'`）→ 常量/表达式形态完全不可见：
+ *   · `code: PREVIEW_ERROR_CODES[category]`（index.ts）→ 4 个 preview_* 码扫描不到；
+ *   · `code: isValidation ? 'bad_request' : 'internal'`（index.ts）→ 同样扫描不到。
+ * 后果：往 PREVIEW_ERROR_CODES 加一个新码却漏了词典映射 → 守卫全绿 → 客户端
+ * errorText() 取不到映射，错误提示退化为空/原始码。
+ *
+ * 支持形态（可静态解析）：
+ *   ① 字符串字面量（含 as/括号解包、无插值模板）；
+ *   ② 条件表达式 → 取两个分支（isValidation 形态：分支都是字面量 → 可解析）；
+ *   ③ `CONST[...]`（CONST 是同文件 const 对象字面量，索引是动态的）→ 取该对象的全部值
+ *      （索引动态 = 任一取值都可能被发射，故全收）。
+ * 不可解析形态 → 记入 unresolved：守卫不得有静默盲区（unresolved 非空即红，
+ *   要求把该形态改造成可解析形态，而不是加一句注释了事）。
+ */
+function collectCodeEmissions(file) {
+  const text = read(file)
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+  // const 对象字面量（值全是字符串字面量）→ 变量名 → 取值集合
+  const constObjects = new Map()
+  const collectConsts = (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      let init = n.initializer
+      while (ts.isAsExpression(init) || ts.isParenthesizedExpression(init)) init = init.expression
+      if (ts.isObjectLiteralExpression(init)) {
+        const vals = []
+        for (const p of init.properties) {
+          if (ts.isPropertyAssignment(p) && ts.isStringLiteralLike(p.initializer)) vals.push(p.initializer.text)
+        }
+        if (vals.length > 0) {
+          const name = n.name.text
+          constObjects.set(name, [...new Set([...(constObjects.get(name) ?? []), ...vals])])
+        }
+      }
+    }
+    ts.forEachChild(n, collectConsts)
+  }
+  collectConsts(sf)
+
+  const codes = new Set()
+  const unresolved = []
+  const resolve = (expr) => {
+    let e = expr
+    while (ts.isAsExpression(e) || ts.isParenthesizedExpression(e) || ts.isSatisfiesExpression?.(e)) e = e.expression
+    if (ts.isStringLiteralLike(e)) return [e.text]
+    if (ts.isConditionalExpression(e)) return [...resolve(e.whenTrue), ...resolve(e.whenFalse)]
+    if (ts.isElementAccessExpression(e) && ts.isIdentifier(e.expression) && constObjects.has(e.expression.text)) {
+      return constObjects.get(e.expression.text)
+    }
+    return null
+  }
+  const visit = (n) => {
+    if (ts.isPropertyAssignment(n)) {
+      const name = ts.isIdentifier(n.name) ? n.name.text : ts.isStringLiteralLike(n.name) ? n.name.text : null
+      if (name === 'code') {
+        const vals = resolve(n.initializer)
+        const line = sf.getLineAndCharacterOfPosition(n.getStart()).line + 1
+        if (vals) for (const v of vals) codes.add(v)
+        else unresolved.push(`${file}:${line} ${n.initializer.getText().replace(/\s+/g, ' ').slice(0, 60)}`)
+      }
+    }
+    ts.forEachChild(n, visit)
+  }
+  visit(sf)
+  return { codes, unresolved }
+}
+
+// 扫描全部源文件（新发射点落在别的文件也要被看见）。
+const SRC_FILES = readdirSync(join(root, 'src')).filter((f) => /\.tsx?$/.test(f))
+const emittedCodes = new Set()
+const unresolvedCodes = []
+for (const f of SRC_FILES) {
+  const r = collectCodeEmissions(f)
+  for (const c of r.codes) emittedCodes.add(c)
+  for (const u of r.unresolved) unresolvedCodes.push(u)
+}
+
+t('code 发射点全形态可解析（字面量 / 条件表达式 / 常量索引），无未解析形态', () => {
+  assert.deepEqual(
+    unresolvedCodes,
+    [],
+    `无法静态解析的 code 发射形态（守卫盲区——请改成可解析形态，别靠注释收尾）：${unresolvedCodes.join(' | ')}`,
+  )
+  assert.ok(emittedCodes.size >= 12, `扫描到的发射码过少：${emittedCodes.size}`)
+  // 常量索引形态必须真的被解析出来（否则本用例只是「扫到几个字面量」的自欺）：
+  // PREVIEW_ERROR_CODES 的 4 个码只能经由 `code: PREVIEW_ERROR_CODES[category]` 发出。
+  for (const c of ['preview_network', 'preview_engine', 'preview_text', 'preview_unknown']) {
+    assert.ok(emittedCodes.has(c), `常量形态发射的码 ${c} 没被扫到——常量索引形态解析失效`)
+  }
+})
+t('码表 ↔ 发射点反向闭合：码表每一项都被发射，每个发射码都在码表内', () => {
+  const notEmitted = codeUnion.filter((c) => !emittedCodes.has(c))
+  assert.deepEqual(notEmitted, [], `码表项从未被任何发射点发出（死条目/发射形态变化后失联）：${notEmitted.join(', ')}`)
+  const notInTable = [...emittedCodes].filter((c) => !codeUnion.includes(c))
+  assert.deepEqual(notInTable, [], `发射了码表外的码（客户端 errorText 取不到词典映射，提示退化为空/原始码）：${notInTable.join(', ')}`)
 })
 t('host 不再把 String(e) 异常文本或中文原文当错误响应透出', () => {
   for (const f of ['index.ts', 'asr-host.ts']) {

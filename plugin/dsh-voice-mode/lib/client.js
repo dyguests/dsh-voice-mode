@@ -1212,6 +1212,12 @@ function createAsrEngine(config, sessionId) {
       if (!pass && gateQueryScope) preRollSeedWall = null;
       return pass;
     },
+    /** 作废抢救种子（客户端放弃本次检测时调用——语义见 AsrEngine.invalidateSalvageSeed）。
+     *  Issue #15 R15-5：补「从未问过门控」的放弃路径（确认帧数未达门槛 / 迟滞衰减归零）：
+     *  这类检测不会触发上面的门控询问点，引擎只能由客户端显式告知。 */
+    invalidateSalvageSeed() {
+      preRollSeedWall = null;
+    },
     echoLevels() {
       return { floorRms: echoFloorRms, residualRms: latestResidualRms, peakRms: echoPeak };
     },
@@ -2244,8 +2250,30 @@ function takeToggleSlot(history, now) {
 function onceFinished(o, running, ttsDrained, playing) {
   return o.sawRun && !running && ttsDrained && !playing;
 }
-function isPrimaryPress(button) {
-  return button === 0;
+function isPrimaryPress(button, opts) {
+  if (button !== 0) return false;
+  if (opts.mac && opts.ctrlKey) return false;
+  return true;
+}
+function eqPaintMode(reducedMotion) {
+  return reducedMotion ? "static-full" : "animated";
+}
+function menuFocusIndex(i, len, dir) {
+  if (len <= 0) return -1;
+  if (i < 0) return dir === 1 ? 0 : len - 1;
+  return (i + dir + len) % len;
+}
+function handleReplaced(o) {
+  if (o.staleBus) {
+    o.retire();
+    return;
+  }
+  o.reconnect(o.renewTabId());
+}
+function decayConfirmCount(count, abandon) {
+  const next = Math.max(0, count - 1);
+  if (next === 0) abandon();
+  return next;
 }
 var FOCUS_OWNER_DEFAULT = "default";
 function focusSession(owners) {
@@ -2263,20 +2291,29 @@ function focusRelease(owners, owner) {
   const focused = focusSession(owners);
   return { changed: before !== focused, focused };
 }
+function registerScopeDispose(host, raw) {
+  host.effect(() => raw.dispose);
+}
 function createScopeBridge(raw) {
-  const listeners = /* @__PURE__ */ new Set();
+  const listeners = [];
   let off = null;
-  const forward = () => {
-    for (const fn of [...listeners]) fn();
-  };
+  function resubscribe() {
+    off?.();
+    off = raw.subscribe(forward);
+  }
+  function forward() {
+    for (const entry of [...listeners]) entry.fn();
+  }
   const scope = {
     getSnapshot: () => raw.getSnapshot(),
     subscribe(fn) {
-      listeners.add(fn);
-      if (listeners.size === 1) off = raw.subscribe(forward);
+      const entry = { fn };
+      listeners.push(entry);
+      if (listeners.length === 1) off = raw.subscribe(forward);
       return () => {
-        listeners.delete(fn);
-        if (listeners.size === 0 && off !== null) {
+        const i = listeners.indexOf(entry);
+        if (i >= 0) listeners.splice(i, 1);
+        if (listeners.length === 0 && off !== null) {
           off();
           off = null;
         }
@@ -2291,9 +2328,8 @@ function createScopeBridge(raw) {
         raw.invalidate();
         return;
       }
-      if (listeners.size === 0) return;
-      off?.();
-      off = raw.subscribe(forward);
+      if (listeners.length === 0) return;
+      resubscribe();
     }
   };
 }
@@ -3458,11 +3494,20 @@ function createHttpScope(origin = location.origin, fetchImpl = fetch) {
   const subs = /* @__PURE__ */ new Set();
   let inFlight = false;
   let writing = 0;
+  let writeGen = 0;
+  let pendingReload = false;
+  let disposed = false;
   let retryTimer = null;
   let retryDelay = 0;
   const emit = (next) => {
     snap = next;
-    for (const fn of [...subs]) fn();
+    for (const fn of [...subs]) {
+      try {
+        fn();
+      } catch (e) {
+        console.warn("[dsh-voice-mode] settings scope subscriber failed: " + String(e));
+      }
+    }
   };
   const clearRetry = () => {
     if (retryTimer !== null) {
@@ -3471,30 +3516,45 @@ function createHttpScope(origin = location.origin, fetchImpl = fetch) {
     }
   };
   const load = async () => {
-    if (inFlight) return;
+    if (disposed) return;
+    if (inFlight) {
+      pendingReload = true;
+      return;
+    }
     inFlight = true;
     clearRetry();
+    const myGen = writeGen;
     try {
       const res = await fetchImpl(origin + SETTINGS_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       retryDelay = 0;
-      if (writing === 0) emit({ status: "ready", value: data.value ?? {} });
+      if (writing === 0 && myGen === writeGen) emit({ status: "ready", value: data.value ?? {} });
     } catch {
       emit({ status: "unavailable", value: snap.value });
       scheduleRetry();
     } finally {
       inFlight = false;
+      if (pendingReload) {
+        pendingReload = false;
+        if (!disposed && subs.size > 0) void load();
+      }
     }
   };
   const scheduleRetry = () => {
-    if (subs.size === 0 || retryTimer !== null) return;
+    if (disposed || subs.size === 0 || retryTimer !== null) return;
     retryDelay = retryDelay === 0 ? RETRY_BASE_MS : Math.min(retryDelay * 2, RETRY_MAX_MS);
     retryTimer = setTimeout(() => {
       retryTimer = null;
       void load();
     }, retryDelay);
   };
+  const onFocus = () => {
+    if (subs.size > 0) void load();
+  };
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("focus", onFocus);
+  }
   const scope = {
     getSnapshot: () => snap,
     subscribe(fn) {
@@ -3510,6 +3570,7 @@ function createHttpScope(origin = location.origin, fetchImpl = fetch) {
       };
     },
     async set(field, value) {
+      if (disposed) return;
       const before = snap;
       writing++;
       emit({ status: "ready", value: { ...snap.value, [field]: value } });
@@ -3528,15 +3589,19 @@ function createHttpScope(origin = location.origin, fetchImpl = fetch) {
         emit(before);
       } finally {
         writing--;
+        writeGen++;
       }
       if (!ok) await load();
+    },
+    dispose: () => {
+      disposed = true;
+      pendingReload = false;
+      if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+        window.removeEventListener("focus", onFocus);
+      }
+      clearRetry();
     }
   };
-  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-    window.addEventListener("focus", () => {
-      if (subs.size > 0) void load();
-    });
-  }
   return scope;
 }
 
@@ -3571,7 +3636,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "3154433";
+var BUILD_TAG = "f8a3268";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3766,9 +3831,11 @@ function apply(ctx) {
     scope = settingsScope.bind({ namespace: "voice-mode" });
     settingsScopeInvalidate = null;
   } else {
-    const bridge = createScopeBridge(createHttpScope());
+    const raw = createHttpScope();
+    const bridge = createScopeBridge(raw);
     scope = bridge.scope;
     settingsScopeInvalidate = bridge.invalidate;
+    registerScopeDispose(ctx, raw);
   }
   ctx.slots.inject(
     "settings.plugin.item",
@@ -4221,13 +4288,18 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     source.addEventListener("replaced", () => {
       source?.close();
       source = null;
-      if (globalThis[BUS_GEN_KEY] !== busGen) {
-        ui.sseDown = true;
-        notify();
-        return;
-      }
-      TAB_ID = getTabId(true);
-      connect();
+      handleReplaced({
+        staleBus: globalThis[BUS_GEN_KEY] !== busGen,
+        renewTabId: () => {
+          TAB_ID = getTabId(true);
+          return TAB_ID;
+        },
+        reconnect: () => connect(),
+        retire: () => {
+          ui.sseDown = true;
+          notify();
+        }
+      });
     });
     source.addEventListener("display", (e) => {
       try {
@@ -4720,7 +4792,8 @@ function MicMenu({ scope, anchor, onClose }) {
       e.preventDefault();
       const items = Array.from(menuRef.current?.querySelectorAll("button") ?? []);
       const i = items.indexOf(document.activeElement);
-      items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+      const next = menuFocusIndex(i, items.length, e.key === "ArrowDown" ? 1 : -1);
+      if (next >= 0) items[next]?.focus();
     };
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("keydown", onKey, true);
@@ -5318,7 +5391,10 @@ function MicButton({
               isSpeechFalseRun++;
               if (isSpeechFalseRun >= 2) {
                 isSpeechFalseRun = 0;
-                isSpeechTrueCount = Math.max(0, isSpeechTrueCount - 1);
+                isSpeechTrueCount = decayConfirmCount(
+                  isSpeechTrueCount,
+                  () => engineRef.current?.invalidateSalvageSeed()
+                );
                 if (isSpeechTrueCount === 0) interruptFirstAt = 0;
               }
             }
@@ -5816,7 +5892,7 @@ function MicButton({
     return () => el.removeEventListener("touchstart", onTouchStart);
   }, []);
   const onPointerDown = (e) => {
-    if (!isPrimaryPress(e.button)) return;
+    if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return;
     lockSelection();
     holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId };
     e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -5857,7 +5933,7 @@ function MicButton({
     }
   };
   const onPointerUp = (e) => {
-    if (!isPrimaryPress(e.button)) return;
+    if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return;
     const p = holdPtrRef.current;
     holdPtrRef.current = null;
     clearBreakTimer();
@@ -5909,10 +5985,7 @@ function MicButton({
     const bars = Array.from(el.querySelectorAll(".dshvm-eq i"));
     const base = eqKind === "out" ? [6, 10, 14, 10, 6] : [6, 12, 8];
     const paint = (lv) => bars.forEach((b, i) => b.style.height = `${Math.max(3, base[i] * (0.35 + 0.65 * lv)).toFixed(1)}px`);
-    if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      paint(1);
-      return;
-    }
+    const mq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
     let smooth = 0;
     let raf = 0;
     const tick = () => {
@@ -5921,8 +5994,33 @@ function MicButton({
       paint(smooth);
       raf = requestAnimationFrame(tick);
     };
-    tick();
-    return () => cancelAnimationFrame(raf);
+    const apply2 = () => {
+      if (eqPaintMode(mq?.matches === true) === "static-full") {
+        if (raf) {
+          cancelAnimationFrame(raf);
+          raf = 0;
+        }
+        paint(1);
+        return;
+      }
+      if (!raf) {
+        smooth = 0;
+        tick();
+      }
+    };
+    apply2();
+    let detach = null;
+    if (mq && typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", apply2);
+      detach = () => mq.removeEventListener("change", apply2);
+    } else if (mq && typeof mq.addListener === "function") {
+      mq.addListener(apply2);
+      detach = () => mq.removeListener(apply2);
+    }
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      detach?.();
+    };
   }, [eqKind, bus]);
   const showTimer = on && !statusBarShown && !onceWaiting;
   const [elapsed, setElapsed] = (0, import_react3.useState)(0);

@@ -229,6 +229,228 @@ await ta('写在途时并发的读结果不回写（乐观值不被旧 GET 盖�
   un2()
 })
 
+// ── M-1（Issue #15 R4）：读在写「之前」发出、写落定之后才返回的另一半顺序 ──
+// 早年的守卫是 `if (writing === 0)`——计数只表达「此刻有没有写」，表达不了先后：
+// 读在写之前发出（写落定前读未返回）时，写落定后 writing 归 0，迟到的旧快照照写不误
+// → 把刚写好的值盖回旧值。本用例走查该顺序：GET 慢、POST 快，GET 最后才落定。
+await ta('读在写之前发出、写落定之后才返回 → 迟到的旧读不得盖回新值（单调序号守卫）', async () => {
+  let releaseGet = null
+  const fetchImpl = async (_url, init) => {
+    if (init?.method === 'POST') return okJson({ rate: 2 }) // 写快
+    // 读慢：接受连接后一直不返回，直到测试放行（快照是旧值 rate=1）
+    return new Promise((r) => { releaseGet = () => r(okJson({ rate: 1 })) })
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const seen = []
+  const un = scope.subscribe(() => seen.push(scope.getSnapshot().value.rate))
+  assert.ok(await waitFor(() => releaseGet !== null), '首次 GET 未发出')
+  // 用户在 GET 返回前改开关：POST 更快落定（值 rate=2）
+  await scope.set('rate', 2)
+  assert.equal(scope.getSnapshot().value.rate, 2, '乐观更新未生效')
+  // 迟到的 GET 落定（旧快照 rate=1）——不得盖回新值
+  releaseGet()
+  await sleep(50)
+  assert.equal(scope.getSnapshot().value.rate, 2, '迟到的旧 GET 把刚写好的值盖回旧值')
+  assert.deepEqual(seen, [2, 2], `订阅者序列里出现了旧值（不该有 1）：${JSON.stringify(seen)}`)
+  un()
+})
+
+// ── M-3（Issue #15 R4）：emit() 逐订阅者隔离异常 ──
+// 抛错的订阅者曾让 set() 的 writing-- 永远到不了（writing 永久 > 0 → 此后所有读结果
+// 被静默丢弃），也让 load() 的 catch 跳过 scheduleRetry()（退避重试归零）。
+// 变异态下 load() 的 promise 会变成未处理 rejection（void load()）——临时接管，
+// 免得测试进程被未处理 rejection 打死（那样拿不到干净的断言失败）。
+await ta('订阅者抛错不掐断退避重试（首次读失败 → 退避重试 → 恢复 ready）', async () => {
+  const unhandled = []
+  const onUnhandled = (e) => unhandled.push(e)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    let calls = 0
+    const fetchImpl = async () => {
+      calls++
+      if (calls === 1) throw new Error('boom')
+      return okJson({ rate: 7 })
+    }
+    const scope = H.createHttpScope('http://scope.test', fetchImpl)
+    const un = scope.subscribe(() => { throw new Error('subscriber boom') })
+    assert.ok(
+      await waitFor(() => scope.getSnapshot().status === 'ready'),
+      '订阅者抛错掐断了退避重试——emit 未隔离异常（load 的 catch 里 emit 抛错 → scheduleRetry 被跳过）',
+    )
+    assert.ok(calls >= 2, `未发生重试（calls=${calls}）`)
+    un()
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
+await ta('订阅者抛错不卡死 writing（写之后的读结果仍能回写）', async () => {
+  const unhandled = []
+  const onUnhandled = (e) => unhandled.push(e)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    let gets = 0
+    // 每次读返回递增的值：便于区分「读回写真的发生了」与「读结果被丢弃」
+    const fetchImpl = async (_url, init) => {
+      if (init?.method === 'POST') return okJson({ rate: 5 })
+      gets++
+      return okJson({ rate: gets })
+    }
+    const scope = H.createHttpScope('http://scope.test', fetchImpl)
+    const un = scope.subscribe(() => { throw new Error('subscriber boom') })
+    assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'))
+    assert.equal(scope.getSnapshot().value.rate, 1)
+    // 写：乐观 emit 抛错（应被隔离）→ set 不炸穿、writing 正常归零
+    await scope.set('rate', 5).catch(() => {})
+    // 写之后的一次读必须能回写（GET#2 → rate=2）——writing 卡死则读结果被丢弃
+    un()
+    const un2 = scope.subscribe(() => { throw new Error('subscriber boom') })
+    assert.ok(
+      await waitFor(() => scope.getSnapshot().value.rate === 2),
+      '写之后的读结果未回写——writing 计数卡死（订阅者抛错使 writing-- 的 finally 到不了）',
+    )
+    un2()
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
+// ── M-4（Issue #15 R4）：窗口 focus 监听必须可摘除 ──
+// createHttpScope 每次调用（插件每次 apply / 热重载）都新建一个 focus 监听器，
+// 不摘除则每次热重载泄漏一个常驻监听器（获焦时多一次 load() = 多一次 GET）。
+await ta('dispose() 摘除窗口 focus 监听（每次 apply 新建 scope，不摘除则每次泄漏一个）', async () => {
+  const listeners = new Map()
+  const prevWindow = globalThis.window
+  globalThis.window = {
+    addEventListener: (type, fn) => {
+      if (!listeners.has(type)) listeners.set(type, new Set())
+      listeners.get(type).add(fn)
+    },
+    removeEventListener: (type, fn) => { listeners.get(type)?.delete(fn) },
+  }
+  try {
+    let gets = 0
+    const fetchImpl = async () => { gets++; return okJson({ rate: gets }) }
+    const scope = H.createHttpScope('http://scope.test', fetchImpl)
+    const un = scope.subscribe(() => {})
+    assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'))
+    assert.equal(listeners.get('focus')?.size ?? 0, 1, '未注册窗口焦点重拉监听')
+    scope.dispose()
+    assert.equal(
+      listeners.get('focus')?.size ?? 0,
+      0,
+      'dispose() 未摘除 focus 监听——插件每次 apply/热重载都泄漏一个常驻监听器',
+    )
+    un()
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window
+    else globalThis.window = prevWindow
+  }
+})
+
+// ── M-5（Issue #15 R4）：两条既有锁抓不到它们声称锁的守卫 —— 补另一半窗口 ──
+await ta('卡片关闭（无订阅者）且「在途读随后失败」→ 不后台重试', async () => {
+  // 既有用例的场景是「失败先落定、再退订」——退订路径的 clearRetry() 已把定时器撤掉，
+  // 删掉 scheduleRetry 里的 `subs.size === 0 ||` 照样绿。守卫真正防的窗口是：
+  // 退订发生在**在途 GET 落定之前**，随后该 GET 失败 → scheduleRetry 被调用。
+  let release = null
+  let calls = 0
+  const fetchImpl = async () => {
+    calls++
+    return new Promise((_r, rej) => { release = () => rej(new Error('boom')) })
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const un = scope.subscribe(() => {})
+  assert.ok(await waitFor(() => release !== null), 'GET 未发出')
+  un() // 卡片关闭（在途 GET 尚未落定）
+  release() // 在途 GET 失败 → 走 catch → scheduleRetry()
+  await sleep(900) // > 首发退避 500ms
+  assert.equal(calls, 1, `卡片关闭后仍在后台重试（calls=${calls}）`)
+})
+
+await ta('写失败且回读也失败 → 快照不得留着从未落地的乐观值（回滚 emit 必须发生）', async () => {
+  // 既有用例的终值由失败后的 load() 重新 GET 给出 → 回滚 emit 本身零断言。
+  // 真正的差异在**订阅者序列**：写失败且回读也失败时，unavailable 快照带的应是
+  // 回滚后的旧值；没有回滚 emit 就是「从未落地的乐观值」。
+  let gets = 0
+  const fetchImpl = async (_url, init) => {
+    if (init?.method === 'POST') throw new Error('post boom')
+    gets++
+    if (gets === 1) return okJson({ rate: 1 })
+    throw new Error('get boom') // 回读失败
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const seen = []
+  const un = scope.subscribe(() => seen.push(`${scope.getSnapshot().status}:${scope.getSnapshot().value.rate}`))
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'))
+  await scope.set('rate', 9)
+  assert.deepEqual(
+    seen.slice(0, 4),
+    ['ready:1', 'ready:9', 'ready:1', 'unavailable:1'],
+    `订阅者序列不对——回滚 emit 缺失 → 从未落地的乐观值（9）留在快照里：${JSON.stringify(seen)}`,
+  )
+  un()
+})
+
+// ── R4 第四批：底层 inFlight 吞失效 ──
+// 旧实现 `if (inFlight) return` 把在途窗口内的重拉静默丢弃（且不排重试）：
+// 这次失效就此消失，卡片永远停在旧值（不自愈）。本用例**直接对 createHttpScope
+// 构造（不经桥）**——测的是底层 load() 的吞失效，不是桥侧行为（桥侧另有 pending 补拉）。
+await ta('在途读期间到来的重拉不被丢弃 → 落定后补拉一次，最终拿到最新值', async () => {
+  const handlers = {}
+  const prevWindow = globalThis.window
+  globalThis.window = { addEventListener: (type, fn) => { handlers[type] = fn } }
+  try {
+    let releaseGet1 = null
+    let gets = 0
+    const fetchImpl = async () => {
+      gets++
+      if (gets === 1) {
+        // 第一次读在途（慢）：落定的是旧值
+        return new Promise((r) => { releaseGet1 = () => r(okJson({ rate: 1 })) })
+      }
+      return okJson({ rate: 2 }) // 补拉拿到最新值
+    }
+    const scope = H.createHttpScope('http://scope.test', fetchImpl)
+    const un = scope.subscribe(() => {})
+    assert.ok(await waitFor(() => releaseGet1 !== null), '首次 GET 未发出')
+    // 在途窗口内再来一次 load（底层语义 = invalidate 触发的重拉）
+    handlers.focus()
+    assert.equal(gets, 1, '在途期间的第二次 GET 不应立即发出（由在途请求落定后补拉）')
+    // 在途请求落定（旧值）→ 应自动补拉一次，最终拿到最新值
+    releaseGet1()
+    assert.ok(
+      await waitFor(() => scope.getSnapshot().value.rate === 2),
+      '在途期间的重拉被吞掉——最终值停在旧值（不自愈）',
+    )
+    assert.ok(gets >= 2, `未发生补拉（gets=${gets}）`)
+    un()
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window
+    else globalThis.window = prevWindow
+  }
+})
+
+await ta('dispose() 之后不再拉取也不写（置死）', async () => {
+  let gets = 0
+  let posts = 0
+  const fetchImpl = async (_url, init) => {
+    if (init?.method === 'POST') posts++
+    else gets++
+    return okJson({ rate: 1 })
+  }
+  const scope = H.createHttpScope('http://scope.test', fetchImpl)
+  const un = scope.subscribe(() => {})
+  assert.ok(await waitFor(() => scope.getSnapshot().status === 'ready'))
+  scope.dispose()
+  const getsAfterDispose = gets
+  await scope.set('rate', 2).catch(() => {})
+  await sleep(50)
+  assert.equal(gets, getsAfterDispose, 'dispose 之后仍发起了 GET')
+  assert.equal(posts, 0, 'dispose 之后仍发起了 POST')
+  un()
+})
+
 await ta('窗口重新获得焦点 → 重拉一次（别的标签页改了设置，本页不再陈旧）', async () => {
   const handlers = {}
   const prevWindow = globalThis.window

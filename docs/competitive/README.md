@@ -7,7 +7,7 @@
 | 文件 | 说明 |
 | --- | --- |
 | [scan-2026-09.md](scan-2026-09.md) | 2026-09 主扫描汇总：声学层不是壁垒 / 拟人度是真难处 |
-| [backlog.md](backlog.md) | 43 项 P0-P3 backlog，go/plan/blocked/drop 四档决策 |
+| [backlog.md](backlog.md) | 现行 **31 条**（§二 未实施 Ready 单表 25 条 + §三 Frozen 6 条），go/plan/blocked/drop 四档决策；「43 项」是 2026-09-15 第六轮的历史口径（`scan-2026-09.md` 的 31+12），经 2026-09-17 批 7O 重组与后续逐轮核实后已不是现行规模 |
 | [round6-summary.md](round6-summary.md) | 第 6 轮调研收尾（拟人度 / 让位语义 / emotion DSL） |
 | [competitive-tts-landscape-2026-05.md](competitive-tts-landscape-2026-05.md) | TTS 竞品格局（Edge / Kokoro / VITS / Azure / Google / ElevenLabs） |
 

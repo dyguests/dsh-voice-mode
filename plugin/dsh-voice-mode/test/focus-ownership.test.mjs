@@ -86,13 +86,23 @@ t('重新上报会把该实例移回末位（切回可见时夺回焦点）', ()
 const clientSrc = readFileSync(new URL('../src/client.tsx', import.meta.url), 'utf8')
 
 t('接线：MicButton 上报/让出都带本实例的 token', () => {
-  assert.ok(
-    /bus\.setFocusedSession\(sessionId, focusOwner\)/.test(clientSrc),
-    '上报未带实例 token——焦点仍是标签页级全局量',
+  // 计数式：client.tsx 有两处「上报焦点」+ 一处「让出焦点」，都必须带 token。
+  // 只用「≥1 处匹配」的话，把其中一处改成不带 token（bus.setFocusedSession(sessionId)）
+  // 仍会因另一处匹配而通过——上报落到默认持有者 'default'，卸载走 focusRelease(owners,'mic-1')
+  // 对不上 token → changed=false → 焦点永不清空 → host 按 readAloud=always 持续给已卸载实例朗读。
+  assert.equal(
+    clientSrc.split('bus.setFocusedSession(sessionId, focusOwner)').length - 1,
+    2,
+    '两处「上报焦点」都必须带实例 token（少一处 → 焦点落到默认持有者，卸载时对不上 token → 焦点永不清空）',
+  )
+  assert.equal(
+    clientSrc.split('bus.setFocusedSession(null, focusOwner)').length - 1,
+    1,
+    '「让出焦点」必须带实例 token——卸载时清的是别人的焦点',
   )
   assert.ok(
-    /bus\.setFocusedSession\(null, focusOwner\)/.test(clientSrc),
-    '让出未带实例 token——卸载时清的是别人的焦点',
+    !/bus\.setFocusedSession\((sessionId|null)\)/.test(clientSrc),
+    '存在不带实例 token 的 setFocusedSession 调用——焦点会落到默认持有者',
   )
   assert.ok(
     /focusOwnerRef\.current === null/.test(clientSrc),
@@ -108,6 +118,19 @@ t('接线：bus 的让出路径先问归属（不再无条件清全局焦点）'
   assert.ok(/focusClaim\(focusOwners, owner, sessionId\)/.test(body), '上报路径未登记归属')
   assert.ok(/focusRelease\(focusOwners, owner\)/.test(body), '让出路径未走归属判定')
   assert.ok(!/focusedSessionId = null/.test(body), '让出路径仍在无条件清全局焦点')
+})
+
+t('接线：焦点回落到存活实例时必须同步给 host（否则 host 仍记着已卸载实例的会话）', () => {
+  // 删掉这行 postFocus(focused) → host 仍认为焦点在已卸载实例上 → readAloud=always
+  // 会持续给已卸载实例的会话朗读。本条以前零覆盖（删掉它全套件仍绿）。
+  const m = /setFocusedSession\([^)]*\)\s*\{([\s\S]*?)\n {4}\},/.exec(clientSrc)
+  assert.ok(m, '未找到 bus.setFocusedSession 的实现')
+  const branch = /if \(focused !== null\) \{([\s\S]*?)\n {8}\}/.exec(m[1])
+  assert.ok(branch, '未找到「焦点回落到仍存活的实例」的分支')
+  assert.ok(
+    /postFocus\(focused\)/.test(branch[1]),
+    '焦点回落后未同步给 host——host 仍记着已卸载实例的会话（readAloud=always 会持续给已卸载实例朗读）',
+  )
 })
 
 console.log(`\nfocus-ownership：${passed} 项通过`)

@@ -2491,8 +2491,17 @@ async function correctText(ctx, text, lang) {
     const corrected = out.trim();
     if (corrected.length > Math.max(trimmed.length * 3, trimmed.length + 24)) return text;
     if (CORRECTION_PREAMBLE_RE.test(corrected)) return text;
-    const noFiller = corrected.replace(CORRECTION_FILLER_PREFIX_RE, "").trimStart();
-    if (noFiller !== corrected && CORRECTION_PREAMBLE_RE.test(noFiller)) return text;
+    let noFiller = corrected;
+    for (; ; ) {
+      const next = noFiller.replace(CORRECTION_FILLER_PREFIX_RE, "").trimStart();
+      if (next === noFiller) break;
+      noFiller = next;
+    }
+    if (noFiller !== corrected) {
+      if (noFiller === "") return text;
+      if (CORRECTION_PREAMBLE_RE.test(noFiller)) return text;
+      return noFiller;
+    }
     return corrected || text;
   } catch {
     return text;
@@ -2898,7 +2907,9 @@ function apply(ctx, config) {
   let activeTabId = null;
   let activeVoiceLang = "zh";
   let ownerYieldTimer = null;
-  const readMuted = /* @__PURE__ */ new Set();
+  const readMuted = /* @__PURE__ */ new Map();
+  const turnOfSession = /* @__PURE__ */ new Map();
+  const tapInFlight = /* @__PURE__ */ new Set();
   const turnStates = /* @__PURE__ */ new Map();
   const setTurn = (sessionId, state) => {
     if (turnStates.get(sessionId) === state) return;
@@ -2906,11 +2917,19 @@ function apply(ctx, config) {
     broadcast("turn", { sessionId, state });
   };
   const turnGen = /* @__PURE__ */ new Map();
-  const clearTurnState = (sessionId) => {
-    setTurn(sessionId, "idle");
+  const dropTurnTables = (sessionId) => {
     turnStates.delete(sessionId);
     turnGen.delete(sessionId);
     readMuted.delete(sessionId);
+    turnOfSession.delete(sessionId);
+  };
+  const clearTurnState = (sessionId) => {
+    setTurn(sessionId, "idle");
+    dropTurnTables(sessionId);
+  };
+  const reclaimFocusState = (sessionId) => {
+    if (sessionId === null || sessionId === activeVoiceSession || tapInFlight.has(sessionId)) return;
+    dropTurnTables(sessionId);
   };
   const sessions = ctx.get("sessions");
   const limiter = new RateLimiter();
@@ -3155,13 +3174,24 @@ function apply(ctx, config) {
     if (activeVoiceSession !== sessionId && !alwaysRead) return next();
     const gen = (turnGen.get(sessionId) ?? 0) + 1;
     turnGen.set(sessionId, gen);
-    readMuted.delete(sessionId);
+    if (readMuted.has(sessionId)) {
+      const mutedAt = readMuted.get(sessionId) ?? null;
+      const curTurn = turnOfSession.get(sessionId);
+      if (mutedAt === null || curTurn === void 0 || curTurn !== mutedAt) readMuted.delete(sessionId);
+    }
+    tapInFlight.add(sessionId);
     return tapActiveStream(
       sessionId,
       next(),
       queue,
       broadcast,
       (state) => {
+        if (state === "listening") {
+          tapInFlight.delete(sessionId);
+          if (focusedSessionId !== sessionId && activeVoiceSession !== sessionId) {
+            reclaimFocusState(sessionId);
+          }
+        }
         if ((turnGen.get(sessionId) ?? 0) !== gen) return;
         setTurn(sessionId, state);
       },
@@ -3170,6 +3200,12 @@ function apply(ctx, config) {
     );
   });
   ctx.on("agent/turn-stopping", ({ agent }) => queue.noteTurnEnd(agent.id));
+  ctx.on("agent/error", ({ agent }) => queue.noteTurnEnd(agent.id));
+  ctx.on("agent/pre-step", ({ agent, turn }, next) => {
+    const sid = agent.id;
+    if (sid === activeVoiceSession || sid === focusedSessionId) turnOfSession.set(sid, turn);
+    return next();
+  });
   const base = BASE_PATH;
   ctx.effect(
     () => ctx.webServer.register({
@@ -3594,7 +3630,7 @@ function apply(ctx, config) {
               return;
             }
             queue.cancel(sessionId);
-            readMuted.add(sessionId);
+            readMuted.set(sessionId, turnOfSession.get(sessionId) ?? null);
             if (!keepAsr && sessionId === activeVoiceSession) asr.reset(sessionId);
           }
           respondJson2(res, 200, { ok: true });
@@ -3698,6 +3734,7 @@ function apply(ctx, config) {
           } catch {
           }
           const { sessionId, tabId } = parsed;
+          const prevFocus = focusedSessionId;
           const validTab = typeof tabId === "string" && tabId.length > 0 && tabId.length <= 64;
           const validSid = typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 128;
           if (!validTab || !(validSid || sessionId === null)) {
@@ -3705,12 +3742,17 @@ function apply(ctx, config) {
             return;
           }
           if (validSid) {
+            if (sessions && !sessions.get(sessionId)) {
+              respondJson2(res, 403, { code: "unknown_session", error: "unknown session" });
+              return;
+            }
             focusedSessionId = sessionId;
             focusedTabId = tabId;
           } else if (tabId === focusedTabId) {
             focusedSessionId = null;
             focusedTabId = null;
           }
+          if (prevFocus !== null && prevFocus !== focusedSessionId) reclaimFocusState(prevFocus);
           broadcast("focus", { sessionId: focusedSessionId, tabId: focusedTabId });
           respondJson2(res, 200, { ok: true, sessionId: focusedSessionId, tabId: focusedTabId });
         });
@@ -3790,8 +3832,10 @@ data: ${JSON.stringify(payload)}
           if (tabId !== null && latestConnByTab.get(tabId) === client) {
             latestConnByTab.delete(tabId);
             if (tabId === focusedTabId) {
+              const prevFocus = focusedSessionId;
               focusedSessionId = null;
               focusedTabId = null;
+              reclaimFocusState(prevFocus);
               broadcast("focus", { sessionId: null, tabId: null });
             }
             if (tabId === activeTabId) {

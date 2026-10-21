@@ -118,10 +118,23 @@ export async function correctText(
     //   M-3（Issue #15 R2）：前言护栏不得被前导寒暄绕过——弱模型在说明头前加一句
     //     「好的，」「当然，」「Sure,」即越过上面的 ^ 锚，模型元叙述原样进入用户消息
     //     （autoSend 默认开会直接发出去；长度护栏也兜不住——「好的，以下是修正后的
-    //     文本：今天天气不错。」仅 20 字 < 阈值 30）。剥掉寒暄前缀后再判一次说明头，
-    //     命中即回退原文（护栏命中一律回退，不返回剥后的串）。
-    const noFiller = corrected.replace(CORRECTION_FILLER_PREFIX_RE, '').trimStart()
-    if (noFiller !== corrected && CORRECTION_PREAMBLE_RE.test(noFiller)) return text
+    //     文本：今天天气不错。」仅 20 字 < 阈值 30）。剥掉寒暄前缀后再判说明头。
+    //   M-2（Issue #15 R4）：剥空也是信号——弱模型只回了客套没给正文（「好的，」/「Sure,」）
+    //     时，剥完为空串；此前该信号没被消费，模型输出直接顶替了用户消息。空 → 回退原文。
+    //     剥后仍有说明头 → 回退原文（元叙述不得进用户消息）。
+    //     剥后是正文 → 用剥后的正文（寒暄本身也不该进用户消息）。
+    //     循环剥离：客套可能叠着（「好的，当然，这是修正结果：…」）。
+    let noFiller = corrected
+    for (;;) {
+      const next = noFiller.replace(CORRECTION_FILLER_PREFIX_RE, '').trimStart()
+      if (next === noFiller) break
+      noFiller = next
+    }
+    if (noFiller !== corrected) {
+      if (noFiller === '') return text
+      if (CORRECTION_PREAMBLE_RE.test(noFiller)) return text
+      return noFiller
+    }
     return corrected || text
   } catch {
     return text

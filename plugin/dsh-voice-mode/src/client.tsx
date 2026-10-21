@@ -19,11 +19,16 @@ import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-su
 import { composeDraft, shouldWritePartial } from './draft-compose.ts'
 import {
   createScopeBridge,
+  decayConfirmCount,
+  eqPaintMode,
   focusClaim,
   focusRelease,
+  handleReplaced,
   isEditingShortcut,
   isPrimaryPress,
+  menuFocusIndex,
   onceFinished,
+  registerScopeDispose,
   takeToggleSlot,
   FOCUS_OWNER_DEFAULT,
   type FocusOwners,
@@ -525,9 +530,15 @@ export function apply(ctx: any): void {
     // 0.1.7+：插件自己的 /voice-mode/settings。底层只有「0→1 订阅 → 必重拉」这一条
     // 重拉入口，用桥把卡片订阅收在一份底层订阅后面：host 广播 display（别的标签页
     // 改了显示类设置）时退订再订阅，逼出一次重拉——本页设置卡不再一直显示旧值。
-    const bridge = createScopeBridge(createHttpScope())
+    // 具名引用：底层 scope 自建的窗口 focus 监听要随插件卸载/热重载摘除（M-4）。
+    const raw = createHttpScope()
+    const bridge = createScopeBridge(raw)
     scope = bridge.scope
     settingsScopeInvalidate = bridge.invalidate
+    // M-4：createHttpScope 每次 apply（插件每次热重载/卸载重建）都新建一个，
+    // 不摘除则每次热重载泄漏一个常驻 window 'focus' 监听（获焦时多一次 load() = 多一次 GET）。
+    // ctx.effect 的返回值即清理函数，宿主在卸载/热重载时调用。
+    registerScopeDispose(ctx, raw)
   }
   ctx.slots.inject('settings.plugin.item', () =>
     ctx.slots.register(
@@ -1118,13 +1129,18 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     source.addEventListener('replaced', () => {
       source?.close()
       source = null
-      if ((globalThis as any)[BUS_GEN_KEY] !== busGen) {
-        ui.sseDown = true
-        notify()
-        return
-      }
-      TAB_ID = getTabId(true)
-      connect()
+      handleReplaced({
+        staleBus: (globalThis as any)[BUS_GEN_KEY] !== busGen,
+        renewTabId: () => {
+          TAB_ID = getTabId(true)
+          return TAB_ID
+        },
+        reconnect: () => connect(),
+        retire: () => {
+          ui.sseDown = true
+          notify()
+        },
+      })
     })
     // 显示类设置（朗读范围/状态条/字幕）：host 在连上时和每次设置变化时下发——任一标签页、任一设置路径改了都即时同步。
     source.addEventListener('display', (e: MessageEvent<string>) => {
@@ -1803,7 +1819,9 @@ function MicMenu({ scope, anchor, onClose }: { scope: MenuScope; anchor: HTMLEle
       e.preventDefault()
       const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])
       const i = items.indexOf(document.activeElement as HTMLButtonElement)
-      items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus()
+      // 环绕：焦点被外部抢走时（i = -1）ArrowUp 要落到末项，不是倒数第二项。
+      const next = menuFocusIndex(i, items.length, e.key === 'ArrowDown' ? 1 : -1)
+      if (next >= 0) items[next]?.focus()
     }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
@@ -2575,7 +2593,17 @@ export function MicButton({
               isSpeechFalseRun++
               if (isSpeechFalseRun >= 2) {
                 isSpeechFalseRun = 0
-                isSpeechTrueCount = Math.max(0, isSpeechTrueCount - 1)
+                // Issue #15 R15-5：确认计数归零 = 本次检测的证据耗尽（从未达打断门槛）
+                // → 客户端放弃该检测 → 引擎作废抢救种子。否则这次「孤立判真」锁定的种子
+                // 会成为下次真打断的锚点（陈旧 → 被 Math.max 钳到环起点 → 整环 2s AI 音频
+                // 并入用户消息）。两类情形：
+                //   ① 孤立判真＝回声突发 —— 收益大，陈旧种子消除（本 issue 的触发条件）；
+                //   ② 真实语音中的 VAD 抖动 —— 代价是抖动前 ≤1 个检测窗的用户音不再被抢救
+                //      并入（ADR-0012 锚窗头「永不切」在该情形下被削弱，锚点策略本身未变）。
+                // 主会话裁定：用「② 少并入 ≤1 检测窗的用户音」换「① 整环 AI 音频灌进用户消息」。
+                isSpeechTrueCount = decayConfirmCount(isSpeechTrueCount, () =>
+                  engineRef.current?.invalidateSalvageSeed(),
+                )
                 if (isSpeechTrueCount === 0) interruptFirstAt = 0
               }
             }
@@ -3277,7 +3305,8 @@ export function MicButton({
     // Issue #15 R2 Blocker：非主键（右/中键）不启动任何手势。右键语义由 onContextMenu
     // 独占开快捷设置，若这里照 arm，用户按住等菜单弹出（≥250ms 必然成立）就会触发长按
     // 打断，取消正在生成的回复。触屏/笔的 button 恒为 0，按住说话不受影响。
-    if (!isPrimaryPress(e.button)) return
+    // macOS 另拦 ctrl+click（Secondary click 关闭时右键 = ctrl+click，button 仍是 0）。
+    if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return
     lockSelection()
     holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId }
     ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
@@ -3327,8 +3356,8 @@ export function MicButton({
   const onPointerUp = (e: React.PointerEvent): void => {
     // 与 onPointerDown 对称：非主键的抬起不是手势结束。鼠标所有按键共用同一个 pointerId，
     // 左键按住中再按下并松开右键时，若不拦会把右键抬起误读成松手（清掉打断计时器 +
-    // endHeld 提前定稿一段话）。
-    if (!isPrimaryPress(e.button)) return
+    // endHeld 提前定稿一段话）。macOS 的 ctrl+click 同样拦（见 onPointerDown）。
+    if (!isPrimaryPress(e.button, { mac: IS_MAC, ctrlKey: e.ctrlKey })) return
     const p = holdPtrRef.current
     holdPtrRef.current = null
     clearBreakTimer() // 松手即取消未到阈值的打断（短按不得取消回复）
@@ -3418,10 +3447,9 @@ export function MicButton({
     const bars = Array.from(el.querySelectorAll<HTMLElement>('.dshvm-eq i'))
     const base = eqKind === 'out' ? [6, 10, 14, 10, 6] : [6, 12, 8]
     const paint = (lv: number): void => bars.forEach((b, i) => (b.style.height = `${Math.max(3, base[i] * (0.35 + 0.65 * lv)).toFixed(1)}px`))
-    if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      paint(1)
-      return
-    }
+    // 「减少动态效果」是系统级可访问性偏好，用户可能随时开关。原先只在 effect 建立时读一次，
+    // 之后开关不生效 → 竖条不重绘。现在监听 change，变化时重算绘制方式。
+    const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null
     let smooth = 0
     let raf = 0
     const tick = (): void => {
@@ -3430,8 +3458,36 @@ export function MicButton({
       paint(smooth)
       raf = requestAnimationFrame(tick)
     }
-    tick()
-    return () => cancelAnimationFrame(raf)
+    // 开了偏好 → 画满高且不跑 rAF（与原实现同）；没开 → 跑平滑动画。
+    const apply = (): void => {
+      if (eqPaintMode(mq?.matches === true) === 'static-full') {
+        if (raf) {
+          cancelAnimationFrame(raf)
+          raf = 0
+        }
+        paint(1)
+        return
+      }
+      if (!raf) {
+        smooth = 0
+        tick()
+      }
+    }
+    apply()
+    // 旧内核的 matchMedia 只有 addListener（Safari <14）、没有 addEventListener：
+    // 特性检测后择一，两种都在 cleanup 里对称解绑（否则反复挂载会泄漏监听器）。
+    let detach: (() => void) | null = null
+    if (mq && typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', apply)
+      detach = () => mq.removeEventListener('change', apply)
+    } else if (mq && typeof mq.addListener === 'function') {
+      mq.addListener(apply)
+      detach = () => mq.removeListener(apply)
+    }
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      detach?.()
+    }
   }, [eqKind, bus])
 
   // 状态条关掉时，录音计时挪到按钮下方（不占热区）。

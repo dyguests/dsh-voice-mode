@@ -6,13 +6,13 @@
 - 前置：[ADR-0001](0001-native-aec-primary.md)
 
 > **命名纠正（2026-09-16）**：原文件名 `0003-client-side-vad.md` 暗示 VAD 已下沉到客户端，与实际不符。
-> 真实运行态：Silero VAD 位于 host 侧（`src/asr-host.ts:752-765` detect 异步函数内 `acceptWaveform`（:758）→ `isDetected`（:759）→ `isSpeech`（:763）；2026-10-20 10:30 实测刷新），
-> 客户端只做计数（`src/client.tsx:38` `INT_CONFIRM_FRAMES`，:37 是其文档注释；原值 37 已漂移 Δ1，2026-10-21 按符号定位刷新）。本 ADR 的「下沉」是**未实施的提议**，
+> 真实运行态：Silero VAD 位于 host 侧（`src/asr-host.ts:587-591` detect 区块内 `vad.acceptWaveform(inc)`（:588）→ `isSpeech = vad.isDetected()`（:591）；**原锚点 `:752-765`/`:758`/`:759`/`:763` 为 2026-10-21 前快照**——`f8a3268` 的锚点刷新写入了修复前源码，随 R15 各批重写已漂移，本轮按冻结后的工作区源码刷新），
+> 客户端只做计数（`src/client.tsx:53` `INT_CONFIRM_FRAMES`，:52 是其文档注释；原值 37/38 为 2026-10-21 前快照，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）。本 ADR 的「下沉」是**未实施的提议**，
 > 故重命名为 `0003-server-side-vad.md`，标题同步纠正；正文「决策（提议）」段保留原提议内容（搬迁方向与代价分析）。
 >
 > **批 7N 落地（2026-09-16）**：
 > - **批 7M 🔴 砍 `recognitionLanguage` 已落地**（commit `4532b48`）—— schema 退回 `auto` 单值，根因：锁 en 后英文段仍识别为中文（zipformer-zh-int8 模型词表以中文为主）。
-> - **批 7N 🟡 重做 1/5 `bargeInMode='manual'` 接通已落地**（commit `8278097`）—— ADR-0006 第一级探测（asr.ts:1128 已读 `track.getSettings().echoCancellation`）接通 `bargeInMode='manual'` 闸门：asr-host.ts AsrRuntimeOptions 加 `bargeInMode` getter + feed() 加 `manualPressed` 守卫（manual + !pressed early return `{text: ''}`）+ handleAsrRequest 透传 `?manual=1`；asr.ts AsrConfig 加 `bargeInMode?` + handleAudio 入口守卫 + asrUrl `&manual=1`；client.tsx createAsrEngine 透传。新增 `test/barge-in-manual.test.mjs` 8 项 esbuild bundle 真源码测试。**I10 默认行为守恒**（默认 auto = 原行为零变化）。
+> - **批 7N 🟡 重做 1/5 `bargeInMode='manual'` 接通已落地**（commit `8278097`）—— ADR-0006 第一级探测（asr.ts:1159 已读 `track.getSettings().echoCancellation`；**原 1128 为 2026-10-21 前快照**，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）接通 `bargeInMode='manual'` 闸门：asr-host.ts AsrRuntimeOptions 加 `bargeInMode` getter + feed() 加 `manualPressed` 守卫（manual + !pressed early return `{text: ''}`）+ handleAsrRequest 透传 `?manual=1`；asr.ts AsrConfig 加 `bargeInMode?` + handleAudio 入口守卫 + asrUrl `&manual=1`；client.tsx createAsrEngine 透传。新增 `test/barge-in-manual.test.mjs` 8 项 esbuild bundle 真源码测试。**I10 默认行为守恒**（默认 auto = 原行为零变化）。
 
 ## 背景
 
@@ -25,7 +25,7 @@
   → 客户端连续 confirmFrames 次为真 → 回声门控 → hardBreak
 ```
 
-判定信号在 host 产生（`src/asr-host.ts:752-765`，detect 异步函数内 acceptWaveform（:758）→ isDetected（:759）→ isSpeech（:763）；2026-10-20 10:30 实测刷新），客户端只做计数（`src/client.tsx:38` `INT_CONFIRM_FRAMES[interruptLevel]`，:37 是其文档注释；原值 37 已漂移 Δ1）。
+判定信号在 host 产生（`src/asr-host.ts:587-591`，detect 区块内 `vad.acceptWaveform(inc)`（:588）→ `isSpeech = vad.isDetected()`（:591）；**原锚点 `:752-765`/`:758`/`:759`/`:763` 为 2026-10-21 前快照，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新**），客户端只做计数（`src/client.tsx:53` `INT_CONFIRM_FRAMES[interruptLevel]`，:52 是其文档注释；原值 37/38 已漂移）。
 
 实测确认延迟 ≈525ms（CONTEXT.md 记录）。拆解：
 
@@ -33,16 +33,16 @@
 |---|---|---|
 | 轮询量化 | 平均 64ms（最坏 128ms） | 见下方「栅格更正」 |
 | 上行 + host 推理 + 下行 | 数十 ms | 回环 HTTP + JSON + Silero 推理 |
-| 确认帧 | **384 / 256 / 128ms** | `INT_CONFIRM_FRAMES = {0:3, 1:2, 2:1}`（`src/client.tsx:38`）× 128ms 栅格 |
+| 确认帧 | **384 / 256 / 128ms** | `INT_CONFIRM_FRAMES = {0:3, 1:2, 2:1}`（`src/client.tsx:53`）× 128ms 栅格 |
 | Silero 自身窗口 | ~32ms/帧 | 模型固有 |
 
 > **栅格更正（2026-09-02）**：本表初版把确认窗写成 300/200/100ms，**错了**。
 > AudioWorklet 每 1024 样本 = 64ms 投一帧（`src/audio-worklet.ts:27-28` `CHUNK = 1024` 定义——原 :31-32 是 NEED 推导行，2026-10-20 实测刷新；真 worklet 接线在 `src/asr.ts:1170-1177`，`new AudioWorkletNode` 在 :1177；worklet 文件实长 73 行），而 `MAX_SEGMENT_MS` 滚窗重置在 `src/asr.ts:945`（待机路径 :972、hold 路径 :1016；**与栅格无关**——原「:700 一带」已漂移，2026-10-20 实测刷新）；真正的派发条件是 `nowMs - lastPollAt >= 100` 且仅在派发时推进 `lastPollAt`——64ms 的帧永远要攒两帧才够 100ms，**稳态派发间隔是 128ms**。
-> 三档确认窗实际为 384 / 256 / 128ms。`src/client.tsx:2344` 的 `isSpeechTrueCount = 0`（进入 `enterMode`（:2339）时的残留计数复位，:2342 为其健壮性注释）与 `setLocalMode('pending')`（:2347）——2026-10-21 按符号定位刷新：原值 `:1896-1898` 落在 `useRef` 声明处、`:1893` 是 M2 重渲染注释、`:1901` 是 model 进度注释，**均已漂移**（Δ345 上下；另有 `isSpeechTrueCount = 0` 另 4 处：:2040 抢占/让出、:2315 退出、:2462/:2495/:2513 打断路径）。更早的原 1382-1386 区现为 VoiceBootConfig 字段）。
+> 三档确认窗实际为 384 / 256 / 128ms。`src/client.tsx:2413` 的 `isSpeechTrueCount = 0`（进入 `enterMode`（:2408）时的残留计数复位，:2411-2412 为其健壮性注释）与 `setLocalMode('pending')`（:2416）——**2026-10-21 按符号定位再次刷新**：原值 `:2344`/`:2339`/`:2342`/`:2347` 是 2026-10-21 前的快照（`f8a3268` 写入了修复前源码，随 R15 各批重写已漂移），更早的原 `:1896-1898` 落在 `useRef` 声明处、`:1893` 是 M2 重渲染注释、`:1901` 是 model 进度注释，**同样已漂移**。另 `isSpeechTrueCount = 0` 另 4 处：:2109 抢占/让出、:2384 退出、:2413 本身等（以 grep 现值为准）。
 > 复核：`node scripts/bench-echo-gate.mjs` §4。
 > 这也解释了实测的 525ms（384 + Silero 窗口 + 往返），并意味着**下沉能省掉的比原估计更多**。
 
-同时，播放期 detect 通道以 f32 PCM 持续上行（16000 × 4 B/s ≈ 64 KB/s），并需要 `detectGeneration` 代际计数器来作废迟到响应（`src/asr.ts:267` 声明，对应 :551/:554 两处迟到响应作废判断——原 4 处已随重构合并；2026-10-20 实测刷新）。
+同时，播放期 detect 通道以 f32 PCM 持续上行（16000 × 4 B/s ≈ 64 KB/s），并需要 `detectGeneration` 代际计数器来作废迟到响应（`src/asr.ts:274` 声明，对应 `:580`/`:583` 两处迟到响应作废判断——原 4 处已随重构合并；**原 `:267`/`:551`/`:554` 为 2026-10-21 前快照**，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）。
 
 ## 真机数据（2026-09-02 补充，本 ADR 的分量因此上调）
 
@@ -86,7 +86,7 @@ host 侧 VAD 保留两个用途，不再承担打断：
 - 确认延迟从 ~525ms 降到 ~150–250ms（去掉轮询量化 + 往返；确认帧改为按 32ms VAD 帧计，可用更多帧换更低延迟）
 - detect 通道上行归零（省 64 KB/s，且长朗读下不再有积压/丢弃逻辑）
 - 打断与网络解耦：网络抖动不再导致打断失效
-- 可删除 `detectGeneration`（`src/asr.ts:267`）与 detect 通道的积压上界逻辑（`src/asr.ts:524-529` MAX_DETECT_PENDING；2026-10-20 实测刷新）
+- 可删除 `detectGeneration`（`src/asr.ts:274`）与 detect 通道的积压上界逻辑（`src/asr.ts:553-555` MAX_DETECT_PENDING；**原锚点 `:267`/`:524-529` 为 2026-10-21 前快照，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新**）
 - 判定与音频帧严格对齐，消除 100ms 量化误差
 
 **负面 / 成本**

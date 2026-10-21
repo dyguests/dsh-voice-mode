@@ -124,6 +124,46 @@ await t('M-3：带寒暄前缀的说明头（英文侧）→ 回退原文（元�
   }
 })
 
+await t('M-2：模型只回寒暄没给正文（剥成空串）→ 回退原文（zh + en）', async () => {
+  // 弱模型只回了客套（「好的，」「Sure,」）没给正文——剥完是空串。
+  // 空串是信号：此前没被消费，模型输出直接顶替了用户消息（autoSend 默认开会直接发出去）。
+  const zhSrc = '今天天气不错'
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '好的，' }]), zhSrc, 'zh'),
+    zhSrc,
+    '剥成空串未回退原文（zh）——模型输出直接顶替了用户消息',
+  )
+  const enSrc = 'hello world'
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: 'Sure,' }]), enSrc, 'en'),
+    enSrc,
+    '剥成空串未回退原文（en）——模型输出直接顶替了用户消息',
+  )
+})
+
+await t('M-2：zh 侧寒暄词（好的/当然/好吧/行吧/是的）→ 寒暄不进用户消息', async () => {
+  // 此前 zh 侧寒暄词一条测试都没有（只测了英文两个样例）——护栏在这半边是零覆盖。
+  const src = '今天天气不错'
+  for (const filler of ['好的，', '当然，', '好吧，', '行吧，', '是的，']) {
+    const out = filler + '今天天气不错。'
+    assert.ok(out.length < Math.max(src.length * 3, src.length + 24), '前置条件：样例长度应低于长度护栏阈值')
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), src, 'zh'),
+      '今天天气不错。',
+      `寒暄「${filler}」未从输出里剥掉（寒暄不得进用户消息）`,
+    )
+  }
+})
+
+await t('M-2：叠着寒暄（好的，当然，这是修正结果：…）→ 回退原文（循环剥离 + 说明头命中）', async () => {
+  const src = '今天天气不错'
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: '好的，当然，这是修正结果：今天天气不错。' }]), src, 'zh'),
+    src,
+    '叠着寒暄的说明头未回退原文（元叙述不得进用户消息）',
+  )
+})
+
 await t('correctionSystem：双语提示含关键约束', () => {
   const zh = correctionSystem('zh')
   const en = correctionSystem('en')

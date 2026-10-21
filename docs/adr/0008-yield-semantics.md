@@ -19,7 +19,7 @@ dsh-voice-mode 当前的"让位"仅有两个层：
 | 层 | 实现 | 文件:行 |
 |---|---|---|
 | 物理层（声学） | 录音 → VAD → 端点检测 → 硬打断 | `src/asr.ts:936-945`（段累积 + MAX_SEGMENT_MS 滚窗兜底）+ `src/client.tsx:2392`（hardBreak 函数定义；原值 1946 已漂移 Δ946） |
-| 物理层（回声门） | echoPeak/echoFloor + echoGateDb 双讲冻结 | `src/asr.ts:817-888`（echoPeak/Floor 跨区）+ ADR-0006 真机结论：原生 AEC 生效时**从未被执行**，因为 VAD 已先拦截 |
+| 物理层（回声门） | echoPeak/echoFloor + echoGateDb 双讲冻结 | `src/asr.ts:848-913`（echoPeak/Floor 跨区）+ ADR-0006 真机结论：原生 AEC 生效时**从未被执行**，因为 VAD 已先拦截 |
 
 **完全缺失的层**：**人格层 / 社会-语用层让位**——LLM 没有"何时该停、停多久、是否该接住用户的'嗯'/'对'/'so'"的指令。
 
@@ -117,13 +117,13 @@ YIELDING (let the user interrupt)
 
 - `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts:103-110` `VOICE_SPOKEN_PROMPT` 迁入；基础 4 句口语化 + ADR-0008 #2 让位段，Phase 1 已落地，见 :199）
 - `src/index.ts:966`（system-prompt/assemble 注入点，可扩展；注入主体 :966-972，原值 896 已漂移 Δ70）
-- `src/asr.ts:817-888`（echoFloor/echoPeak 跨区 + ADR-0006 真机结论）
+- `src/asr.ts:848-913`（echoFloor/echoPeak 跨区 + ADR-0006 真机结论）
 - `src/asr.ts:184-185`（wakeEnabled 唤醒词门：唤醒词非空且非 hold 模式，逻辑可参考）
 - `src/asr-host.ts:607`（finalize 同步路径 `finalizeP`，"不丢句"不变量；原 442-466 区现为 senseTranscribe、原 584 锚点已漂移；2026-10-20 10:30 实测刷新）
 - `src/tts-queue.ts:452`（cancel() 硬打断；epoch 守卫；不丢句；原值 379 已漂移 Δ73——该行现为 `this.engine.status?.()`；原 268-307 区现为 updateVoice、原 325 锚点已漂移；2026-10-21 按符号定位刷新）
 - `src/tts-queue.ts`（`q.epoch` 逐队列代际字段——epoch 通道本体：类型声明 `QueuedSentence.epoch` :204 / `SessionQueue.epoch` :212（接口 :207），自增 :366（prune 路径）/ :455（cancel）/ :471（re-enter 新队列），入队快照 :444，泵内守卫 :490（break）/ :511（continue）。**勘误（2026-10-20）**：原「`_SSMLTemplate` epoch 通道」全 src 0 命中，系幻影符号。**刷新口径声明（2026-10-21）**：原 `:296`（setEngine）/`:382`（cancel）两处自增锚点系幻影符号——HEAD 中 `cancel` 的 `q.epoch++` 在 :455、`:296` 与 `:382` 均无自增语句；原 `:371` 入队快照实为 :444、原 `:416`/`:437` 泵内守卫实为 :490/:511。**fix-host R14 引擎级 closed 标志改动的终验至今未做**（原 :124 文末「需终验」为遗留待办），故本段锚点为 2026-10-21 符号定位结果，不构成 R14 终验结论）
 - `src/client.tsx:2392`（hardBreak 函数定义；原值 1946 已漂移 Δ946，注释上下文 :2387-2391）
-- `src/client.tsx:2553`（`onAecState` 回调已用，证明回调注入机制成熟；原值 2106 已漂移 Δ447；原 1539 区现为 fetchConfig）
+- `src/client.tsx:2632`（`onAecState` 回调已用，证明回调注入机制成熟；原值 2106 已漂移 Δ447、原 1539 区现为 fetchConfig；**原 2553 为 2026-10-21 前快照**，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）
 - `CONTEXT.md:26`（"打断计数仅在播放期累积"不变量）
 - `CONTEXT.md:27`（"不丢句"不变量）
 - `CONTEXT.md:39-40`（"echoGateDb 原生 AEC 生效时从未被执行"真机事实；lead 提示 38-39，实测该 bullet 在 39-40，38 为播放门行）

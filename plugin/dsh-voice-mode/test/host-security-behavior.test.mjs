@@ -194,7 +194,9 @@ const fakeCtx = {
   },
   get(name) {
     if (name === 'sessions') {
-      return { get: (id) => (id === 'live-1' ? { id } : undefined) }
+      // 假会话表：'live-' 前缀视为存在（⑨ 段 /focus 会话层校验要用）；
+      // 其它（'ghost-*'）不存在——⑤/⑥ 的「未知会话 403」用例依赖这一点。
+      return { get: (id) => (typeof id === 'string' && id.startsWith('live-') ? { id } : undefined) }
     }
     return undefined
   },
@@ -467,27 +469,27 @@ await t('SSE 上线即下发 mode + focus + display（新标签页立刻知道�
 })
 
 await t('/focus 入参：缺 tabId / sessionId 非字符串非 null → 400', async () => {
-  assert.equal((await postFocus({ sessionId: 's1' })).statusCode, 400)
+  assert.equal((await postFocus({ sessionId: 'live-f1' })).statusCode, 400)
   assert.equal((await postFocus({ sessionId: 42, tabId: 'A' })).statusCode, 400)
   assert.equal((await postFocus({ sessionId: 'x'.repeat(129), tabId: 'A' })).statusCode, 400)
 })
 
 await t('/focus 跨站 Origin → 403', async () => {
-  const r = await postFocus({ sessionId: 's1', tabId: 'A' }, { origin: 'http://evil.example' })
+  const r = await postFocus({ sessionId: 'live-f1', tabId: 'A' }, { origin: 'http://evil.example' })
   assert.equal(r.statusCode, 403)
 })
 
 await t('/focus：上报即成为焦点并广播', async () => {
   const before = watcher.events().length
-  const r = await postFocus({ sessionId: 's1', tabId: 'A' })
+  const r = await postFocus({ sessionId: 'live-f1', tabId: 'A' })
   assert.equal(r.statusCode, 200)
-  assert.deepEqual(focusOf(r), { ok: true, sessionId: 's1', tabId: 'A' })
+  assert.deepEqual(focusOf(r), { ok: true, sessionId: 'live-f1', tabId: 'A' })
   assert.ok(watcher.events().slice(before).includes('focus'), '焦点变化未广播')
 })
 
 await t('/focus：别的标签页离开会话（null）不清掉当前焦点', async () => {
   const r = await postFocus({ sessionId: null, tabId: 'B' })
-  assert.deepEqual(focusOf(r), { ok: true, sessionId: 's1', tabId: 'A' })
+  assert.deepEqual(focusOf(r), { ok: true, sessionId: 'live-f1', tabId: 'A' })
 })
 
 await t('/focus：焦点标签页自己离开 → 清空', async () => {
@@ -497,7 +499,7 @@ await t('/focus：焦点标签页自己离开 → 清空', async () => {
 
 await t('焦点标签页的 SSE 断开 → 清焦点并广播（不再给关掉的页面合成朗读）', async () => {
   const f = openStream('tab-F')
-  await postFocus({ sessionId: 's9', tabId: 'tab-F' })
+  await postFocus({ sessionId: 'live-f9', tabId: 'tab-F' })
   const before = watcher.events().length
   f._closeCbs.forEach((cb) => cb())
   const r = await postFocus({ sessionId: null, tabId: 'tab-other' })
@@ -576,6 +578,18 @@ const drive = async (sessionId, ...chunks) => {
   }
 }
 const turnStopping = (sid) => hooks.get('agent/turn-stopping')({ agent: { id: sid } })
+/** agent/error：回合在 error 处终止（宿主不派发 turn-stopping 的那半边）。 */
+const agentError = (sid) => {
+  const h = hooks.get('agent/error')
+  assert.equal(typeof h, 'function', '未注册 agent/error 钩子——回合以 error 收场时没有 tts-idle 兜底')
+  h({ agent: { id: sid }, turn: 1, step: 1, error: new Error('x') })
+}
+/** agent/pre-step（waterfall，必须透传 next）：回合号真源，每个 step 派发一次。 */
+const preStep = (sid, turn, step = 1) => {
+  const h = hooks.get('agent/pre-step')
+  assert.equal(typeof h, 'function', '未注册 agent/pre-step 钩子——回合号无真源，静音只能按流解禁')
+  return h({ agent: { id: sid }, turn, step }, () => Promise.resolve({ kind: 'proceed' }))
+}
 const postCancel = (sid, keepAsr = true) =>
   awaitRes(get('/voice-mode/cancel', makeReq({ url: '/voice-mode/cancel', body: JSON.stringify({ sessionId: sid, keepAsr }) })))
 const enterVoice = (sid) => awaitRes(get('/voice-mode/toggle', makeReq({ url: '/voice-mode/toggle', body: JSON.stringify({ sessionId: sid, on: true }) })))
@@ -583,7 +597,7 @@ const leaveVoice = (sid) => awaitRes(get('/voice-mode/toggle', makeReq({ url: '/
 const setReadAloud = (v) => settingsWatcher({ ...settingsValue, readAloud: v })
 
 const VOICE_SID = 'live-1' // fakeCtx.get('sessions') 只认这一个（/toggle 第 0 层校验）
-const FOCUS_SID = 'focus-2' // 焦点会话：readAloud=always 的朗读对象（本身不在语音模式）
+const FOCUS_SID = 'live-focus-2' // 焦点会话：readAloud=always 的朗读对象（本身不在语音模式）
 
 await t('语音模式会话的 llm/stream 被 tap（合成帧下行）', async () => {
   reset()
@@ -650,14 +664,15 @@ await t("I-2' 「停止朗读」后本回合余句不再入队（不合成、不
   assert.equal(spoken().length, before, `停止朗读后仍下发了 ${JSON.stringify(spoken().slice(before))}`)
 })
 
-await t("I-2' 下一回合恢复朗读（静音只覆盖当回合，与客户端拒绝线同一解除边界）", async () => {
+await t("I-2' 下一回合恢复朗读（静音活到**回合边界**：R15 Important-6 校正后的口径）", async () => {
   reset()
   // 前提自证：本用例自己经 /cancel 建立「本回合静音」，再断言新回合恢复。此前它依赖上一个
   // 用例（:636）留下的静音态，而 reset() 只清观测缓冲、不动 host 内部的 readMuted——上游
   // 一旦缺失，本用例就退化为「某回合能出声」的平凡断言且**不报错**（删 :636 全文件仍绿）。
-  // 唯一能观测静音态的位置是**当回合的 feed 站点**（静音在新回合的 tap 安装处即被解除），
-  // 所以前提只能在本回合内自建：先让首句出声 → /cancel → 同回合余句必须不朗读。
+  // 唯一能观测静音态的位置是**当回合的 feed 站点**（回合边界才解禁），所以前提只能在本回合内
+  // 自建：先让首句出声 → /cancel → 同回合余句必须不朗读。
   // 余句必须真喂进去（流只剩首句时，后续 next() 已到迭代尾部，断言会退化成恒真）。
+  preStep(VOICE_SID, 41) // 回合 41 的 step1：给 host 一个回合身份（pre-step 是回合号真源）
   const it = openTap(VOICE_SID, ['静音前的首句。', '静音后的余句。', '以及没说完的尾巴'])
   await it.next() // 首句入队并出声
   assert.ok(await waitFor((s) => spoken().includes('静音前的首句。')), '前置条件：首句没合成')
@@ -671,9 +686,10 @@ await t("I-2' 下一回合恢复朗读（静音只覆盖当回合，与客户端
   assert.equal(
     spoken().length,
     1,
-    `前提不成立：/cancel 后同一回合仍在朗读（${JSON.stringify(spoken())}）——「静音只覆盖当回合」无从谈起`,
+    `前提不成立：/cancel 后同一回合仍在朗读（${JSON.stringify(spoken())}）——「静音活到回合边界」无从谈起`,
   )
-  // 新回合：静音必须在回合边界解除
+  // 真正的下一回合（回合号递增）：静音必须在回合边界解除
+  preStep(VOICE_SID, 42)
   await drive(VOICE_SID, '新回合的一句。')
   assert.ok(await waitFor((s) => spoken().includes('新回合的一句。')), '新回合没恢复朗读——静音闸门没在回合边界解除')
 })
@@ -695,6 +711,187 @@ await t('I-3 退出语音模式后，readAloud=always 的焦点会话恢复正�
   assert.equal((await leaveVoice(VOICE_SID)).statusCode, 200)
   await drive(FOCUS_SID, '焦点会话的回复。')
   assert.ok(await waitFor((s) => spoken().includes('焦点会话的回复。')), '退出语音模式后焦点会话不朗读——always 语义被误伤')
+})
+
+// ---------------------------------------------------------------- ⑨ 焦点会话表项回收 + /focus 会话层
+// Issue #15 R15-11：
+//   H-4 always 焦点会话在 turnGen/turnStates/readMuted 里永不回收（clearTurnState 的 3 个
+//       调用点全是语音模式专属）→ 焦点离开该会话时回收。**回收本身是纯内存修复、行为等价**，
+//       故本段的行为锁盯的是「回收可能引入的偏差」：在途流被提前回收（gen 归 1 与仍在飞的
+//       旧 tap 同值 → 旧 finally 打回新回合）与「回收过头」（焦点未转移也回收），
+//       外加一条接线合同锁（防止后人把回收调用摘掉——那不会让任何行为变红）。
+//   H-5 /focus 缺会话存在性校验（/toggle 的第 0 层同口径）。
+// 承接 ⑧ 末尾的状态：activeVoiceSession 已退出、readAloud=always、焦点在 FOCUS_SID。
+console.log('⑨ 焦点会话表项回收 + /focus 会话存在性校验')
+
+const OTHER_SID = 'live-focus-3' // 焦点转移的落点（假会话表里存在）
+const turnStatesOf = (sid) => seen.filter((f) => f.event === 'turn' && f.data.sessionId === sid).map((f) => f.data.state)
+
+await t('H-4 焦点转移时若旧会话的流仍在途 → 延后回收（否则 turnGen 归 1 与仍在飞的流同值，旧 finally 会打回新回合）', async () => {
+  reset()
+  // 前提：焦点在 FOCUS_SID、且不在语音模式（⑧ 末尾 leaveVoice 已退出）。
+  assert.equal((await postFocus({ sessionId: FOCUS_SID, tabId: 'tab-W' })).statusCode, 200)
+  const a = openTap(FOCUS_SID, ['旧回合的一句。'])
+  await a.next() // 旧 tap 起跑（tap 在途），turn → agent-speaking
+  await postFocus({ sessionId: OTHER_SID, tabId: 'tab-W' }) // 焦点转移：此刻不得回收（在途）
+  await postFocus({ sessionId: FOCUS_SID, tabId: 'tab-W' }) // 焦点回来 → 下一回合
+  const b = openTap(FOCUS_SID, ['新回合的一句。'])
+  await b.next() // 新 tap 首 token：turnGen 仍在（未被回收）→ gen 应递增
+  drain()
+  assert.equal(turnStatesOf(FOCUS_SID).filter((s) => s === 'listening').length, 0, '新回合刚开始就被打回 listening')
+  // 旧 tap 现在才结束：它的 finally 是「迟到帧」，必须被 turnGen 代际守卫抑制。
+  await a.next()
+  await a.next()
+  drain()
+  assert.deepEqual(turnStatesOf(FOCUS_SID), ['agent-speaking'], '旧回合迟到的 finally 覆盖了新回合的 agent-speaking——在途时被提前回收了')
+  // 新回合正常收尾：listening 由**新** tap 广播，且只有一次。
+  await b.next()
+  await b.next()
+  drain()
+  assert.deepEqual(turnStatesOf(FOCUS_SID), ['agent-speaking', 'listening'], '新回合收尾没有广播 listening（或被重复广播）')
+})
+
+await t('H-4 焦点未转移（重复上报同一会话）不得回收其表项——否则该流收尾时 turnGen 已失、listening 被静默丢弃', async () => {
+  reset()
+  await postFocus({ sessionId: FOCUS_SID, tabId: 'tab-W' })
+  const it = openTap(FOCUS_SID, ['同一焦点的一句。'])
+  await it.next() // agent-speaking
+  await postFocus({ sessionId: FOCUS_SID, tabId: 'tab-W' }) // 同一会话，不构成转移
+  await it.next() // 迭代到底 → finally → 必须广播 listening
+  drain()
+  assert.deepEqual(turnStatesOf(FOCUS_SID), ['agent-speaking', 'listening'], '焦点没转移也被回收——回合收尾状态丢失')
+})
+
+await t('H-4 回收接线合同锁：两处收尾共用 dropTurnTables（含三张表）+ reclaimFocusState 带两道守卫 + /focus 转移判据', () => {
+  const src = readFileSync(join(root, 'src', 'index.ts'), 'utf8')
+  const decl = /const reclaimFocusState = \([^)]*\): void => \{([\s\S]*?)\n {2}\}/.exec(src)
+  assert.ok(decl, '找不到 reclaimFocusState 定义——焦点会话表项回收被摘掉了')
+  const body = decl[1]
+  assert.ok(body.includes('sessionId === activeVoiceSession'), '缺守卫：仍在语音模式的会话不应被焦点路径回收')
+  assert.ok(body.includes('tapInFlight.has(sessionId)'), '缺守卫：tap 在途时回收会让 turnGen 代际归 1')
+  // 回收的落点是**共享删除助手**（两条收尾路径共用一处 delete）：
+  // ①助手存在且物理上只有一处 turnStates.delete（host-fixes 的同款契约不被稀释）；
+  // ②助手覆盖三张表；③reclaimFocusState 与 clearTurnState 都经它删表。
+  const drop = /const dropTurnTables = \([^)]*\): void => \{([\s\S]*?)\n {2}\}/.exec(src)
+  assert.ok(drop, '找不到共享删除助手 dropTurnTables——两个收尾路径的表项构成不再单一真源')
+  for (const [table, why] of [
+    ['turnStates', '回合状态'],
+    ['turnGen', '回合世代'],
+    ['readMuted', '停止朗读静音闸门'],
+    ['turnOfSession', '回合号真源'],
+  ]) {
+    assert.ok(drop[1].includes(`${table}.delete(sessionId)`), `共享删除助手未删 ${table}（${why}）`)
+  }
+  assert.ok(body.includes('dropTurnTables(sessionId)'), 'reclaimFocusState 未走共享删除助手')
+  assert.ok(
+    /const clearTurnState = \([^)]*\): void => \{[\s\S]*?dropTurnTables\(sessionId\)/.test(src),
+    'clearTurnState 未走共享删除助手',
+  )
+  assert.equal(
+    (src.match(/turnStates\.delete\(/g) ?? []).length,
+    1,
+    'turnStates.delete 必须物理上只有一处（共享删除点）',
+  )
+  // /focus handler 的转移点与 SSE 断开清焦点点都要收；转移判据「焦点确实移走了」也锁死
+  // （该判据在行为上与守卫②重叠 → 无行为锁可抓，靠这条合同锁兜住，见变异 M10）。
+  assert.ok(
+    /if \(prevFocus !== null && prevFocus !== focusedSessionId\) reclaimFocusState\(prevFocus\)/.test(src),
+    '缺转移判据：重复上报同一焦点不应触发回收',
+  )
+  const hits = src.match(/reclaimFocusState\(/g) ?? []
+  assert.equal(hits.length, 3, `reclaimFocusState 调用点应为 3（/focus 转移 + SSE 断开清焦点 + tap finally 补收；定义为 '= (' 不计入），实际 ${hits.length}`)
+})
+
+await t('H-5 /focus 指向不存在的会话 → 403 unknown_session（与 /toggle 第 0 层同口径）', async () => {
+  reset()
+  const r = await postFocus({ sessionId: 'ghost-nope', tabId: 'tab-W' })
+  assert.equal(r.statusCode, 403)
+  assert.equal(bodyCode(r), 'unknown_session')
+})
+
+await t('H-5 会话层拒绝不得顶掉当前焦点（非法上报不得改变归属）', async () => {
+  reset()
+  assert.equal((await postFocus({ sessionId: OTHER_SID, tabId: 'tab-W' })).statusCode, 200)
+  assert.equal((await postFocus({ sessionId: 'ghost-nope', tabId: 'tab-W' })).statusCode, 403)
+  // 归属仍是 OTHER_SID → 该会话的流仍被 tap（不在语音模式、readAloud=always）。
+  await drive(OTHER_SID, '被拒上报不应影响本会话朗读。')
+  assert.ok(await waitFor((s) => spoken().includes('被拒上报不应影响本会话朗读。')), '被拒的焦点上报把归属改掉了')
+})
+
+await t('H-5 焦点清空（sessionId:null）不需会话存在，仍放行（清空不是「指向某会话」）', async () => {
+  const r = await postFocus({ sessionId: null, tabId: 'tab-W' })
+  assert.equal(r.statusCode, 200)
+  assert.deepEqual(focusOf(r), { ok: true, sessionId: null, tabId: null })
+  await postFocus({ sessionId: FOCUS_SID, tabId: 'tab-W' })
+})
+
+await t('H-5 tabId 无 SSE 连接在册也放行（故意不做在册校验：客户端可能先于 SSE 建立报焦点）', async () => {
+  const r = await postFocus({ sessionId: FOCUS_SID, tabId: 'tab-never-connected' })
+  assert.equal(r.statusCode, 200, '把 tabId 在册做成硬前置会造成时序耦合——设计如此，不加该校验')
+})
+
+// ---------------------------------------------------------------- ⑩ 回合边界语义（静误解禁 / error 收场）
+// Issue #15 R15-12：
+//   H-6 「停止朗读」的静音必须在**回合内**持续——回合内的下一个 step（工具调用后那轮流）
+//       不得解禁，否则停止朗读在带工具调用的回合里形同虚设（余句照旧合成下发并计费）。
+//       判据是 `agent/pre-step` 的回合号（llm/stream 的 GenerateOptions 不带 turn/step）。
+//   H-7 回合以 error 收场时宿主不派发 `agent/turn-stopping`，openTurns 残留 → tts-idle
+//       永不到 → mode:once 退 10s 兜底。由 `agent/error` 兜底补发。
+console.log('⑩ 回合边界：静误解禁时机 + error 收场补发 tts-idle')
+// ⑧ 末尾已退出语音模式，故本段一律走 always 路径（焦点 + readAloud=always）让本段专属会话被 tap。
+// 用独立会话（而非 TURN_SID）：/cancel 的「每会话 2 次/秒」限流桶在 ⑧ 段已被 TURN_SID 用满，
+// 同毫秒内再来一次会拿到 429，把「回合语义」用例变成「限流」用例。
+const TURN_SID = 'live-turn-10'
+const focusVoice = () => postFocus({ sessionId: TURN_SID, tabId: 'tab-W' })
+
+await t('H-6 回合内的下一个 step（工具调用后）不得解除静音——解禁只在回合边界', async () => {
+  reset()
+  assert.equal((await focusVoice()).statusCode, 200, '前置条件：TURN_SID 未成为焦点（不会被 tap）')
+  preStep(TURN_SID, 51) // 回合 51 step1：工具调用前那一段
+  await drive(TURN_SID, '工具前的正文。')
+  assert.ok(await waitFor((s) => spoken().includes('工具前的正文。')), '前置条件：step1 没合成')
+  assert.equal((await postCancel(TURN_SID)).statusCode, 200)
+  // 同一回合的 step2：pre-step 仍报同一个回合号 → 静音必须保持
+  preStep(TURN_SID, 51, 2)
+  await drive(TURN_SID, '工具后的余句。')
+  await sleep(60)
+  drain()
+  assert.equal(
+    spoken().includes('工具后的余句。'),
+    false,
+    '同一回合内的下一个 step 解除了静音——停止朗读在带工具调用的回合里形同虚设',
+  )
+  // 真正的下一回合：回合号递增 → 静音在此解除
+  preStep(TURN_SID, 52)
+  await drive(TURN_SID, '新回合的话。')
+  assert.ok(await waitFor((s) => spoken().includes('新回合的话。')), '新回合没恢复朗读——回合号递增时必须解禁')
+})
+
+await t('H-6 pre-step 未派发时退回按流解禁（老宿主降级：不得变成永久静音）', async () => {
+  reset()
+  // 模拟「老宿主不派发 agent/pre-step」：先把该会话的回合号表清空（焦点离开 → dropTurnTables），
+  // 之后全程不派发 pre-step → /cancel 记下的是「回合号未知」。
+  await postFocus({ sessionId: OTHER_SID, tabId: 'tab-W' })
+  await focusVoice()
+  await drive(TURN_SID, '未知回合号的首句。')
+  assert.ok(await waitFor((s) => spoken().includes('未知回合号的首句。')), '前置条件：首句没合成')
+  await postCancel(TURN_SID)
+  await drive(TURN_SID, '未知回合号的次句。') // 无 pre-step → 回合号取不到 → 退回按流解禁
+  assert.ok(await waitFor((s) => spoken().includes('未知回合号的次句。')), '回合号不可得时变成永久静音——老宿主会彻底失去朗读')
+})
+
+await t('H-7 回合以 error 收场（无 turn-stopping）→ agent/error 兜底补发 tts-idle', async () => {
+  reset()
+  assert.equal((await focusVoice()).statusCode, 200, '前置条件：TURN_SID 未成为焦点（不会被 tap）')
+  preStep(TURN_SID, 61)
+  await drive(TURN_SID, '出错前的话。')
+  assert.ok(await waitFor((s) => spoken().includes('出错前的话。')), '前置条件：没合成')
+  drain()
+  assert.equal(idles(TURN_SID), 0, '回合内就发了 tts-idle——闸门被绕过')
+  // 宿主在 error 路径不派发 turn-stopping（dsh-agent-loop：turn-stopping 只在
+  // `if (turnEnds && inbox.nextStep.length === 0)` 内派发），此时 openTurns 会残留。
+  agentError(TURN_SID)
+  assert.ok(await waitFor((s) => idles(TURN_SID) === 1), `error 收场后没有补发 tts-idle（×${idles(TURN_SID)}）——mode:once 会退 10s 兜底`)
 })
 
 rmSync(tmp, { recursive: true, force: true })

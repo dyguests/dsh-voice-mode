@@ -857,6 +857,177 @@ await t('被门控拒绝的检测 → 随后真打断：抢救段不得含被拒
   await h.engine.stop()
 })
 
+// ---------------------------------------------------------------- Issue #15 R15-5：抢救种子的「客户端显式作废」旁路
+console.log('Issue #15 R15-5：客户端放弃检测时须显式作废抢救种子（未达确认门槛的孤立判真）')
+await t('未达确认门槛的孤立判真（客户端放弃）→ 随后真打断：抢救段不得含被放弃检测的音频', async () => {
+  // 假客户端：复刻 client.tsx 的 onIsSpeech 分支，但确认门槛**故意抬到 5 拍**——
+  // 本用例的被放弃检测不得达到门槛，否则它会走「门控否决」路径（引擎在门控询问点
+  // 自动作废种子），掩盖本用例要验的「客户端显式作废」旁路。
+  // 客户端侧接线（待主会话转派 client.tsx）：确认计数**归零**（迟滞衰减耗尽本次检测
+  // 的证据）时调用 engine.invalidateSalvageSeed()。
+  const CONFIRM_FRAMES = 5
+  const BUZZ_AMP = 0.08 // 孤立判真（命令频段 → 「给」字）：只落在 1~2 个检测窗，从未达门槛
+  const LOUD_AMP = 0.7 // 洪亮语音：盖过回声地板 6dB → 门控放行 → 真打断
+  let playing = true
+  let engine = null
+  let trueCount = 0
+  let falseRun = 0
+  const client = (speech) => {
+    if (speech === true) {
+      falseRun = 0
+      trueCount++
+      if (trueCount >= CONFIRM_FRAMES) {
+        if (!engine.aboveEchoFloor(6)) {
+          trueCount = 0 // 门控否决
+          return
+        }
+        trueCount = 0
+        playing = false // hardBreak：AI 停播
+        void engine.discardSegment() // hardBreak 的引擎侧等价（抢救在此发生）
+      }
+    } else {
+      falseRun++
+      if (falseRun >= 2) {
+        falseRun = 0
+        trueCount = Math.max(0, trueCount - 1) // 迟滞衰减（同 client.tsx）
+        if (trueCount === 0) {
+          // 确认计数归零 = 本次检测的证据耗尽 → 客户端放弃该检测 → 引擎作废抢救种子
+          engine.invalidateSalvageSeed()
+        }
+      }
+    }
+  }
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true, onIsSpeech: client })
+  engine = h.engine
+  await h.engine.start()
+  await say(ECHO_AMP, 3000) // AI 朗读（回声地板收敛；纯回声不触发 VAD）
+  await say(BUZZ_AMP, 250) // 孤立判真：VAD 判真，但从没达到确认门槛 → 客户端放弃（计数归零）
+  await say(ECHO_AMP, 1500) // 空档：被放弃检测的窗口若成了锚点，这段 AI 音频会被并入用户消息
+  await say(LOUD_AMP, 1200) // 真打断：门控放行 → hardBreak → 抢救
+  await say(SIL_AMP, 2500) // 停口 → 定稿
+  assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）`)
+  const text = h.segments[0]
+  assert.ok(text.includes(LOUD_CHAR), `抢救段应含真打断时说的话（实际 "${text}"）——抢救未生效`)
+  // 判别式：被放弃检测那次的语音（命令频段 → 「给」字）不得出现在定稿里。
+  assert.ok(
+    !text.includes('给'),
+    `抢救段不得含被客户端放弃那次检测的窗口音频（实际 "${text}"）——R15-5：未达门槛的孤立判真留下陈旧种子 → 整环 AI 音频并入用户消息`,
+  )
+  await h.engine.stop()
+})
+
+// ---------------------------------------------------------------- Issue #15 R15-5（A-3）：门控询问作用域的限定与异常配对
+console.log('Issue #15 R15-5（A-3）：门控询问作用域——限定条件 + 异常路径配对')
+// 两个用例共用同一台架约定：确认门槛抬到 5 拍（被放弃的判真达不到门槛 → 引擎的「门控
+// 询问点」从不触发），且**刻意不接** A-1 的显式作废旁路（否则客户端计数归零会先作废
+// 种子，掩盖「本次是否作废种子」这一被测语义）。二者都守的是**引擎 API 契约**：
+//   ① AsrEngine.aboveEchoFloor 是公开 API，作用域外被问到（将来新增第二个询问点：
+//      诊断面板读数/UI 显示）返回 false 时，不得作废抢救种子；
+//   ② 交付 VAD 结果的回调抛异常时，门控询问作用域必须已关闭（异常不得泄漏作用域），
+//      否则异常之后的门控否决会静默失效（R15-5 的修复形同虚设）。
+const A3_CONFIRM_FRAMES = 5
+const A3_BUZZ_AMP = 0.08 // 判真但达不到门槛（命令频段 → 「给」字标记）
+const A3_LOUD_AMP = 0.7 // 洪亮语音：盖过回声地板 6dB → 门控放行 → 真打断
+
+/** 假客户端（不接 A-1 显式作废旁路）：连续确认帧数才判打断，门控否决即放弃。 */
+const makeA3Client = () => {
+  const state = { playing: true, trueCount: 0, falseRun: 0, engine: null }
+  const client = (speech) => {
+    if (speech === true) {
+      state.falseRun = 0
+      state.trueCount++
+      if (state.trueCount >= A3_CONFIRM_FRAMES) {
+        if (!state.engine.aboveEchoFloor(6)) {
+          state.trueCount = 0
+          return
+        }
+        state.trueCount = 0
+        state.playing = false // hardBreak：AI 停播
+        void state.engine.discardSegment() // hardBreak 的引擎侧等价（抢救在此发生）
+      }
+    } else {
+      state.falseRun++
+      if (state.falseRun >= 2) {
+        state.falseRun = 0
+        state.trueCount = Math.max(0, state.trueCount - 1) // 迟滞衰减（同 client.tsx）
+      }
+    }
+  }
+  return { state, client }
+}
+
+await t('作用域之外的回声门控询问（返回 false）不得作废抢救种子', async () => {
+  const { state, client } = makeA3Client()
+  const h = makeEngine({ wakeWord: '', isPlaying: () => state.playing, bargeInSalvage: true, onIsSpeech: client })
+  state.engine = h.engine
+  await h.engine.start()
+  await say(ECHO_AMP, 3000) // AI 朗读（回声地板收敛；纯回声不触发 VAD）
+  await say(A3_BUZZ_AMP, 250) // 判真 → 抢救种子锁定（达不到门槛 → 门控询问点不触发）
+  // 探针：以「外部调用者」身份直接问门控（不在 onIsSpeech 交付作用域内）。这正是将来
+  // 第二个询问点（诊断面板读数/UI 显示）的形态——公开 API 被非门控场景问到。
+  assert.equal(state.engine.aboveEchoFloor(6), false, '探针前提：此刻门控应判否（残差未高于回声地板）')
+  await say(ECHO_AMP, 1500) // 空档
+  await say(A3_LOUD_AMP, 1200) // 真打断：门控放行 → hardBreak → 抢救
+  await say(SIL_AMP, 2500) // 停口 → 定稿
+  assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）`)
+  const text = h.segments[0]
+  assert.ok(text.includes(LOUD_CHAR), `抢救段应含真打断时说的话（实际 "${text}"）——抢救未生效`)
+  // 判别式：作用域外的门控询问**不得**作废种子 → 种子仍指向那次判真 → 抢救段仍含该
+  // 窗口的语音（「给」字）。删掉 aboveEchoFloor 里的 `&& gateQueryScope` 即抓红。
+  assert.ok(
+    text.includes('给'),
+    `作用域外的门控询问不得作废抢救种子（实际 "${text}"）——将来新增第二个询问点（诊断面板/UI 读数）会误作废种子 → 整环 AI 音频并入用户消息`,
+  )
+  await h.engine.stop()
+})
+
+await t('onIsSpeech 抛异常时门控询问作用域必须已关闭（异常不得泄漏作用域）', async () => {
+  let threw = false
+  const { state, client } = makeA3Client()
+  // 「判假」交付时抛异常（模拟客户端回调出错），之后恢复正常。两个细节决定本用例能否
+  // 真正抓红（均由实测定位）：
+  //  ① 抛在**判假**上（不是判真）：回调抛异常会中断 detect 处理器的收尾（detectSent
+  //     水位未推进）→ 下一次请求重发同一批帧 → 若那次交付判真，会用**同一个请求体起点**
+  //     把种子重新锁成完全相同的值 → 探针的作废效果被掩盖（用例失去区分度）。抛在判假
+  //     上：后续重发仍判假（不锁种子）→ 作废效果可由抢救锚点观察到。
+  //  ② 必须**武装后**才抛：AI 朗读期的每次交付都判假，若无脑抛，异常发生在朗读期
+  //     （种子尚未锁定），探针落不到泄漏窗口内，用例恒绿。
+  let armed = false
+  const throwingClient = (speech) => {
+    if (armed && speech === false && !threw) {
+      threw = true
+      throw new Error('客户端回调异常（台架注入）')
+    }
+    client(speech)
+  }
+  const h = makeEngine({ wakeWord: '', isPlaying: () => state.playing, bargeInSalvage: true, onIsSpeech: throwingClient })
+  state.engine = h.engine
+  await h.engine.start()
+  await say(ECHO_AMP, 3000) // AI 朗读（回声地板收敛；纯回声不触发 VAD）
+  await say(A3_BUZZ_AMP, 250) // 判真 → 抢救种子锁定（达不到门槛 → 门控询问点不触发）
+  armed = true // 武装：此后首个「判假」交付抛异常
+  // 逐帧推进到抛异常：探针必须**早于下一次交付**发出（若作用域泄漏，探针恰好落在
+  // 泄漏窗口内 → 误作废种子）。每帧至多一次交付（轮询在 handleAudio 内，100ms 节拍）。
+  for (let i = 0; i < 8 && !threw; i++) await frame(ECHO_AMP)
+  assert.ok(threw, '假客户端应已抛异常——否则本用例无区分度')
+  // 探针（作用域外）：此刻残差未高于回声地板 → 门控判否；作用域必须已关闭。
+  assert.equal(state.engine.aboveEchoFloor(6), false, '探针前提：此刻门控应判否（残差未高于回声地板）')
+  await say(ECHO_AMP, 1500) // 空档
+  await say(A3_LOUD_AMP, 1200) // 真打断：门控放行 → hardBreak → 抢救
+  await say(SIL_AMP, 2500) // 停口 → 定稿
+  assert.equal(h.segments.length, 1, `应产出 1 条定稿（实际 ${h.segments.length} 条：${JSON.stringify(h.segments)}）`)
+  const text = h.segments[0]
+  assert.ok(text.includes(LOUD_CHAR), `抢救段应含真打断时说的话（实际 "${text}"）——抢救未生效`)
+  // 判别式：异常后作用域必须已关闭 → 探针的 false 裁决不得作废种子 → 种子仍指向那次
+  // 判真 → 抢救段仍含该窗口的语音（「给」字）。把 deliverIsSpeech 的 try/finally 改成
+  // 顺序赋值即抓红（抛异常时作用域泄漏 → 探针落在泄漏窗口内 → 种子被误作废）。
+  assert.ok(
+    text.includes('给'),
+    `onIsSpeech 抛异常时门控询问作用域必须已关闭（实际 "${text}"）——作用域泄漏 → 异常后的门控否决静默失效（R15-5 修复形同虚设）`,
+  )
+  await h.engine.stop()
+})
+
 // ---------------------------------------------------------------- Issue #15 R15-5（Minor B）：wake 待机态连败计数
 console.log('Issue #15 R15-5（Minor B）：wake 待机态 partial 连败计数')
 await t('待机态 partial 成功即清连败计数：失败/成功交替不得误触「识别通道持续断」', async () => {

@@ -44,12 +44,14 @@
 | 状态条会话计时器 | R18 | `dc25715` |
 | engine 切换数据流向标签（切换 toast 未做） | R23 | `f05c249` |
 | 11 批次周全修复（批 A-K + L） | 批 6 | `78574ad`…`15be91a` |
+| 唤醒词 `normalizeWake` 前置语气词白名单（`src/wakeword.ts:32` 剥离正则：嗯/哎/呃/这个/那个/so/um/uh/er/well） | R41（就绪度审计 #41「P0 `normalizeWake` 加语气词白名单」） | `c9f3435` |
 
 ### 已失效 / 已砍除（各一行，仅存档）
 
 - **zipformer2 热词暴露**（批 1 落地 `9467c81` → 批 7M 砍 `e3423ef`）：asrHotwords / asrHotwordsScore 已砍，仅存档。
 - **SenseVoice 语言显式锁定**（批 2 落地 `3025e1b` → 批 7M 砍 `4532b48`）：recognitionLanguage 已砍，仅存档。
 - **B8 Wispr 100+ 语种入口**（Need-PoC → 批 7M 失效）：依赖 recognitionLanguage 已砍，仅存档。
+- **README 设置表 4 漏列 + 3 个误传字段**（2026-09-15 沉睡能力审计 → 2026-09-14 `ebe55b2` 已修 4 漏列；本轮复核闭合）：4 字段（`autoResume` / `bargeInMode` / `echoGateDb` / `senseVoice`）现已在 `plugin/dsh-voice-mode/README.md:120-147` 设置表内（表 28 行 ≡ schema `index.ts:294-409` 28 键，**双向零差集**）；「误传字段」`heldHint` / `cursorHint` / `recallAuto` **全仓历史对 `src/` / `test/` / 任何 README 均 0 命中**——本仓**从未存在**（仅见于调研文档对上游 fork 与用户消息的记录），删除动作本就无对象。仅存档。
 
 ---
 
@@ -62,24 +64,22 @@
 | A6 浮动状态条 + 启动 chime | Ready | 0.5-1 天 | `client.tsx:201` beepCtx 声明 + `client.tsx:1675` holding CSS（`html.dshvm-holding`）+ `client.tsx:3114` holding state（`useState`；原写 `:168-174` 是文件头注释/`BUILD_TAG`、`:1233` 与 `:2156` 均为 `} catch {`，已漂移） | 无需求牵引推迟 |
 | A10 AI 主播开场问候 | Ready | 1.5-2 天 | `index.ts:1051-1091` `/config` exact 路由仿 `/greeting`（HEAD 全仓无 `/greeting`，属待新增范式）+ `tts-queue.ts:427-445` `enqueue`（原写 `tts-queue.ts:254-268` 是注释尾 + `backoffTimers` 字段，已漂移） | 无需求牵引推迟（建议固定模板不调 LLM） |
 | B3 WebRTC APM3 替代自研 NLMS | Need-PoC | PoC 1-2 周 | `aec.ts`（NLMS 自研兜底，无 bypass 开关，按符号定位） + `audio-worklet.ts` + ADR-0001/0005 | 需 PoC 实证 ERLE > 自研 NLMS |
-| B5 ADR-0004 协议骨架升级（WebSocket + seq/ts） | Need-ADR | 待 ADR | `asr.ts:251` segmentEpoch + `asr.ts:267` detectGeneration（原写 `:235,247` 实为 `speechMs`/`partialInFlight`）+ `index.ts:613` turnGen 声明 + `:995-1006` get/set/迟到回合守卫（原写 `:391` 是 zod `.description(`）+ `tts-queue.ts:207-212` `SessionQueue.epoch` 声明（原写 `:174-182` 是测试局限注释） | 需 ADR-0004 拍板（升级 accepted） |
+| B5 ADR-0004 协议骨架升级（WebSocket + seq/ts） | Need-ADR | 待 ADR | `asr.ts:258` segmentEpoch + `asr.ts:274` detectGeneration（原写 `:235,247` 实为 `speechMs`/`partialInFlight`）+ `index.ts:637` turnGen 声明 + `index.ts:1050-1051` get/set 与 `:1076` 迟到回合守卫（原写 `:391` 是 zod `.description(`；`index.ts:613`/`:995-1006` 为 2026-10-21 前快照，已随 R15 各批重写漂移）+ `tts-queue.ts:204/:212` `SessionQueue.epoch` 声明（原写 `:174-182` 是测试局限注释；`:207-212` 未覆盖 :204 声明行，本轮订正为 `:204/:212`） | 需 ADR-0004 拍板（升级 accepted） |
 | B6 NotebookLM Interactive mode（播放中提问） | Need-PoC | 1-2 周 | `tts-queue.ts:452-460` `cancel`（epoch++ + `engine.interrupt`；原写 `:270-285` 是重试 sleep 句柄集，已漂移）+ `asr.ts:985` `rms > SPEECH_RMS` 朗读期不入段门（原写 `:640-648` 实为 `finalizeSegment` 的 force/P1-5 端点路径，非 RMS 门） | 需 PoC 实证「朗读期保留 ASR」不破坏 AEC |
 | B9 Read AI 风「现在听到…」复述 | Need-PoC | 0.5-1 天 | `asr.ts:945` `MAX_SEGMENT_MS` 兜底（现存唯一「长时」计时器；**专用长静音检测在 HEAD 不存在**，需新增；原写 `:640-648` 是 `finalizeSegment` 端点路径，与「长静音」语义相反）+ `client.tsx`（`recognition-draft` 0 命中，需新增） | 需先建 recognition-draft 字段（需真机） |
 | C4 DTLN-AEC 残差监控器（朗读期 dry 阀门） | Need-PoC | 待真机 | `asr.ts` dry 阀门路径 | 无 dry false-negative 证据不立（需真机） |
 | P1-UX TTS 失败自动降级 Kokoro + `ttsNotice` | Ready | 1-2 天 | `tts-queue.ts:485-511` 单句合成有界重试（`MAX_SYNTH_ATTEMPTS = 3` + epoch 守卫 break/continue；原写 `:306-320` 是 `awaitTurnEnd` 选项与 pump finally 注释，非重试逻辑，已漂移） | 无需求牵引推迟 |
 | P1 per-后端 STT 回退链 | Need-PoC | 1-2 周 | `modelHost` 镜像切换同款 | 需 PoC（含 schema migration） |
-| Edge TTS `<lang>` 中英混读 | Ready | 2-3 天 | `segmenter.ts:52-67` `splitSentences`（拟在此旁新增 `splitMixedLang`——**该符号 HEAD 全仓 0 命中**，原写 `:60-65` 实为 `splitSentences` 的句切分正则循环，已漂移）+ `tts-queue.ts:125` Edge `synthesize` + `index.ts:1883` `tapActiveStream` 定义 / `:1000` 调用点（原写 `tts-queue.ts:122-141` 跨 `setRate` 与 `try`、`:1099-1115` 是试听限流段） | 无需求牵引推迟 |
+| Edge TTS `<lang>` 中英混读 | Ready | 2-3 天 | `segmenter.ts:52-67` `splitSentences`（拟在此旁新增 `splitMixedLang`——**该符号 HEAD 全仓 0 命中**，原写 `:60-65` 实为 `splitSentences` 的句切分正则循环，已漂移）+ `tts-queue.ts:125` Edge `synthesize` + `index.ts:1992` `tapActiveStream` 定义 / `:1062` 调用点（原写 `tts-queue.ts:122-141` 跨 `setRate` 与 `try`、`:1099-1115` 是试听限流段；`index.ts:1883`/`:1000` 为 2026-10-21 前快照，已漂移） | 无需求牵引推迟 |
 | 录音同意弹窗（GDPR/CCPA/个保法） | Ready | 2-3 天 | `client.tsx:2339` enterMode + 新增 ConsentDialog + `settings-form.tsx:937` `VoiceSettingsCard`（设置卡挂载点；原写 `settings-form.tsx:52` 是 `cardStyle` 内空行，`:1531` 实为 `holdSpeechFrames = 0`，均已漂移） | 无需求牵引推迟（需文案审阅 + 测试矩阵） |
-| ARIA 全链路补全 | Ready | 0.5 天 | `client.tsx:3222-3315` hold 手势指针守卫（onPointerDown/Move/Up/Cancel + `:3192-3199` window pointerup 兜底；原写 `:2256`/`:2167` 是 `}` 与 `cancelPendingSubmit()`，已漂移）+ `client.tsx:1808` MicButton（原写 `:2339` 现为 `enterMode`——两者与旧值已互换）+ `settings-form.tsx:436` VoicePreviewButton 试听按钮（原写 `:579` 只是其闭合 `</button>`）+ `settings-form.tsx:587` `Row` 字段行（原写 `:825-845` 是 `ModelStatusView`） | 无需求牵引推迟 |
+| ARIA 全链路补全 | Ready | 0.5 天 | `client.tsx:3304-3404` hold 手势指针守卫（onPointerDown :3304 / onPointerMove :3340 / onPointerUp :3356 / onPointerCancel :3398 + `:3275-3276` window pointerup 兜底；原写 `:2256`/`:2167` 是 `}` 与 `cancelPendingSubmit()`，已漂移；`:3222-3315`/`:3192-3199` 为 2026-10-21 前快照，已随 R15 各批重写漂移）+ `client.tsx:1872` MicButton（原写 `:2339` 现为 `enterMode`——两者与旧值已互换）+ `settings-form.tsx:436` VoicePreviewButton 试听按钮（原写 `:579` 只是其闭合 `</button>`）+ `settings-form.tsx:587` `Row` 字段行（原写 `:825-845` 是 `ModelStatusView`） | 无需求牵引推迟 |
 | 纯字幕模式（a11y 听障用户） | Ready | 1-1.5 天 | `index.ts` 全仓 `audioOutputMuted` **0 命中**（缺省键待新设，新键应落 `index.ts:294-409` schema + `217-254` 默认值两处）+ `client.tsx:571` captionQueue（原写 `:394` 是可见性恢复注释，已漂移） | 无需求牵引推迟 |
-| 色弱对比度 + telemetry 关闭披露 | Ready | 0.5-1 天 | `client.tsx:3222-3315` hold 手势 + `client.tsx:3192-3199` 指针抬起兜底守卫（原写 `:2167`/`:2256` 已漂移，见 ARIA 行同源刷新）+ `index.ts` 全仓 `diagnostics` **0 命中**（键待新设，新键应落 `index.ts:294-409` schema） | 无需求牵引推迟 |
+| 色弱对比度 + telemetry 关闭披露 | Ready | 0.5-1 天 | `client.tsx:3304-3404` hold 手势 + `client.tsx:3275-3276` 指针抬起兜底守卫（原写 `:2167`/`:2256` 已漂移，见 ARIA 行同源刷新；**原 `:3222-3315`/`:3192-3199` 为 2026-10-21 前快照**，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）+ `index.ts` 全仓 `diagnostics` **0 命中**（键待新设，新键应落 `index.ts:294-409` schema） | 无需求牵引推迟 |
 | 插件能力结构化注入 system prompt | Ready | 30 行 | `index.ts:121` VOICE_SPOKEN_SECTION + `index.ts:966-972` 注入点（`ctx.on('system-prompt/assemble')` 瀑布 push；原写 `index.ts:112` 是 spokenFormat 注释、`:446` 是 `autoResume: boolean`，均已漂移）+ `index.ts:739` `settingsScope.register` | 无需求牵引推迟（可与让位注入处合并） |
 | 同步自带 skill 到 `~/.dsh/skills/` | Ready | 30 行 + 4-6 SKILL.md | `index.ts:573` `export function apply`（插件入口，按符号定位；原写 `:373` 是 `DESC.captionFontSize,`，已漂移） | 无需求牵引推迟 |
 | 注册 MCP `voice_*` 工具 | Ready | 1-2 天 | `index.ts:130` `export const inject`（`['webServer','settings','sessions']`，按符号定位；原写 `:121` 是 VOICE_SPOKEN_SECTION 声明，`:88` 是 `return 'unknown'`，均已漂移）+ `systemPrompt`（HEAD 无此字段，仅 `index.ts:966` 的 `system-prompt/assemble` 回调，需先加） | 需 peer 实证 tools/jobs/agents 可达性 |
 | 设置卡 CardForm draft/validate 模式 | Ready | 150 行 | `settings-form.tsx:128` `function NumberField`（draft/commit/红框校验样板 `:143-193`；全文件 **1206 行**——PR #16 后 +19，原「1187 行」为重写前的旧值）+ `settings-form.tsx:244` SelectField / `:332` VoiceSelect（同类 draft 样板可仿）；旧 `250-330`/全文件 1240 行两处旧值均已漂移 | 无需求牵引推迟 |
 | 全局并发闸门 + AbortSignal 队列 | Ready | 80 行 | `index.ts:573` `export function apply`（与上一行同指同一入口；原写 `:88` 是 `return 'unknown'`，已漂移） | 无需求牵引推迟（与 tts-queue epoch 协同） |
-| 修 README 设置表（4 字段）+ 删误传字段 | Ready | 1 小时 | `plugin/dsh-voice-mode/README.md:118-147` 设置表（原写 `plugin/README.md:71-86` **路径不存在**——真实路径含 `dsh-voice-mode/`；且真实设置表在 `:118-147`，`:71-86` 只是「设置」要点行 + Quick Start 开头）+ `index.ts:217-254` `VOICE_SETTINGS_DEFAULTS`（原写 `:140-227`，`:140` 是空行、`:227` 是 `autoResume: false`） | 需人工核对表内是否真缺 4 字段；**原「误传字段」清单 heldHint/cursorHint/recallAuto 在 HEAD 全仓 0 命中**（疑已移除，删除动作可能已失效，待确认） |
-| `normalizeWake` 加语气词白名单 | **已落地**（`c9f3435`，2026-09-14）——本行原误列「Ready / 未实施」 | 5 行 + 测试 | `wakeword.ts:27-33` `export function normalizeWake`（`:32` 已实装前缀语气词剥离正则 `^(嗯+\|哎+\|呃+\|这个+\|那个+\|so\|um\|uh\|er\|well)`；原写 `:13-18` 是文件头「容错慢路径」注释） | **已完成**，本行待迁入 §一「已实施条目对照表」（保留在此仅为记录本次锚点纠错） |
 | `@deepseek-ai/dsh-llm` 运行时 API 接入（62 导出） | Ready | 1-2 天 | `index.ts:20` `import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'`（当前**仅 type-only**，无 runtime 导入）+ `index.ts:485-534` `export const Config`（原写 `:480-489` 跨 Config interface 尾与 schema 头） | 需先实测 62 导出挑有用的 |
 | 批 4 第二步：Edge `<mstts:express-as>` 注入 | 未实施 | 1-2 天 | ADR-0007「落地顺序」第 2 步 | 待用户需要时启动（msedge-tts 2.0.7 无 `style`，需 fork 或自拼 SSML） |
 | batch 4 I2：LLM prompt 注入 emotion 使用指引 | 未实施 | 待定 | VOICE_SPOKEN_PROMPT + host inject `systemPrompt` | 需先扩 host inject 加 systemPrompt |
@@ -112,6 +112,6 @@
 - **4 缺口测试已全补**：`zh-60s.wav` fixture（批 7N `b0e45fe`）/ `backchannel-yield` 守卫（批 7N `ee4312b`）/ `yieldMs` wiring E2E（批 7N `58f6d77`）/ `preview-error-classify`（批 7O `cbcdd61`）+ `settings-load` zod strip（批 7O `390f292`）。
 - **Q1**：旧 settings 持久化文件含已砍键时 zod strip 行为——批 7O 已补 `test/settings-load.test.mjs` 自动化断言；生产环境亲跑仍待用户实测。
 - **P3 登记（批 7P，只登记不实现）**：
-  - host 侧 VAD 重放脚本（待真机 fixture；锚点 `src/asr-host.ts:752` detect 异步函数（`acceptWaveform` :758 → `isDetected` :759 → 返回 `isSpeech` :763，函数体 :752-764）——原写 `:116` 是 `resetSegment` 注释，已漂移；`scripts/analyze-fixture.mjs`）。
+  - host 侧 VAD 重放脚本（待真机 fixture；锚点 `src/asr-host.ts:587-591` detect 区块（`vad.acceptWaveform(inc)` :588 → `isSpeech = vad.isDetected()` :591，所在 detect 处理段 :575-600）——原写 `:116` 是 `resetSegment` 注释、`:752`/`:758`/`:759`/`:763`/`:752-764` 为 2026-10-21 前快照，已随 R15 各批重写漂移；`scripts/analyze-fixture.mjs`）。
   - ADR-0006 二级标定（待真机样本；`docs/findings/2026-09-14-fixture-verdict.md` 现仅单设备样本，需更多设备）。
   - fixture-recorder 单测 vs 书面豁免二选一（C；锚点 `src/fixture-recorder.ts`）。

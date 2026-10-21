@@ -138,6 +138,13 @@ export interface AsrEngine {
   readonly holding: boolean
   /** A2.5 回声门控：当前残差是否明显高于回声地板（默认 6dB）——判用户人声而非回声。 */
   aboveEchoFloor(marginDb?: number): boolean
+  /** Issue #15 R15-5：作废抢救种子（客户端放弃本次检测时调用）。
+   *  被放弃的检测不得成为下次真打断的抢救锚点——种子陈旧会被 Math.max 钳到环起点
+   *  → 整环 2s AI 音频并入用户消息（R15-5 报告症状）。两类放弃路径：
+   *   ① 回声门控否决——引擎在门控询问点（aboveEchoFloor 读到 false）已自动作废，客户端无需调用；
+   *   ② 确认帧数未达门槛 / 迟滞衰减归零——该检测**从未问过门控**，引擎无从感知，
+   *      须由客户端在放弃该检测时显式调用本方法。 */
+  invalidateSalvageSeed(): void
   /** 回声诊断读数（真机标定数据）：{ 地板 RMS, 当前残差 RMS, 残差峰值 RMS }。 */
   echoLevels(): { floorRms: number; residualRms: number; peakRms: number }
   /** 丢弃当前已录段（打断后防幽灵消息），host 流重置。返回 Promise 供调用方等待。 */
@@ -1321,6 +1328,12 @@ const startRecorder = async (): Promise<void> => {
       // Issue #15 R15-5：门控否决（pass=false）= 客户端放弃本次检测 → 抢救种子作废。
       if (!pass && gateQueryScope) preRollSeedWall = null
       return pass
+    },
+    /** 作废抢救种子（客户端放弃本次检测时调用——语义见 AsrEngine.invalidateSalvageSeed）。
+     *  Issue #15 R15-5：补「从未问过门控」的放弃路径（确认帧数未达门槛 / 迟滞衰减归零）：
+     *  这类检测不会触发上面的门控询问点，引擎只能由客户端显式告知。 */
+    invalidateSalvageSeed() {
+      preRollSeedWall = null
     },
     echoLevels() {
       return { floorRms: echoFloorRms, residualRms: latestResidualRms, peakRms: echoPeak }
