@@ -11,6 +11,7 @@
 | [reviewer-prompt.md](reviewer-prompt.md) | 审查 agent 提示词（六轴框架 / 固定桶输出 / 不修复纪律 / 与执行者关系） |
 | [beautification-plan-2026-09-16.md](beautification-plan-2026-09-16.md) | 项目美化计划（6 角色协同：README + 截图 + 仓库 + 索引 + 文案 + demo） |
 | [COLLABORATION.md](COLLABORATION.md) | 开发协作推进体系（角色分工 + 四阶段流程 + 固定门禁 + goal 长任务协作） |
+| [R15-remaining-work.md](R15-remaining-work.md) | **R15 阶段收尾交接件**（2026-10-21）：剩余待办队列（P0 回填 130 处行号 / 重跑第三轮验真 sweep）、已定性不再重查的事实（`s.running` 回合级等）、接手纪律与快速开始 |
 
 ## 维护纪律
 
