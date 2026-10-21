@@ -17,7 +17,17 @@ import { fixtureRecorder } from './fixture-recorder.ts'
 import { errorText } from './error-text.ts'
 import { shouldSteerSubmit, trySteerSubmit, type SteerSession } from './steer-submit.ts'
 import { composeDraft, shouldWritePartial } from './draft-compose.ts'
-import { isEditingShortcut, isPrimaryPress, onceFinished, takeToggleSlot } from './mic-gesture.ts'
+import {
+  createScopeBridge,
+  focusClaim,
+  focusRelease,
+  isEditingShortcut,
+  isPrimaryPress,
+  onceFinished,
+  takeToggleSlot,
+  FOCUS_OWNER_DEFAULT,
+  type FocusOwners,
+} from './mic-gesture.ts'
 import { setRuntimeBoot } from './runtime-boot.ts'
 import { activeLocale, bindLocale, t, useLang, type TKey } from './i18n.ts'
 
@@ -258,8 +268,10 @@ interface VoiceBus {
   warmAudio(): void
   /** 当前播放电平 0..1（麦克风按钮「朗读中」动画）。 */
   playbackLevel(): number
-  /** 当前可见会话（readAloud=always 时接收它的朗读帧，不依赖语音模式）。 */
-  setFocusedSession(sessionId: string | null): void
+  /** 当前可见会话（readAloud=always 时接收它的朗读帧，不依赖语音模式）。
+   *  owner = 上报者实例的唯一 token：焦点归属到实例级——某个实例卸载只释放自己的
+   *  持有，不清掉另一个实例仍持有的焦点（缺省 = 标签页级老调用）。 */
+  setFocusedSession(sessionId: string | null, owner?: string): void
   /** 停止朗读：停当前句 + 清 host 队列 + 这次回复剩余的句子不再播。
    *  untilNextRun=true：到用户下一次发起回合（runStarted）才解除——同一回合里工具调用后的后续作答也不读；
    *  false（宿主拿不到 running 时）：下一次 agent-speaking 即解除。 */
@@ -343,6 +355,13 @@ function getTabId(fresh = false): string {
 let TAB_ID = getTabId()
 /** 本页面内 bus 实例代数：插件热更新会在同一页面再建一个 bus，旧实例据此识别自己已过期。 */
 const BUS_GEN_KEY = '__dshvmBusGen'
+/** 焦点归属 token 计数：每个 MicButton 实例一个唯一 token（实例级所有权——
+ *  某个实例卸载只释放自己的持有，不清掉另一个实例仍持有的焦点）。 */
+let focusOwnerSeq = 0
+/** 设置 scope 的失效钩子：host 广播 SSE 'display'（别的标签页改了显示类设置）时
+ *  让本页设置 scope 重拉一次，否则本页设置卡一直显示旧值。
+ *  由 apply() 在 scope 就绪后登记；bus 的 display 事件早于 scope 创建时安全跳过。 */
+let settingsScopeInvalidate: (() => void) | null = null
 
 /** 解析快捷键字符串（如 Ctrl+Shift+V）→ 修饰键 + 主键；非法返回 null。 */
 function parseShortcut(s: string): { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean; key: string } | null {
@@ -497,7 +516,19 @@ export function apply(ctx: any): void {
   //  - 数据面：有 settingsScope（≤0.1.6）走官方设置存储；0.1.7+ 无该服务、官方存储拒写本插件条目
   //    （settings/rejected），走插件自己的 /voice-mode/settings。
   const settingsScope = (ctx as any).get?.('settingsScope')
-  const scope: MenuScope = settingsScope ? settingsScope.bind({ namespace: 'voice-mode' }) : createHttpScope()
+  let scope: MenuScope
+  if (settingsScope) {
+    // ≤0.1.6：官方设置存储（自带跨标签页同步），无需失效桥。
+    scope = settingsScope.bind({ namespace: 'voice-mode' })
+    settingsScopeInvalidate = null
+  } else {
+    // 0.1.7+：插件自己的 /voice-mode/settings。底层只有「0→1 订阅 → 必重拉」这一条
+    // 重拉入口，用桥把卡片订阅收在一份底层订阅后面：host 广播 display（别的标签页
+    // 改了显示类设置）时退订再订阅，逼出一次重拉——本页设置卡不再一直显示旧值。
+    const bridge = createScopeBridge(createHttpScope())
+    scope = bridge.scope
+    settingsScopeInvalidate = bridge.invalidate
+  }
   ctx.slots.inject('settings.plugin.item', () =>
     ctx.slots.register(
       {
@@ -770,6 +801,10 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
   let activeSessionId: string | null = null
   /** 本标签页正在看的会话（MicButton 上报）。 */
   let focusedSessionId: string | null = null
+  /** 焦点归属表：上报者实例 token → 它上报的会话（实例级所有权）。
+   *  同一标签页内可能有多个 MicButton 实例并存（宿主两个槽位各挂一个，兜底切换
+   *  期间短暂共存）；某个实例卸载只释放自己的持有，不清掉别人仍持有的焦点。 */
+  const focusOwners: FocusOwners = new Map()
   /** host 认定的「焦点标签页」：readAloud=always 只在它上面播，同一会话开多个标签页也不叠播。 */
   let focusOwnerTab: string | null = null
   /** host 广播的语音模式归属：该会话在别的标签页语音模式中时，「总是朗读」让那个标签页播，本页不叠播。 */
@@ -1099,6 +1134,9 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
       } catch {
         // ignore malformed frame
       }
+      // 别的标签页改了显示类设置 → 本页设置卡也得重拉，否则它一直显示旧值
+      // （本页没切回焦点时不会触发 scope 自己的「获焦重拉」）。
+      settingsScopeInvalidate?.()
     })
     source.addEventListener('focus', (e: MessageEvent<string>) => {
       try {
@@ -1576,14 +1614,22 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
       if (rejectSeqUpTo.get(sessionId) === STOP_READING_LINE) rejectSeqUpTo.delete(sessionId)
       stopUntilRun.delete(sessionId)
     },
-    setFocusedSession(sessionId) {
-      // 只有可见标签页抢焦点；离开会话（null）只在自己仍持有时才清，免得把别处刚报的焦点清掉。
+    setFocusedSession(sessionId, owner = FOCUS_OWNER_DEFAULT) {
+      // 焦点归属到实例级：卸载只释放自己的持有，别人仍持有的焦点不动
+      // （否则「两个实例先后卸载」会把 readAloud=always 的朗读归属永久清空）。
       if (sessionId === null) {
-        if (focusedSessionId === null) return
-        focusedSessionId = null
+        const { changed, focused } = focusRelease(focusOwners, owner)
+        if (!changed) return
+        focusedSessionId = focused
+        if (focused !== null) {
+          // 焦点回落到仍存活的实例 → 同步给 host（否则 host 仍记着已卸载实例的会话）。
+          if (typeof document === 'undefined' || document.visibilityState === 'visible') postFocus(focused)
+          return
+        }
         if (focusOwnerTab === TAB_ID) postFocus(null)
         return
       }
+      focusClaim(focusOwners, owner, sessionId)
       focusedSessionId = sessionId
       if (typeof document === 'undefined' || document.visibilityState === 'visible') postFocus(sessionId)
     },
@@ -1844,6 +1890,11 @@ export function MicButton({
   const breakRef = useRef<(() => Promise<void>) | null>(null)
   /** M2：隐藏 tab 时已暂停收音（可见时恢复）；隐私——避免后台持续录音。 */
   const pausedForHiddenRef = useRef(false)
+  /** 焦点归属 token：本实例唯一（ref 惰性初始化，渲染期只生成一次）。
+   *  焦点上报带上它 → 卸载时只释放自己的持有，另一个实例仍持有的焦点不被清掉。 */
+  const focusOwnerRef = useRef<string | null>(null)
+  if (focusOwnerRef.current === null) focusOwnerRef.current = `mic-${++focusOwnerSeq}`
+  const focusOwner = focusOwnerRef.current
   /** once 模式：一句已发出、麦克风已关，等回复读完再退出（null = 不在等待）。 */
   const onceRef = useRef<{
     sawRun: boolean
@@ -2846,17 +2897,20 @@ export function MicButton({
   useEffect(() => bus.subscribe(() => checkOnce()), [bus])
 
   // 当前可见会话上报（readAloud=always 只朗读它）：切会话/切回标签页时重报，卸载时让出。
+  // 带上本实例的焦点 token：卸载只释放自己的持有——另一实例（宿主两个槽位各挂一个
+  // 麦克风，兜底切换期间会短暂并存）仍持有的焦点不被清掉。
   useEffect(() => {
     if (!sessionId) return
-    bus.setFocusedSession(sessionId)
+    bus.setFocusedSession(sessionId, focusOwner)
     const onVis = (): void => {
-      if (document.visibilityState === 'visible') bus.setFocusedSession(sessionId)
+      if (document.visibilityState === 'visible') bus.setFocusedSession(sessionId, focusOwner)
     }
     document.addEventListener('visibilitychange', onVis)
     return () => {
       document.removeEventListener('visibilitychange', onVis)
-      bus.setFocusedSession(null)
+      bus.setFocusedSession(null, focusOwner)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bus, sessionId])
 
   // 会话切换让出（组件卸载兜底）

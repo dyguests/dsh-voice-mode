@@ -2247,6 +2247,56 @@ function onceFinished(o, running, ttsDrained, playing) {
 function isPrimaryPress(button) {
   return button === 0;
 }
+var FOCUS_OWNER_DEFAULT = "default";
+function focusSession(owners) {
+  let last = null;
+  for (const sessionId of owners.values()) last = sessionId;
+  return last;
+}
+function focusClaim(owners, owner, sessionId) {
+  owners.delete(owner);
+  owners.set(owner, sessionId);
+}
+function focusRelease(owners, owner) {
+  const before = focusSession(owners);
+  owners.delete(owner);
+  const focused = focusSession(owners);
+  return { changed: before !== focused, focused };
+}
+function createScopeBridge(raw) {
+  const listeners = /* @__PURE__ */ new Set();
+  let off = null;
+  const forward = () => {
+    for (const fn of [...listeners]) fn();
+  };
+  const scope = {
+    getSnapshot: () => raw.getSnapshot(),
+    subscribe(fn) {
+      listeners.add(fn);
+      if (listeners.size === 1) off = raw.subscribe(forward);
+      return () => {
+        listeners.delete(fn);
+        if (listeners.size === 0 && off !== null) {
+          off();
+          off = null;
+        }
+      };
+    },
+    set: (field, value) => raw.set(field, value)
+  };
+  return {
+    scope,
+    invalidate() {
+      if (typeof raw.invalidate === "function") {
+        raw.invalidate();
+        return;
+      }
+      if (listeners.size === 0) return;
+      off?.();
+      off = raw.subscribe(forward);
+    }
+  };
+}
 
 // src/runtime-boot.ts
 var runtimeBoot = null;
@@ -3521,7 +3571,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "080da15";
+var BUILD_TAG = "3154433";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3582,6 +3632,8 @@ function getTabId(fresh = false) {
 }
 var TAB_ID = getTabId();
 var BUS_GEN_KEY = "__dshvmBusGen";
+var focusOwnerSeq = 0;
+var settingsScopeInvalidate = null;
 function parseShortcut(s) {
   const parts = (s || "").split("+");
   const mods = { ctrl: false, shift: false, alt: false, meta: false };
@@ -3709,7 +3761,15 @@ function apply(ctx) {
     )
   );
   const settingsScope = ctx.get?.("settingsScope");
-  const scope = settingsScope ? settingsScope.bind({ namespace: "voice-mode" }) : createHttpScope();
+  let scope;
+  if (settingsScope) {
+    scope = settingsScope.bind({ namespace: "voice-mode" });
+    settingsScopeInvalidate = null;
+  } else {
+    const bridge = createScopeBridge(createHttpScope());
+    scope = bridge.scope;
+    settingsScopeInvalidate = bridge.invalidate;
+  }
   ctx.slots.inject(
     "settings.plugin.item",
     () => ctx.slots.register(
@@ -3916,6 +3976,7 @@ function createAudioEngine(setUi, onPlayed, onPlaybackRef, onAllPlayed) {
 function createVoiceBus(basePath = BASE_PATH2, ctx) {
   let activeSessionId = null;
   let focusedSessionId = null;
+  const focusOwners = /* @__PURE__ */ new Map();
   let focusOwnerTab = null;
   let voiceActive = null;
   let voiceOwnerTab = null;
@@ -4174,6 +4235,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
         notify();
       } catch {
       }
+      settingsScopeInvalidate?.();
     });
     source.addEventListener("focus", (e) => {
       try {
@@ -4530,13 +4592,19 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
       if (rejectSeqUpTo.get(sessionId) === STOP_READING_LINE) rejectSeqUpTo.delete(sessionId);
       stopUntilRun.delete(sessionId);
     },
-    setFocusedSession(sessionId) {
+    setFocusedSession(sessionId, owner = FOCUS_OWNER_DEFAULT) {
       if (sessionId === null) {
-        if (focusedSessionId === null) return;
-        focusedSessionId = null;
+        const { changed, focused } = focusRelease(focusOwners, owner);
+        if (!changed) return;
+        focusedSessionId = focused;
+        if (focused !== null) {
+          if (typeof document === "undefined" || document.visibilityState === "visible") postFocus(focused);
+          return;
+        }
         if (focusOwnerTab === TAB_ID) postFocus(null);
         return;
       }
+      focusClaim(focusOwners, owner, sessionId);
       focusedSessionId = sessionId;
       if (typeof document === "undefined" || document.visibilityState === "visible") postFocus(sessionId);
     },
@@ -4722,6 +4790,9 @@ function MicButton({
   const manualHoldRef = (0, import_react3.useRef)(false);
   const breakRef = (0, import_react3.useRef)(null);
   const pausedForHiddenRef = (0, import_react3.useRef)(false);
+  const focusOwnerRef = (0, import_react3.useRef)(null);
+  if (focusOwnerRef.current === null) focusOwnerRef.current = `mic-${++focusOwnerSeq}`;
+  const focusOwner = focusOwnerRef.current;
   const onceRef = (0, import_react3.useRef)(null);
   const [onceWaiting, setOnceWaiting] = (0, import_react3.useState)(false);
   const [onceEnding, setOnceEnding] = (0, import_react3.useState)(false);
@@ -5479,14 +5550,14 @@ function MicButton({
   (0, import_react3.useEffect)(() => bus.subscribe(() => checkOnce()), [bus]);
   (0, import_react3.useEffect)(() => {
     if (!sessionId) return;
-    bus.setFocusedSession(sessionId);
+    bus.setFocusedSession(sessionId, focusOwner);
     const onVis = () => {
-      if (document.visibilityState === "visible") bus.setFocusedSession(sessionId);
+      if (document.visibilityState === "visible") bus.setFocusedSession(sessionId, focusOwner);
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       document.removeEventListener("visibilitychange", onVis);
-      bus.setFocusedSession(null);
+      bus.setFocusedSession(null, focusOwner);
     };
   }, [bus, sessionId]);
   (0, import_react3.useEffect)(() => {

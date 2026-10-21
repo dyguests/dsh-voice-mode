@@ -212,6 +212,65 @@ await t('M7②：close() 取消退避重启计时器，close 后 pump 不得再�
 })
 
 // ---------------------------------------------------------------------------
+// T-2：失败退避的**墙钟封顶值** 8000ms 原无行为锁——把 Math.min(8000, …) 放宽成
+// Math.min(30000, …) 本文件 16 项仍全绿。onSkip 的连败计数有锁（tts-playback）、
+// 只有封顶值没有。影响面：本地 TTS 连续失败时句间静默间隔从 8s 拉长到 30s。
+//
+// 观测面：退避重启就是 setTimeout(fn, delay)，delay 即墙钟。故在**本用例的窗口内**把
+// globalThis.setTimeout 换成记账版——记录 delay 后按 1ms 真实落定，既不必真等 8s×9，
+// 也不会因压缩而掩盖 delay 的取值；>=200ms 的 400/800ms 重试 sleep 一并压缩（否则
+// 每句 1.2s ×11 句）。finally 里把 setTimeout 原样还回，不影响后续用例。
+// 断言整个 delay **序列**而非「出现过 8000」：放宽后 8000 仍会出现（只是后面继续爬到
+// 9000/10000），只判出现会漏。
+// ---------------------------------------------------------------------------
+await t('T-2：失败退避墙钟封顶 8s（1s 起步递增，封顶后不外溢）', async () => {
+  const realSetTimeout = globalThis.setTimeout
+  const realSleep = (ms) => new Promise((r) => realSetTimeout(r, ms))
+  const delays = []
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    if (typeof ms !== 'number') return realSetTimeout(fn, ms, ...rest)
+    if (ms >= 1000) {
+      delays.push(ms)
+      return realSetTimeout(fn, 1, ...rest)
+    }
+    return realSetTimeout(fn, ms >= 200 ? 1 : ms, ...rest) // 400/800ms 重试 sleep：只压缩不记账
+  }
+  let q
+  try {
+    // 恒失败 + onSkip 抛错 → 每句耗尽 3 次重试后经外层 catch 落进失败退避分支
+    // （与 M7② 同一条构造：内层 for 已吞掉 synthesize 错误，只有 onSkip 抛错能逃出泵）。
+    const eng = {
+      mime: 'audio/wav',
+      updateVoice() {},
+      async synthesize(text) {
+        throw new Error(`ETIMEDOUT (stub: ${text})`)
+      },
+      async close() {},
+    }
+    q = new TtsQueue({
+      engine: eng,
+      onSkip: () => {
+        throw new Error('onSkip boom (stub)')
+      },
+    })
+    // 11 句：第 1 句走 delay=0 即时重启（不排 timer），第 2-10 句各排一个退避 timer，
+    // 第 11 句把队列排空走 onIdle 分支（不排 timer）→ 共 9 个可观测退避 delay。
+    for (let i = 0; i < 11; i++) q.enqueue('s1', `S${i + 1}`)
+    const t0 = Date.now()
+    while (delays.length < 9 && Date.now() - t0 < 20000) await realSleep(5)
+    assert.equal(delays.length, 9, `前置条件：应观察到 9 个退避 delay（实际 ${delays.length}：${JSON.stringify(delays)}）`)
+    assert.deepEqual(
+      delays,
+      [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 8000],
+      `退避序列不是「1s 起步递增 + 8s 封顶」：${JSON.stringify(delays)}——封顶放宽会让连败时句间静默从 8s 一路涨到 30s`,
+    )
+  } finally {
+    globalThis.setTimeout = realSetTimeout
+    await q?.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
 // I-1（Issue #15 R12，Important）：TtsQueue 缺 closed 闸门。
 // 泄漏链（热重载常态路径，非异常路径）：close() 后仍有三条路触达 engine.synthesize——
 //  1) enqueue 无守卫直接 void this.pump()；

@@ -4,13 +4,29 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { isEditingShortcut, isPrimaryPress, onceFinished, takeToggleSlot } from '../src/mic-gesture.ts'
+import { createScopeBridge, isEditingShortcut, isPrimaryPress, onceFinished, takeToggleSlot } from '../src/mic-gesture.ts'
+import { createHttpScope } from '../src/settings-http-scope.ts'
 
 let passed = 0
 const t = (name, fn) => {
   fn()
   passed++
   console.log('  ✓ ' + name)
+}
+/** 异步版（设置 scope 的拉取是 promise）。 */
+const ta = async (name, fn) => {
+  await fn()
+  passed++
+  console.log('  ✓ ' + name)
+}
+/** 轮询等待条件成立（比固定 sleep 稳）。 */
+const waitFor = async (fn, timeoutMs = 3000) => {
+  const t0 = Date.now()
+  for (;;) {
+    if (fn()) return true
+    if (Date.now() - t0 > timeoutMs) return false
+    await new Promise((r) => setTimeout(r, 10))
+  }
 }
 const combo = (s) => {
   const parts = s.toLowerCase().split('+')
@@ -103,6 +119,82 @@ t('右键菜单仍能开：守卫只落在 pointerdown/up，未波及 onContextM
     clientSrc.split('isPrimaryPress(e.button)').length - 1,
     2,
     '守卫只应出现在 onPointerDown / onPointerUp 两处',
+  )
+})
+
+// --------------------------------------------------------------------------
+// 设置 scope 失效桥：host 对任一标签页、任一路径的显示类设置改动都广播 SSE 'display'
+// （载荷 = readAloud / showCaptions / showStatusBar）。设置卡片原先拿不到这条广播
+// （EventSource 只在麦克风按钮那侧订阅）→ 别的标签页改了显示类设置，本页设置卡一直
+// 显示旧值；本页不切回焦点时也不会触发 scope 自己的「获焦重拉」。
+// 这里直接用真实的 createHttpScope + 桥，验证「收到 display → scope 重拉一次」。
+// --------------------------------------------------------------------------
+await ta('display 事件 → 设置 scope 重拉一次（别的标签页改了显示类设置，本页不再显示旧值）', async () => {
+  let fetches = 0
+  let payload = { readAloud: 'voice' }
+  const fetchImpl = async () => {
+    fetches++
+    return { ok: true, status: 200, json: async () => ({ value: payload }) }
+  }
+  const raw = createHttpScope('http://scope.test', fetchImpl)
+  const bridge = createScopeBridge(raw)
+  const seen = []
+  const off = bridge.scope.subscribe(() => seen.push(bridge.scope.getSnapshot().value.readAloud))
+  assert.ok(await waitFor(() => fetches === 1 && seen.length === 1), '设置卡挂载时应拉取一次并推给订阅者')
+  assert.deepEqual(seen, ['voice'], '首次拉取值应发给订阅者')
+  // 别的标签页改了显示类设置 → host 广播 display → 本页 scope 失效重拉
+  payload = { readAloud: 'always' }
+  bridge.invalidate()
+  assert.ok(
+    await waitFor(() => fetches === 2 && seen.length === 2),
+    `收到 display 事件后设置 scope 未重拉（fetches=${fetches}）`,
+  )
+  assert.equal(bridge.scope.getSnapshot().value.readAloud, 'always', '重拉后应拿到新值')
+  assert.deepEqual(seen, ['voice', 'always'], '重拉后的新值应推给订阅者（设置卡才会更新）')
+  off()
+})
+
+await ta('桥不破坏「重新挂载必重拉」：退订后再订阅仍会拉一次', async () => {
+  let fetches = 0
+  const fetchImpl = async () => {
+    fetches++
+    return { ok: true, status: 200, json: async () => ({ value: { readAloud: 'voice' } }) }
+  }
+  const raw = createHttpScope('http://scope.test', fetchImpl)
+  const bridge = createScopeBridge(raw)
+  const off1 = bridge.scope.subscribe(() => {})
+  assert.ok(await waitFor(() => fetches === 1 && bridge.scope.getSnapshot().status === 'ready'), '挂载应拉一次')
+  off1()
+  const off2 = bridge.scope.subscribe(() => {})
+  assert.ok(await waitFor(() => fetches === 2), '重新挂载应再拉一次（失败终态由此恢复）')
+  off2()
+})
+
+await ta('底层自带 invalidate() 时优先用它（不再走退订再订阅）', async () => {
+  let invalidated = 0
+  const raw = {
+    getSnapshot: () => ({ status: 'ready', value: {} }),
+    subscribe: () => () => {},
+    set: () => {},
+    invalidate: () => {
+      invalidated++
+    },
+  }
+  const bridge = createScopeBridge(raw)
+  const off = bridge.scope.subscribe(() => {})
+  bridge.invalidate()
+  assert.equal(invalidated, 1, '底层有失效入口时应直接调用它')
+  off()
+})
+
+t('接线：client.tsx 的 display 事件触发设置 scope 失效重拉', () => {
+  const start = clientSrc.indexOf("source.addEventListener('display'")
+  assert.notEqual(start, -1, 'client.tsx 里找不到 display 事件监听')
+  const body = clientSrc.slice(start, start + 600)
+  assert.ok(/settingsScopeInvalidate\?\.\(\)/.test(body), 'display 事件未触发设置 scope 失效——设置卡仍旧值')
+  assert.ok(
+    /settingsScopeInvalidate = bridge\.invalidate/.test(clientSrc),
+    'apply() 未把桥的失效钩子登记给 bus（display 事件无处可叫）',
   )
 })
 

@@ -42,6 +42,14 @@ t('剥离图片与 HTML', () => {
   const out = plainText('![图](a.png) <b>粗</b>').replace(/\s+/g, ' ').trim()
   assert.equal(out, '粗')
 })
+t('plainText 剥离 ``` 代码块（双保险契约：生产路径已被 dropFences 预先处理，但 plainText 自身须锁）', () => {
+  // 现状：plainText 的两个生产调用点（feed 的 dropFences 之后、flush 的围栏回退）输入都已
+  // 过 dropFences，整块正则实际永不命中——删掉它全套件仍绿。若将来 plainText 被改用在未过
+  // dropFences 的原始文本上（如新增调用点），没有这条锁就会静默失效：无测试兜底。
+  assert.equal(plainText('看代码：\n```js\nconst a = 1;\n```\n改好了。'), '看代码：\n \n改好了。')
+  assert.equal(plainText('前 ```code``` 后'), '前   后') // 行内围栏：块正则整段吃掉（不是行内反引号规则）
+  assert.equal(plainText('a\n```\nlet x = 1;\n```\nb'), 'a\n \nb')
+})
 
 console.log('sanitizeForTts')
 t('剔除会被英文念出的 markdown 噪声字符（批 4 收口：> 字符不再被剥——emotion 标签闭合需要）', () => {
@@ -153,6 +161,22 @@ t('围栏恰在 delta 末尾时 3/4/5/6 个反引号都识别为围栏（1/2 个
     out.push(...s.flush())
     assert.deepEqual(out, ['看代码：', '改好了。', '下一步。'], `${n} 反引号：代码被念出或正文丢失`)
   }
+})
+t('相邻裸围栏标记分属不同 delta（6 个连续反引号=空块开闭）仍算两个标记', () => {
+  // 锁 dropFences 悬挂判定的**上界**（hang <= 2）：只有尾部 1-2 个反引号是被切开的围栏
+  // （跨 delta 的 1+2 / 2+1 形态），3 个及以上是完整围栏标记，必须整段留给后面的扫描。
+  // 谓词放宽成 `hang > 0` 时：d1 末尾的 ``` 被挪进 ticks，与 d2 的 ``` 合成**一个** 6 连
+  // 标记 → 奇偶翻转少一次 → 空块不成对、d2 的代码被塞进 fenced 抑制桶（只在 flush 回吐
+  // 或压根被下一次闭合作废），d4 的代码反而照常念出。
+  const s = new SentenceSegmenter()
+  const out = []
+  for (const d of ['看代码：\n```', '```\nconst a = 1;\n', '```', '\nlet b = 2;\n', '```', '\n改好了。']) out.push(...s.feed(d))
+  out.push(...s.flush())
+  assert.deepEqual(
+    out,
+    ['看代码：', 'const a 1;', '改好了。'],
+    '相邻 delta 的两个裸 ``` 必须各算一个围栏标记——否则 6 连反引号被当一个、奇偶翻转少一次（空块后的代码被吞、真实块内的代码被念出）',
+  )
 })
 t('未配对围栏在流结束回退输出被抑制内容（不丢正文）', () => {
   const s = new SentenceSegmenter()

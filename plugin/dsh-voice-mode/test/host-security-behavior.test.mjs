@@ -652,6 +652,28 @@ await t("I-2' 「停止朗读」后本回合余句不再入队（不合成、不
 
 await t("I-2' 下一回合恢复朗读（静音只覆盖当回合，与客户端拒绝线同一解除边界）", async () => {
   reset()
+  // 前提自证：本用例自己经 /cancel 建立「本回合静音」，再断言新回合恢复。此前它依赖上一个
+  // 用例（:636）留下的静音态，而 reset() 只清观测缓冲、不动 host 内部的 readMuted——上游
+  // 一旦缺失，本用例就退化为「某回合能出声」的平凡断言且**不报错**（删 :636 全文件仍绿）。
+  // 唯一能观测静音态的位置是**当回合的 feed 站点**（静音在新回合的 tap 安装处即被解除），
+  // 所以前提只能在本回合内自建：先让首句出声 → /cancel → 同回合余句必须不朗读。
+  // 余句必须真喂进去（流只剩首句时，后续 next() 已到迭代尾部，断言会退化成恒真）。
+  const it = openTap(VOICE_SID, ['静音前的首句。', '静音后的余句。', '以及没说完的尾巴'])
+  await it.next() // 首句入队并出声
+  assert.ok(await waitFor((s) => spoken().includes('静音前的首句。')), '前置条件：首句没合成')
+  const cancelRes = await postCancel(VOICE_SID)
+  assert.equal(cancelRes.statusCode, 200, `前置条件：/cancel 未成功（statusCode=${cancelRes.statusCode}）——静音态没建立`)
+  await it.next() // 静音后的同回合余句（feed 站点）：必须不朗读
+  await it.next() // 尾巴半句（feed 站点）：必须不朗读
+  await it.next() // 迭代到底 → tap 的 finally flush 残留（flush 站点）：同样必须不朗读
+  await sleep(60)
+  drain()
+  assert.equal(
+    spoken().length,
+    1,
+    `前提不成立：/cancel 后同一回合仍在朗读（${JSON.stringify(spoken())}）——「静音只覆盖当回合」无从谈起`,
+  )
+  // 新回合：静音必须在回合边界解除
   await drive(VOICE_SID, '新回合的一句。')
   assert.ok(await waitFor((s) => spoken().includes('新回合的一句。')), '新回合没恢复朗读——静音闸门没在回合边界解除')
 })
