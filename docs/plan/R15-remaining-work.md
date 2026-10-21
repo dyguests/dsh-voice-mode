@@ -83,7 +83,7 @@ R15 阶段围绕**已发布代码（v0.7.27）**做了三轮「独立 sweep → 
 - 「既有失败」与「变异命中」必须分开判：先确认**基线先验绿**，再施加变异。
 - 定位用 `git show HEAD:<path>`（提交态），避免并行代理的在途改动污染行号。
 
-### P0-3｜H-11：采纳基准可能把「后一个回合」当成静音回合（Important，**fix-host 正在修**）
+### P0-3｜H-11：采纳基准可能把「后一个回合」当成静音回合（Important）—— ✅ **已修**（`16072be`）
 
 `src/index.ts` 的采纳分支（`mute.turn = curTurn`）在「取消时回合号不可知」（`turnOfSession` 无条目——因焦点转移已 `dropTurnTables` 回收）时，会把**下一回合**的回合号采纳为静音基准 → 该回合被**整段静默**（不合成、不下发、无提示）。**修法**：改用宿主 `agent/pre-step` 的 `step` 字段判真回合边界（fix-host 在途）。
 
@@ -176,6 +176,6 @@ npm run typecheck                # 期望 exit 0
 npm run check:anchors            # 期望 9 锚点全在
 npm run check:doc-anchors        # 期望 exit 0（在基线内）
 ```
-**当前待办 = H-11 收尾（fix-host 在途，见 §2 的 P0-3）+ 剩余 P1/P2/P3**。
+**当前待办 = 剩余 P1 / P2 / P3**（P0-1 回填、P0-2 验真 sweep、P0-3 的 H-11 均已完成，见 §2 与 STATE 的 `5i.`/`5k.`）。
 
 〔P0-1（回填 130 处行号）与 P0-2（重跑第三轮验真 sweep）**均已完成**；第三轮验真轮提出的 3 个 Open Question 已由**守卫硬化**闭合（`docs/rules/STATE.md` 的 `5j.` 条目）〕
