@@ -7,7 +7,7 @@
 
 > **命名纠正（2026-09-16）**：原文件名 `0003-client-side-vad.md` 暗示 VAD 已下沉到客户端，与实际不符。
 > 真实运行态：Silero VAD 位于 host 侧（`src/asr-host.ts:752-765` detect 异步函数内 `acceptWaveform`（:758）→ `isDetected`（:759）→ `isSpeech`（:763）；2026-10-20 10:30 实测刷新），
-> 客户端只做计数（`src/client.tsx:37` `INT_CONFIRM_FRAMES`）。本 ADR 的「下沉」是**未实施的提议**，
+> 客户端只做计数（`src/client.tsx:38` `INT_CONFIRM_FRAMES`，:37 是其文档注释；原值 37 已漂移 Δ1，2026-10-21 按符号定位刷新）。本 ADR 的「下沉」是**未实施的提议**，
 > 故重命名为 `0003-server-side-vad.md`，标题同步纠正；正文「决策（提议）」段保留原提议内容（搬迁方向与代价分析）。
 >
 > **批 7N 落地（2026-09-16）**：
@@ -25,7 +25,7 @@
   → 客户端连续 confirmFrames 次为真 → 回声门控 → hardBreak
 ```
 
-判定信号在 host 产生（`src/asr-host.ts:752-765`，detect 异步函数内 acceptWaveform（:758）→ isDetected（:759）→ isSpeech（:763）；2026-10-20 10:30 实测刷新），客户端只做计数（`src/client.tsx:37` `INT_CONFIRM_FRAMES[interruptLevel]`）。
+判定信号在 host 产生（`src/asr-host.ts:752-765`，detect 异步函数内 acceptWaveform（:758）→ isDetected（:759）→ isSpeech（:763）；2026-10-20 10:30 实测刷新），客户端只做计数（`src/client.tsx:38` `INT_CONFIRM_FRAMES[interruptLevel]`，:37 是其文档注释；原值 37 已漂移 Δ1）。
 
 实测确认延迟 ≈525ms（CONTEXT.md 记录）。拆解：
 
@@ -33,12 +33,12 @@
 |---|---|---|
 | 轮询量化 | 平均 64ms（最坏 128ms） | 见下方「栅格更正」 |
 | 上行 + host 推理 + 下行 | 数十 ms | 回环 HTTP + JSON + Silero 推理 |
-| 确认帧 | **384 / 256 / 128ms** | `INT_CONFIRM_FRAMES = {0:3, 1:2, 2:1}`（`src/client.tsx:37`）× 128ms 栅格 |
+| 确认帧 | **384 / 256 / 128ms** | `INT_CONFIRM_FRAMES = {0:3, 1:2, 2:1}`（`src/client.tsx:38`）× 128ms 栅格 |
 | Silero 自身窗口 | ~32ms/帧 | 模型固有 |
 
 > **栅格更正（2026-09-02）**：本表初版把确认窗写成 300/200/100ms，**错了**。
 > AudioWorklet 每 1024 样本 = 64ms 投一帧（`src/audio-worklet.ts:27-28` `CHUNK = 1024` 定义——原 :31-32 是 NEED 推导行，2026-10-20 实测刷新；真 worklet 接线在 `src/asr.ts:1170-1177`，`new AudioWorkletNode` 在 :1177；worklet 文件实长 73 行），而 `MAX_SEGMENT_MS` 滚窗重置在 `src/asr.ts:945`（待机路径 :972、hold 路径 :1016；**与栅格无关**——原「:700 一带」已漂移，2026-10-20 实测刷新）；真正的派发条件是 `nowMs - lastPollAt >= 100` 且仅在派发时推进 `lastPollAt`——64ms 的帧永远要攒两帧才够 100ms，**稳态派发间隔是 128ms**。
-> 三档确认窗实际为 384 / 256 / 128ms。`src/client.tsx:1896-1898` 的 `isSpeechTrueCount = 0`（进入 enterMode（:1893）时的残留计数复位）与 `setLocalMode('pending')`（:1901）——2026-10-20 实测刷新（原 1382-1386 区现为 VoiceBootConfig 字段）。
+> 三档确认窗实际为 384 / 256 / 128ms。`src/client.tsx:2344` 的 `isSpeechTrueCount = 0`（进入 `enterMode`（:2339）时的残留计数复位，:2342 为其健壮性注释）与 `setLocalMode('pending')`（:2347）——2026-10-21 按符号定位刷新：原值 `:1896-1898` 落在 `useRef` 声明处、`:1893` 是 M2 重渲染注释、`:1901` 是 model 进度注释，**均已漂移**（Δ345 上下；另有 `isSpeechTrueCount = 0` 另 4 处：:2040 抢占/让出、:2315 退出、:2462/:2495/:2513 打断路径）。更早的原 1382-1386 区现为 VoiceBootConfig 字段）。
 > 复核：`node scripts/bench-echo-gate.mjs` §4。
 > 这也解释了实测的 525ms（384 + Silero 窗口 + 往返），并意味着**下沉能省掉的比原估计更多**。
 

@@ -13,15 +13,15 @@
 | `echoGateDb` | 6 dB | 设置默认 |
 | 检测 VAD 阈值 | 0.35 | `src/asr-host.ts:355` |
 | 端点 VAD 阈值 | 0.5 | `src/asr-host.ts:340` |
-| `INT_CONFIRM_FRAMES` | 3 / 2 / 1 | `src/client.tsx:37` |
+| `INT_CONFIRM_FRAMES` | 3 / 2 / 1 | `src/client.tsx:38`（:37 为其文档注释） |
 | `peakDecay` 基数 | 0.9 per 64ms | `src/asr.ts:869` |
 | `floorAlpha` 基数 | 0.98 per 64ms | `src/asr.ts:870` |
 | `SPEECH_RMS` | 0.015 | `src/asr.ts:162` |
 | `VAD_CONTINUE_RMS` | 0.02 | `src/asr-host.ts:171` |
 | `MIN_SPEECH_MS` | 250 | `src/asr.ts:167` |
-| 确认窗口 | 800 / 350 / 200ms（连词/长句/短句；另有「无新实词 ≥400ms」提前判完） | `src/asr-host.ts:174-177`（+ :529） |
-| delay 置信门 | peak > 0.5 | `src/client.tsx:856-859` |
-| 迟滞衰减 | 连续 2 拍假才减 1 | `src/client.tsx:31`（声明）/ :2075（消费） |
+| 确认窗口 | 800 / 350 / 200ms（连词/长句/短句；另有「无新实词 ≥400ms」提前判完） | `src/asr-host.ts:174-177`（+ :546-563 提前判完分支；原写 :529 现为 `}`，已漂移） |
+| delay 置信门 | peak > 0.5 | `src/client.tsx:988-991`（原写 :856-859 落在 P1-5 延迟埋点 `telemetryStages`，已漂移 Δ132） |
+| 迟滞衰减 | 连续 2 拍假才减 1 | `src/client.tsx:32-34`（`isSpeechFalseRun` 注释 + 声明；原写 :31 是 `interruptFirstAt`，已漂移）/ :2524-2526（消费） |
 
 每一个都是真机试错的产物，git log 里能看到它们被反复调整（如 2a67df7「迟滞降 confirmMs 566~2796→~500ms」）。
 
@@ -42,11 +42,11 @@
 | `echoGateDb` 6 | 设置默认 | ✅ |
 | `peakDecay` 0.9 | `src/asr.ts:869` | ✅ |
 | `floorAlpha` 0.98 | `src/asr.ts:870` | ✅ |
-| `confirmFrames` 3/2/1 | `src/client.tsx:37` | ✅ |
-| 迟滞连续 2 拍 | `src/client.tsx:31` / :2075 | ✅ |
+| `confirmFrames` 3/2/1 | `src/client.tsx:38` | ✅ |
+| 迟滞连续 2 拍 | `src/client.tsx:32-34` / :2524-2526 | ✅ |
 | `SPEECH_RMS` 0.015 | `src/asr.ts:162` | ⏳ 阶段二（分段级联） |
 | `MIN_SPEECH_MS` 250 | `src/asr.ts:167` | ⏳ 阶段二 |
-| delay 置信门 0.5 | `src/client.tsx:856-859` | ⚠️ 仅间接（经 `playingTailUntil` 影响播放态） |
+| delay 置信门 0.5 | `src/client.tsx:988-991` | ⚠️ 仅间接（经 `playingTailUntil` 影响播放态） |
 | 检测 VAD 0.35 | `src/asr-host.ts:355` | ❌ host 侧，需独立重放脚本 |
 | 端点 VAD 0.5 | `src/asr-host.ts:340` | ❌ |
 | `VAD_CONTINUE_RMS` 0.02 | `src/asr-host.ts:171` | ❌ |

@@ -1,12 +1,12 @@
 # docs/qa/ —— 真机验收 / 体验流程
 
-> 真机验收清单（19 项）+ 锚点同步（文档 baseline 与代码 HEAD 一致）。
+> 真机验收清单（24 项：19 项历史 + v0.7.27 新交互 5 项）+ 锚点同步（文档 baseline 与代码 HEAD 一致）。
 
 ## 文件清单
 
 | 文件 | 说明 |
 | --- | --- |
-| [real-machine-acceptance-checklist.md](real-machine-acceptance-checklist.md) | 真机验收 19 项清单（自动化部分见 TEST-SYSTEM.md；当前单测 678 项 / 52 套件） |
+| [real-machine-acceptance-checklist.md](real-machine-acceptance-checklist.md) | 真机验收 24 项清单（19 项历史 + **阶段 8：v0.7.27 新交互 5 项**，2026-10-21 补齐；自动化部分见 TEST-SYSTEM.md；当前单测 709 项 / 53 套件） |
 | [must-verify-manually.md](must-verify-manually.md) | 必须人工复核最小清单（4 项必过发版门禁） |
 | [TEST-SYSTEM.md](TEST-SYSTEM.md) | 长期测试体系（维持·迭代·反馈·完善：四层验证维度 + 维持/迭代循环 + 已知陷阱） |
 
@@ -25,4 +25,4 @@
 ## 维护纪律
 
 - 锚点同步：`real-machine-acceptance-checklist.md` 的 commit / 测试数随 release tag 更新
-- 真机验收不引入新依赖；不接受聚合测试替代 19 项单测
+- 真机验收不引入新依赖；不接受聚合测试替代 24 项单测

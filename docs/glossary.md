@@ -17,10 +17,10 @@ AEC 用来"知道扬声器在播什么"的输入。本项目的参考来自页�
 AEC 之后仍留在麦克风信号里的回声 + 用户语音。`echoLevels().residualRms` 即当前帧残差 RMS。诊断行里的 `resid`。
 
 **回声地板（echo floor）**
-"纯回声期"残差的慢均值，代表"这台设备此刻消不干净的回声大概多响"。仅在播放期且非双讲时更新，句间停顿保持不清空（`src/asr.ts:580-590`）。诊断行里的 `floor`。**塌到 0 是自打断的经典根因。**
+"纯回声期"残差的慢均值，代表"这台设备此刻消不干净的回声大概多响"。仅在播放期且非双讲时更新，句间停顿保持不清空（`src/asr.ts:817` `echoFloorRms` 声明 + `:881-882` 地板更新（`else if (!doubleTalk)` 双讲冻结）；原锚点 `:580-590` 已漂移，该区现为 `fixtureRecorder.isActive` 分支 + `resetGate` FIFO 串行化）。诊断行里的 `floor`。**塌到 0 是自打断的经典根因。**
 
 **残差峰值（echo peak）**
-残差的峰值保持值，~0.4s 慢衰减（`src/asr.ts:578`）。门控用它而非瞬时值——用户说话有音节间隙，瞬时值会在间隙掉回回声水平被误拒。诊断行里的 `peak`。
+残差的峰值保持值，~0.4s 慢衰减（`src/asr.ts:820` `echoPeak` 声明 + `:869` `peakDecay = 0.9^(ms/64)` + `:873-874` 峰值保持；原锚点 `:578` 已漂移，该行现为 `}`）。门控用它而非瞬时值——用户说话有音节间隙，瞬时值会在间隙掉回回声水平被误拒。诊断行里的 `peak`。
 
 **回声门控（echo gate）**
 判"这是人声还是回声"的最后一道：`echoPeak > echoFloor × 10^(echoGateDb/20)`（`src/asr.ts` `aboveEchoFloor`）。`echoGateDb` 默认 6 dB。
@@ -47,7 +47,7 @@ AEC 之后仍留在麦克风信号里的回声 + 用户语音。`echoLevels().re
 | 实例 | 阈值 | 用途 | 位置 |
 |---|---|---|---|
 | 端点 VAD | 0.5（保守） | 断句：静音 ≥ silenceMs（默认 1.5s）判一句说完 | `src/asr-host.ts` `newVad` |
-| 检测 VAD | 0.35（灵敏） | 打断：抓人声前沿 | `src/asr-host.ts:330` |
+| 检测 VAD | 0.35（灵敏） | 打断：抓人声前沿 | `src/asr-host.ts:355`（`const vad = newVad(vadPath, 0.35)`；原锚点 `:330` 已漂移，该行落在 `debug: 0` 配置项） |
 
 两者不共享状态——朗读期的回声若混入端点 VAD 会污染断句。
 
@@ -77,7 +77,7 @@ AI 朗读期间的独立上行：AEC 后的麦克风帧送 host 检测 VAD，不
 AI 朗读时用户开口，朗读立即停止且用户的话被听见。本项目的完整动作：本地停播 → TTS 队列 epoch++ → host 取消当前 LLM 回合（`keepInbox: true`）→ 丢弃残留段（`src/client.tsx` `hardBreak`）。
 
 **确认帧（confirm frames）**
-`isSpeech` 连续为真多少拍才判"真的是人在说话"。`interruptLevel` 0/1/2 → 3/2/1 帧（`src/client.tsx:32`）。**注意：0 是高门槛（最稳最慢），数值越大门槛越低。**
+`isSpeech` 连续为真多少拍才判"真的是人在说话"。`interruptLevel` 0/1/2 → 3/2/1 帧（`src/client.tsx:38` `INT_CONFIRM_FRAMES`）。**注意：0 是高门槛（最稳最慢），数值越大门槛越低。**
 
 **打断确认延迟（confirmMs）**
 VAD 首次判真 → 触发 `hardBreak` 的耗时。当前实测 ≈525ms（CONTEXT.md）。

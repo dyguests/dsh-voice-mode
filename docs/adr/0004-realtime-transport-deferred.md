@@ -31,8 +31,10 @@
 | `segmentEpoch` | `src/asr.ts:251` | 弃段/定稿后迟到的 partial 响应 |
 | `detectGeneration` | `src/asr.ts:267` | 重置后旧 vadOnly 响应推进 `detectSent` 水位 |
 | `resetGen` | `src/asr-host.ts` | 定稿期间会话被 reset，陈旧缓存写回 |
-| `turnGen` | `src/index.ts:552`（声明 Map）+ :916-924（get/set/守卫） | 旧回合的 turn state 覆盖新回合 |
+| `turnGen` | `src/index.ts:613`（声明 Map `const turnGen = new Map<string, number>()`）+ :995-1006（get/set/迟到回合守卫；:618 会话清理 delete） | 旧回合的 turn state 覆盖新回合 |
 | TTS `q.epoch` | `src/tts-queue.ts:212`（SessionQueue.epoch 类型声明；接口 :207） | 打断后积压句子与孤儿泵继续广播 |
+
+**锚点刷新声明（2026-10-21，绑定 HEAD `080da15`）**：上表 `turnGen` 一行原写 `src/index.ts:552`（声明）+ `:916-924`（get/set/守卫），两条均已漂移——`:552` 现落在 `persistSettings` 内的 `run()` 辅助函数，`:916-924` 现为 `scopeRef.watch(applyVset)` + 「0.1.7+ 路径 B 写入串行化」注释区（与 `turnGen` 无关）；实际声明在 `:613`、get/set/守卫在 `:995-1006`。本表其余四行（`asr.ts:251` / `asr.ts:267` / `asr-host.ts` resetGen / `tts-queue.ts:212`+`:207`）经复核**未漂移**，保留原值。
 
 另有 `uploadedSamples` / `seg.fed` / `detectSent` 三个字节水位，用于在"包可能丢失、可能重复、可能乱序"的前提下做幂等增量。
 
