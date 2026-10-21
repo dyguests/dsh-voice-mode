@@ -149,7 +149,7 @@ cd plugin/dsh-voice-mode && node -e '/* P1: hotwordsBuf 中文热词实证；P2:
 
 ### 4.1 目标
 
-`language` 从硬编码 `'auto'`（`sense-worker.ts:165`）改为用户可锁 `auto/zh/en/ja/ko/yue`；ITN 开关化。
+`language` 从硬编码 `'auto'`（`sense-worker.ts`）改为用户可锁 `auto/zh/en/ja/ko/yue`；ITN 开关化。
 
 ### 4.2 改动清单
 
@@ -410,7 +410,7 @@ I / J 独立可并行
 | B2 markStale 命名 | `markStale()` | invalidateRecognizerCache / clearBuildCache |
 | B5 silenceMs 默认 | **不改** | 改 2000/2500ms |
 | C UI 标签短期方案 | FIELD_LABELS + strings.ts 双补 | 单 FIELD_LABELS |
-| C 注记（批 7P P2，代码不动） | FIELD_LABELS 真源 `settings-form.tsx:52` 头部注释 + 镜像键 `strings.ts:168` `*Label` 后缀段；整合口径沿用本表推荐（短期双补），整合批另开 | — |
+| C 注记（批 7P P2，代码不动） | FIELD_LABELS 真源 `settings-form.tsx:52` 头部注释（原值，已随整合批删除）+ 镜像键 `strings.ts:209` `*Label` 后缀段；整合口径沿用本表推荐（短期双补），整合批另开 | — |
 | F spokenFormat 处置 | 仅注释修正 | schema 删 spokenFormat |
 | J 默认空闲 10→5min | 推 5min + 30s 预警 | 仅加 30s 预警 |
 | J rate 1.0→1.1 | 改 | 保持 1.0 |

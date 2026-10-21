@@ -76,7 +76,7 @@ export interface TtsEngine {
 - [ ] 未知标签按字面文本朗读
 - [ ] 三引擎跑通样例句 `"你好<laugh>今天天气真好"`：Kokoro 笑声 token、VITS emoji+停顿、Edge `<mstts:express-as style="cheerful">`
 - [ ] 现有 `ttsEngine: edge/vits/kokoro` 切换不影响其他字段
-- [ ] **不破坏现有不丢句不变量**：`tts-queue.ts:485-511` 重试（`MAX_SYNTH_ATTEMPTS = 3` :487）+ `:366`/`:455`/`:471`（epoch 自增：prune / cancel / re-enter）/`:490`（泵内守卫 break，另 :511 continue）不动（原写 `413-430`/`:296`/`:382`/`:416`/`:437` 全部已漂移 Δ57~Δ161，且 `:296`/`:382` 在 HEAD 无 epoch 自增语句、系幻影锚点；2026-10-21 按符号定位刷新）
+- [ ] **不破坏现有不丢句不变量**：`tts-queue.ts:554-572` 重试（`MAX_SYNTH_ATTEMPTS = 3` :556）+ `:366`/`:455`/`:471`（epoch 自增：prune / cancel / re-enter）/`:490`（泵内守卫 break，另 :511 continue）不动（原写 `413-430`/`:296`/`:382`/`:416`/`:437` 全部已漂移 Δ57~Δ161，且 `:296`/`:382` 在 HEAD 无 epoch 自增语句、系幻影锚点；2026-10-21 按符号定位刷新）
 
 ## 后果
 
@@ -137,7 +137,7 @@ export interface TtsEngine {
 **未实施的部分**（按 ADR-0007「落地顺序」第 2 步，留未来）：
 
 - 第二步 Edge `rawToFile` / `rawToStream` 路径（`msedge-tts` `dist/MsEdgeTTS.d.ts` 公开 API，按符号定位 `rawToFile`/`rawToStream`；安装版 2.1.0 时点实测 :136 / :146）：`<mstts:express-as style="cheerful/sad/whisper">` 注入。
-- 第一步遗漏项（批 4 审查 I2）：**LLM prompt 注入**（VOICE_SPOKEN_PROMPT 未追加 emotion 标签使用指引）—— 即便修复 B1，端用户也无路径触发 emotion 标签输出。**已在批 6 STATE 记录**，未来如需启用需：(1) host `inject` 加 `systemPrompt`；(2) 追加 emotion 标签使用指引到 `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts:103-110` `VOICE_SPOKEN_PROMPT` 迁入；2026-10-20 收尾终检发现并刷新）；(3) 真机验证 LLM 是否输出 `<laugh>` 等标签。
+- 第一步遗漏项（批 4 审查 I2）：**LLM prompt 注入**（VOICE_SPOKEN_PROMPT 未追加 emotion 标签使用指引）—— 即便修复 B1，端用户也无路径触发 emotion 标签输出。**已在批 6 STATE 记录**，未来如需启用需：(1) host `inject` 加 `systemPrompt`；(2) 追加 emotion 标签使用指引到 `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts` 的 `VOICE_SPOKEN_PROMPT`（**原名**）迁入；2026-10-20 收尾终检发现并刷新）；(3) 真机验证 LLM 是否输出 `<laugh>` 等标签。
 
 **真机验收（批 6 §8.4 真机冒烟清单第 4 项）**：
 

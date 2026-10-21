@@ -126,7 +126,7 @@
   3. 听 TTS 朗读顺序
 - **预期顺序**：「你好」→ ~300ms 静音 → 「世界」（顺序正确）
 - **失败信号**：先 ~300ms 静音 → 然后「你好」+「世界」连读（**错位**）
-- **回退**：检查 `src/tts-local.ts:452` segments 处理顺序 + `src/segmenter.ts:27` plainText 是否豁免 emotion 标签
+- **回退**：检查 `src/tts-local.ts` 的 segments 处理顺序 + `src/segmenter.ts:14` `plainText` 是否豁免 emotion 标签
 - **时间**：2 分钟
 
 ### [ ] 4.2 `<whisper>悄悄话</whisper>` 增益降低
@@ -147,7 +147,7 @@
   2. 听朗读 + 看字幕
 - **预期**：TTS 不读出「laugh」「sigh」字面（直接跳过）；TTS 不读「emphasis」字面
 - **失败信号**：听到「laugh」「sigh」「emphasis」字面被朗读
-- **回退**：检查 `src/tts-local.ts:452` `parseEmotionTags` 调用点 + `src/segmenter.ts:16` `plainText` 配对式剥离链路（`stripEmotionTags` 已于 2d247f6 删除，切勿按旧名回查）
+- **回退**：检查 `src/tts-local.ts` 的 `parseEmotionTags` 调用点 + `src/segmenter.ts:14` `plainText` 配对式剥离链路（`stripEmotionTags` 已于 2d247f6 删除，切勿按旧名回查）
 - **时间**：1.5 分钟
 
 ---
@@ -304,7 +304,7 @@
   - 总是档：打字消息**也朗读**（仅当前可见会话的回复）
   - 关闭档：**都不朗读**（且不报错）
 - **失败信号**：档位不生效 / 总是档不朗读打字回复 / 关闭档仍出声
-- **回退**：检查 `src/index.ts:171`（`readAloud: 'voice' | 'always' | 'off'` schema）+ `src/client.tsx:1358-1361`（客户端 `readAloud` 分支）
+- **回退**：检查 `src/index.ts`（`readAloud: 'voice' | 'always' | 'off'` schema）+ `src/client.tsx` 的 `readAloud` 分支
 - **时间**：3 分钟
 
 ### [ ] 8.3 同一会话多标签页只在焦点标签页朗读（**L1 核心必过**，PR #16 主特性）
@@ -316,7 +316,7 @@
   4. 关掉 A（焦点标签页）→ 在 B 再发一条消息
 - **预期**：同一会话多标签页**只有焦点标签页出声**，不叠播；关掉焦点标签页后焦点被清空（该页不再替它朗读）
 - **失败信号**：两个标签页同时出声 / 关掉焦点页后仍在朗读 / **切标签页后 `readAloud=always` 突然不再朗读**（= SSE 去重的焦点保持不变量被破坏，见 CHANGELOG `[Unreleased]` 复核新发现 ②）
-- **回退**：检查 `src/index.ts:1684`（`POST /voice-mode/focus` 路由）+ `src/index.ts:576-579`（`focusedSessionId` / `focusedTabId` 焦点归属）
+- **回退**：检查 `src/index.ts` 的 `POST /voice-mode/focus` 路由 + `src/index.ts` 的 `focusedSessionId` / `focusedTabId` 焦点归属
 - **时间**：3 分钟
 
 ### [ ] 8.4 说完就关 `mode:once`（**L1 核心必过**，PR #16 主特性）
@@ -327,7 +327,7 @@
   3. 观察是否自动退出语音模式
 - **预期**：一句话发出即关麦（**保留语音会话以朗读回复**）；回合结束 + host 朗读队列排空（新 `tts-idle` 事件）+ 本地播完 + 稳定 1.2s 后**自动退出语音模式**；关闭自动发送时说完这一段即退出、文字留在草稿
 - **失败信号**：不退出 / 句间空档就提前退出（`tts-idle` 早到）/ 退出前把回复噤声
-- **回退**：检查 `src/client.tsx:2181`（`beginOnceWait` 调用点，定义在 `:2337`）与 `src/client.tsx:2291`（`exitModeRef.current('manual')`）两处 once 分支 + host 侧 `tts-idle` 广播
+- **回退**：检查 `src/client.tsx` 的 `beginOnceWait` 调用点与 `exitModeRef.current('manual')` 两处 once 分支两处 once 分支 + host 侧 `tts-idle` 广播
 - **时间**：2 分钟
 
 ### [ ] 8.5 右键快捷设置 + 停止朗读（L2 修复后必过，PR #16）
@@ -344,7 +344,7 @@
   - `Esc` 关闭并把焦点还给按钮
   - 正在朗读时点按钮 = **停止朗读**（停当前句 + 清 host 队列 + 本次回复剩余句子不再播，含工具调用后的后续作答；下一次发起回合自动恢复）
 - **失败信号**：右键把模式切走 / 长按被菜单劫持 / 停止朗读后又接着播 / `Esc` 后焦点丢失
-- **回退**：检查 `src/client.tsx:3484`（`onContextMenu`）与 `src/client.tsx:3276-3280`（`onPointerDown` 及其 `if (!isPrimaryPress(e.button)) return` 非主键守卫）
+- **回退**：检查 `src/client.tsx` 的 `onContextMenu` 与 `onPointerDown` 及其 `if (!isPrimaryPress(e.button)) return` 非主键守卫
 - **时间**：3 分钟
 
 ---

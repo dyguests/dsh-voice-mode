@@ -76,7 +76,7 @@
 | # | 勘误 | 修正事实 | 影响 backlog 项 |
 |---|---|---|---|
 | **K-1** | `rawSSMLRequest` 是 ADR-0007 误名 | 真实 API 是 `rawToStream` / `rawToFile`（MsEdgeTTS.d.ts 按符号定位；调研时点行号 132/122 已漂移，安装版 2.1.0 时点实测 :146/:136） | A1 + P0 #31 Edge `<lang>` 混读（合并落地） |
-| **K-2** | backlog 锚点 `index.ts:224-227` 是错的 | 该位置写的是 `spokenFormat/senseVoice/wakeWord/toolBeep`，不是 `recognitionLanguage` | P0 #30 SenseVoice 锁语种（需重定锚点） |
+| **K-2** | backlog 锚点 `index.ts` 的 `spokenFormat`/`senseVoice` 区（原值 `:224-227`）是错的 | 该位置写的是 `spokenFormat/senseVoice/wakeWord/toolBeep`，不是 `recognitionLanguage` | P0 #30 SenseVoice 锁语种（需重定锚点） |
 | **K-3** | CLAUDE.md 第 37 行写"@deepseek-ai/dsh-llm type-only"是错的 | 实际 `src/index.ts:20` `import type`，但该包有 62 运行时导出（第五轮已实证） | P1 #42 dsh-llm 接入（接入前先实测挑必要的导出） |
 | **K-4** | `aria-live="polite"` + `role="status"` 已就位（client.tsx:2386-2387）| P1 #22 字幕 a11y 工作量从 1-2 人天降到 0.5 人天 | P1-UX #22 |
 

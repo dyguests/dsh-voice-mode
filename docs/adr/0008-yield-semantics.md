@@ -26,8 +26,8 @@ dsh-voice-mode 当前的"让位"仅有两个层：
 调研证据（来源 `docs/findings/2026-09-15-yield-semantics-research.md`）：
 
 - **真机空闲让位 = 0** — 一旦用户说完一句，LLM 立刻把"剩余句子"都说出来，**不留思考停顿窗口**
-- **让位指令已落地（#2 Phase 1）** — `src/prompts.ts:31` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts:103-110` `VOICE_SPOKEN_PROMPT` 迁入）= 基础 4 句口语化 + ADR-0008 #2 让位段（Phase 1 已落地，见 :199）。**勘误（2026-10-20，时序已核）**：原「真机让位指令 = 0」在**调研与成文时点属实**——调研（`7d5bec2`，2026-09-14 14:50）与 ADR 草稿（`d736844`，09-14 15:40）均先于 #2 段落地（`7f1a09f`，2026-09-15 16:20，git 实证）；是 ADR 自草稿起未随落地同步，旧态 propagated 至 R5 才被发现。本 ADR #2 决策与落地内容一致，不受影响
-- **真机 backchannel 检测 = 0** — 用户插嘴"嗯/对/so"，模型继续说完所有句子（`src/asr.ts:184-185`：wakeEnabled = 唤醒词非空且非 hold 模式——唤醒词门与让位不同维度。**括注勘误（2026-10-20）**：原「仅在 `/stay wake/` 时启用」全仓（src/docs/test）无此符号或命令，系 ADR 草稿期 propagated 的假断言——d736844 时点 wakeEnabled 即已按「唤醒词非空且非 hold」定义）
+- **让位指令已落地（#2 Phase 1）** — `src/prompts.ts:31` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts` 的 `VOICE_SPOKEN_PROMPT`（**原名**，原址 `:103-110`，2026-10-02 迁入））= 基础 4 句口语化 + ADR-0008 #2 让位段（Phase 1 已落地，见 :199）。**勘误（2026-10-20，时序已核）**：原「真机让位指令 = 0」在**调研与成文时点属实**——调研（`7d5bec2`，2026-09-14 14:50）与 ADR 草稿（`d736844`，09-14 15:40）均先于 #2 段落地（`7f1a09f`，2026-09-15 16:20，git 实证）；是 ADR 自草稿起未随落地同步，旧态 propagated 至 R5 才被发现。本 ADR #2 决策与落地内容一致，不受影响
+- **真机 backchannel 检测 = 0** — 用户插嘴"嗯/对/so"，模型继续说完所有句子（`src/asr.ts:192`：`wakeEnabled = 唤醒词非空且非 hold 模式——唤醒词门与让位不同维度。**括注勘误（2026-10-20）**：原「仅在 `/stay wake/` 时启用」全仓（src/docs/test）无此符号或命令，系 ADR 草稿期 propagated 的假断言——d736844 时点 wakeEnabled 即已按「唤醒词非空且非 hold」定义）
 - **真机 silence 主动续话 = 0** — 用户停 6 秒，模型**不会主动 break silence**（这点和 Notion / Spokenly MCP 相反）
 - **硬打断 hardBreak 真机在 `src/client.tsx` 的 `hardBreak` 定义**（`const hardBreak = async (): Promise<void> => {`；原值 1946 与 2026-10-21 前快照的 `:2392` 均已漂移——**旧文自述的「Δ946」与自述的现值 2392 互相矛盾**（2392−1946=446），已如实更正；2026-10-21 R15-J 改按**符号锚**重锚，行号待最终 HEAD 稳定后统一回填）—— 注意 hardBreak 走**取消路由**（`bus.skipAudio() + bus.cancelTurn()`），是物理层的硬让；本 ADR 提出的 **pauseAtBoundary** 与其正交，走 epoch 通道不做取消
 
@@ -60,7 +60,7 @@ YIELDING (let the user interrupt)
 |---|---|---|---|
 | 🥇 P0 | **Backchannel detector**（"嗯/哎/so"等 6+ 中英文词检测）+ 半双工暂停（停下 TTS 不 hardBreak，等 1s） | `src/asr.ts` `matchWakeWord` 同位置加 `matchBackchannel`；`src/tts-queue.ts` 新 `pauseAtBoundary()` 走 epoch 通道 | 2-3 天 |
 | 🥈 P0 | **Hume EVI 风格让位 prompt 注入**（48 维 prosody top-3 注入 system prompt） | `src/index.ts` 的 `system-prompt/assemble` 瀑布扩展（`ctx.on('system-prompt/assemble'`；原值 896 与 2026-10-21 前快照的 `:966` 均已漂移——2026-10-21 R15-J 改按**符号锚**重锚）；如无云端 emotion2vec，本地替代 0 | 1-2 天 |
-| 🥉 P2 | **Inattentive silence 自动 break**（6s 沉默后模型主动 break silence） | `src/index.ts:584` `ownerYieldTimer` 旁加 `silenceBreakTimer`（原值 537 已漂移 Δ47） | 1-2 天 |
+| 🥉 P2 | **Inattentive silence 自动 break**（6s 沉默后模型主动 break silence） | `src/index.ts:608` `ownerYieldTimer` 旁加 `silenceBreakTimer`（原值 537 已漂移 Δ47） | 1-2 天 |
 | ❄ | **End-of-turn probability 让位** | 需 ADR-0003 VAD 下沉前置 | 推迟 |
 | ❄ | **让位历史记忆**（环形 buffer） | 配 ADR-0005 fixture，需先扩展 | 推迟 |
 
@@ -74,7 +74,7 @@ YIELDING (let the user interrupt)
    - **同步改 `src/asr-host.ts` / `src/sense-worker.ts` / `src/settings-form.tsx`** 接收 + 暴露 2 个新字段
    - 真机当前 grep 0 命中（K-2 已知 — backlog「纯字幕模式」行已复核：`audioOutputMuted` 在 HEAD 全仓 0 命中，锚点改为「键待新设 + 新键落点 `index.ts:294-409` / `:217-254`」，旧写的 `index.ts:224-227` 系误指）
 2. **第二步（4 层模板粘贴）**：
-   - 把第 6 轮 `scan-system-prompt-design-2026-09.md` 的 4 层（身份 + 行为 + tools + runtime）拷到 `src/prompts.ts` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts:103-110` `VOICE_SPOKEN_PROMPT` 迁入）附近替换单段
+   - 把第 6 轮 `scan-system-prompt-design-2026-09.md` 的 4 层（身份 + 行为 + tools + runtime）拷到 `src/prompts.ts` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts` 的 `VOICE_SPOKEN_PROMPT`（**原名**，原址 `:103-110`）迁入）附近替换单段
    - 7 个 `ctx.systemPrompt.variable()` 注册（实测已可达，第五轮 peer 实证）
    - host `inject` 加 `'systemPrompt'`（第五轮已确认**与 client.inject 9 锚点正交**，零兼容性风险）
 3. **第三步（YIELDING 信号源接通）**：Backchannel detector + `pauseAtBoundary()`
@@ -90,7 +90,7 @@ YIELDING (let the user interrupt)
 | 时延预算 | 200-500ms（人感知阈） | 256-597ms（实测 CONTEXT.md L37） |
 | LLM 介入 | 是（system prompt 注入信号） | 否（纯前端） |
 
-**新加的"pauseAtBoundary"必须经 epoch 通道**（CLAUDE.md "CONTEXT.md 不丢句不变量"），不能直接 `engine.interrupt()`（那会破坏 `tts-queue.ts:485-511` 的"重试 3 次"（`MAX_SYNTH_ATTEMPTS = 3` :487 + epoch 守卫 break :490 / continue :511）+ `:455`（`cancel` 内 `q.epoch++`）的 epoch 守卫不变量；原值 `413-430`/`:296` 已漂移 Δ72 / Δ159，2026-10-21 按符号定位刷新）。
+**新加的"pauseAtBoundary"必须经 epoch 通道**（CLAUDE.md "CONTEXT.md 不丢句不变量"），不能直接 `engine.interrupt()`（那会破坏 `tts-queue.ts:554-572` 的"重试 3 次"（`MAX_SYNTH_ATTEMPTS = 3` :556 + epoch 守卫 break / continue）+ `:455`（`cancel` 内 `q.epoch++`）的 epoch 守卫不变量；原值 `413-430`/`:296` 已漂移 Δ72 / Δ159，2026-10-21 按符号定位刷新）。
 
 ### 5. ADR-0008 之外但本 ADR 顺带解决的
 
@@ -115,15 +115,15 @@ YIELDING (let the user interrupt)
 
 ## 依据
 
-- `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts:103-110` `VOICE_SPOKEN_PROMPT` 迁入；基础 4 句口语化 + ADR-0008 #2 让位段，Phase 1 已落地，见 :199）
+- `src/prompts.ts:31` `spokenPrompt`（2026-10-02 自 `src/index.ts` 的 `VOICE_SPOKEN_PROMPT`（**原名**，原址 `:103-110`）迁入；基础 4 句口语化 + ADR-0008 #2 让位段，Phase 1 已落地，见 :199）
 - `src/index.ts` 的 `system-prompt/assemble` 注入点（`ctx.on('system-prompt/assemble'`；原值 896 与 2026-10-21 前快照的 `:966`/`:966-972` 均已漂移——2026-10-21 R15-J 改按**符号锚**重锚，行号待最终 HEAD 稳定后统一回填）
 - `src/asr.ts:848-913`（echoFloor/echoPeak 跨区 + ADR-0006 真机结论）
-- `src/asr.ts:184-185`（wakeEnabled 唤醒词门：唤醒词非空且非 hold 模式，逻辑可参考）
-- `src/asr-host.ts:607`（finalize 同步路径 `finalizeP`，"不丢句"不变量；原 442-466 区现为 senseTranscribe、原 584 锚点已漂移；2026-10-20 10:30 实测刷新）
-- `src/tts-queue.ts:452`（cancel() 硬打断；epoch 守卫；不丢句；原值 379 已漂移 Δ73——该行现为 `this.engine.status?.()`；原 268-307 区现为 updateVoice、原 325 锚点已漂移；2026-10-21 按符号定位刷新）
+- `src/asr.ts:192`（wakeEnabled 唤醒词门：唤醒词非空且非 hold 模式，逻辑可参考）
+- `src/asr-host.ts:623`（finalize 同步路径 `finalizeP`，"不丢句"不变量；原 442-466 区现为 senseTranscribe、原 584 锚点已漂移；2026-10-20 10:30 实测刷新）
+- `src/tts-queue.ts:516`（`cancel()` 硬打断；epoch 守卫；不丢句；原值 379 已漂移 Δ73——该行现为 `this.engine.status?.()`；原 268-307 区现为 updateVoice、原 325 锚点已漂移；2026-10-21 按符号定位刷新）
 - `src/tts-queue.ts`（`q.epoch` 逐队列代际字段——epoch 通道本体：类型声明 `QueuedSentence.epoch` :204 / `SessionQueue.epoch` :212（接口 :207），自增 :366（prune 路径）/ :455（cancel）/ :471（re-enter 新队列），入队快照 :444，泵内守卫 :490（break）/ :511（continue）。**勘误（2026-10-20）**：原「`_SSMLTemplate` epoch 通道」全 src 0 命中，系幻影符号。**刷新口径声明（2026-10-21）**：原 `:296`（setEngine）/`:382`（cancel）两处自增锚点系幻影符号——HEAD 中 `cancel` 的 `q.epoch++` 在 :455、`:296` 与 `:382` 均无自增语句；原 `:371` 入队快照实为 :444、原 `:416`/`:437` 泵内守卫实为 :490/:511。**fix-host R14 引擎级 closed 标志改动的终验至今未做**（原 :124 文末「需终验」为遗留待办），故本段锚点为 2026-10-21 符号定位结果，不构成 R14 终验结论）
 - `src/client.tsx` 的 `hardBreak` 定义（`const hardBreak = async`；原值 1946 与 2026-10-21 前快照的 `:2392` 均已漂移——旧文自述的「Δ946」与自述现值互相矛盾，已更正；2026-10-21 R15-J 改按**符号锚**重锚）
-- `src/client.tsx:2632`（`onAecState` 回调已用，证明回调注入机制成熟；原值 2106 已漂移 Δ447、原 1539 区现为 fetchConfig；**原 2553 为 2026-10-21 前快照**，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）
+- `src/client.tsx:2688`（`onAecState` 回调已用，证明回调注入机制成熟；原值 2106 已漂移 Δ447、原 1539 区现为 fetchConfig；**原 2553 为 2026-10-21 前快照**，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）
 - `CONTEXT.md:26`（"打断计数仅在播放期累积"不变量）
 - `CONTEXT.md:27`（"不丢句"不变量）
 - `CONTEXT.md:39-40`（"echoGateDb 原生 AEC 生效时从未被执行"真机事实；lead 提示 38-39，实测该 bullet 在 39-40，38 为播放门行）
@@ -196,7 +196,7 @@ YIELDING (let the user interrupt)
 | 决策项 | 落地位置 | 状态 |
 |---|---|---|
 | #1 Backchannel detector + 半双工暂停 | `src/asr.ts` 顶层 `matchBackchannel` 纯函数 + 词表 16 项（中文 11 + 英文 5，其中 `right` 5 字符因超 ≤4 长度上限被滤）；`src/client.tsx` `bus.setBackchannelHold(now+1500)` + 帧回调入口丢帧守卫（`backchannelHoldUntil` 闭包变量） | ✅ |
-| #2 让位 prompt 注入（Layer 2 YIELDING） | `src/prompts.ts` `spokenPrompt` 追加 YIELDING 段（中文，与现有 4 句同风格；符号 2026-10-02 自 `src/index.ts:103-110` `VOICE_SPOKEN_PROMPT` 迁入） | ✅ |
+| #2 让位 prompt 注入（Layer 2 YIELDING） | `src/prompts.ts` 的 `spokenPrompt` 追加 YIELDING 段（中文，与现有 4 句同风格；**原名** `VOICE_SPOKEN_PROMPT`，2026-10-02 自 index.ts 迁入） | ✅ |
 | #3 Inattentive silence break | 推迟（决策推迟） | ⏸ |
 | #4 End-of-turn probability 让位 | 推迟（依赖 ADR-0003） | ⏸ |
 | #5 让位历史记忆 | 不立项（决策取消） | ❌ |
@@ -207,7 +207,7 @@ YIELDING (let the user interrupt)
 
 2. **`matchBackchannel` 不复用 `normalizeWake`** —— `normalizeWake` 会剥前置语气词（`嗯/哎/呃` 等），把 backchannel 词表里的核心词「嗯」剥成空串。落地采用独立 `normalizeBackchannel`（只去空白/标点/小写，保留语气词）。
 
-3. **`backchannelYield` 默认 true 是产品决策（I10 豁免）** —— 关 = onBackchannel 不挂 = 行为等同改造前。**多处置顶显式声明**（`src/index.ts` 的 `backchannelYield` interface 字段 + `VOICE_SETTINGS_DEFAULTS` 的 defaults、设置 zod schema、Config interface + Config schema（`export const Config`）双路 + `src/client.tsx` 的 `DEFAULT_BOOT` + `src/asr.ts` 的配置项 / 引擎侧消费）。**刷新口径声明（2026-10-21）**：原写的 `index.ts:185/227`（落在 spokenFormat 注释 / `autoResume: false`）、`:352-356`（落在 `spokenFormat`/`senseVoice` schema）、`:441/:489`（落在 `silenceMs` interface / `ttsEngine` schema）、`client.tsx:674`（落在 `nextEndAt` 赋值）与更早的 `193/305/1604` 均已漂移；本段原自述「2026-10-20 收尾终检刷新」——**该「终检」并未覆盖上述 client.tsx/index.ts 锚点**（client.tsx 在 PR #16 中 +799 行重写），故此处撤回「已终检」表述，改按符号定位逐条重锚。**R15-J 补充**：2026-10-21 前快照的 `src/index.ts:202`（`backchannelYield` interface）与 `:247`/`:381-385`/`:476`/`:527`/`:485` 亦已漂移，现统一改为**符号锚**（字段名 / 常量名），行号待最终 HEAD 稳定后统一回填。
+3. **`backchannelYield` 默认 true 是产品决策（I10 豁免）** —— 关 = onBackchannel 不挂 = 行为等同改造前。**多处置顶显式声明**（`src/index.ts` 的 `backchannelYield` interface 字段 + `VOICE_SETTINGS_DEFAULTS` 的 defaults、设置 zod schema、Config interface + Config schema（`export const Config`）双路 + `src/client.tsx` 的 `DEFAULT_BOOT` + `src/asr.ts` 的配置项 / 引擎侧消费）。**刷新口径声明（2026-10-21）**：原写的 `index.ts:185/227`（落在 spokenFormat 注释 / `autoResume: false`）、`:352-356`（落在 `spokenFormat`/`senseVoice` schema）、`:441/:489`（落在 `silenceMs` interface / `ttsEngine` schema）、`client.tsx:2490`（落在 `nextEndAt` 赋值）与更早的 `193/305/1604` 均已漂移；本段原自述「2026-10-20 收尾终检刷新」——**该「终检」并未覆盖上述 client.tsx/index.ts 锚点**（client.tsx 在 PR #16 中 +799 行重写），故此处撤回「已终检」表述，改按符号定位逐条重锚。**R15-J 补充**：2026-10-21 前快照的 `src/index.ts:202`（`backchannelYield` interface）与 `:247`/`:381-385`/`:476`/`:527`/`:485` 亦已漂移，现统一改为**符号锚**（字段名 / 常量名），行号待最终 HEAD 稳定后统一回填。
 
 4. **plan §7.2 词表含 `right`(5 字符) 与 §10 R4b ≤4 上限冲突** —— 按 §10 严格执行，`right` 被长度上限滤掉（commit message 显式声明）。批 5 审查 subagent 通过后 plan §7.2 已修（删 right）。
 
