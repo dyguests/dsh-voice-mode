@@ -11405,9 +11405,9 @@ var require_dist = __commonJS({
   }
 });
 
-// node_modules/.pnpm/follow-redirects@1.16.0_debug@4.4.3/node_modules/follow-redirects/debug.js
+// node_modules/.pnpm/follow-redirects@1.16.1_debug@4.4.3/node_modules/follow-redirects/debug.js
 var require_debug = __commonJS({
-  "node_modules/.pnpm/follow-redirects@1.16.0_debug@4.4.3/node_modules/follow-redirects/debug.js"(exports2, module2) {
+  "node_modules/.pnpm/follow-redirects@1.16.1_debug@4.4.3/node_modules/follow-redirects/debug.js"(exports2, module2) {
     var debug;
     module2.exports = function() {
       if (!debug) {
@@ -11425,9 +11425,9 @@ var require_debug = __commonJS({
   }
 });
 
-// node_modules/.pnpm/follow-redirects@1.16.0_debug@4.4.3/node_modules/follow-redirects/index.js
+// node_modules/.pnpm/follow-redirects@1.16.1_debug@4.4.3/node_modules/follow-redirects/index.js
 var require_follow_redirects = __commonJS({
-  "node_modules/.pnpm/follow-redirects@1.16.0_debug@4.4.3/node_modules/follow-redirects/index.js"(exports2, module2) {
+  "node_modules/.pnpm/follow-redirects@1.16.1_debug@4.4.3/node_modules/follow-redirects/index.js"(exports2, module2) {
     var url = require("node:url");
     var URL2 = url.URL;
     var http = require("node:http");
@@ -11655,6 +11655,12 @@ var require_follow_redirects = __commonJS({
     RedirectableRequest.prototype._sanitizeOptions = function(options) {
       if (!options.headers) {
         options.headers = {};
+      } else if (Array.isArray(options.headers)) {
+        var headerList = options.headers;
+        options.headers = {};
+        for (var i = 0; i < headerList.length; i += 2) {
+          options.headers[headerList[i]] = headerList[i + 1];
+        }
       }
       if (!isArray(options.sensitiveHeaders)) {
         options.sensitiveHeaders = [];
@@ -11929,7 +11935,7 @@ var require_follow_redirects = __commonJS({
       return URL2 && value instanceof URL2;
     }
     function escapeRegex(regex) {
-      return regex.replace(/[\]\\/()*+?.$]/g, "\\$&");
+      return regex.replace(/[[\]\\/()*+?.^$|]/g, "\\$&");
     }
     module2.exports = wrap({ http, https });
     module2.exports.wrap = wrap;
