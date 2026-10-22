@@ -220,6 +220,8 @@ export interface VoiceSettingsValue {
   echoGateDb: number
   /** 进入/退出语音模式的快捷键（形如 Ctrl+Shift+V；留空则禁用快捷键）。 */
   shortcut: string
+  /** 输入框有焦点时的切换快捷键（默认 Alt+Enter；留空则禁用）。 */
+  composerShortcut: string
   /**
    * 语音会话注入口语化提示词（默认开）：开启后，仅当前活跃语音会话的回复被注入
    * 「口语化短句、不用 Markdown 排版符号」提示词（assemble 时读取，实时生效；
@@ -275,6 +277,7 @@ const VOICE_SETTINGS_DEFAULTS: VoiceSettingsValue = {
   bargeInMode: 'detect',
   echoGateDb: 6,
   shortcut: 'Ctrl+Shift+V',
+  composerShortcut: 'Alt+Enter',
   spokenFormat: true,
   senseVoice: true,
   wakeWord: '',
@@ -313,6 +316,7 @@ const DESC = {
   readAloud: en.descReadAloud,
   showCaptions: en.descShowCaptions,
   showStatusBar: en.descShowStatusBar,
+  composerShortcut: en.descComposerShortcut,
   bargeInMode: en.descBargeIn,
   echoGateDb: en.descEchoGate,
   shortcut: en.descShortcut,
@@ -374,6 +378,7 @@ export function createVoiceSettingsSchema(defs?: Partial<VoiceSettingsValue>): z
       .description(DESC.readAloud),
     showCaptions: z.boolean().default(d.showCaptions).description(DESC.showCaptions),
     showStatusBar: z.boolean().default(d.showStatusBar).description(DESC.showStatusBar),
+    composerShortcut: z.string().default(d.composerShortcut).description(DESC.composerShortcut),
     bargeInMode: z
       .union([z.const('auto'), z.const('manual'), z.const('detect')])
       .default(d.bargeInMode)
@@ -499,6 +504,8 @@ export interface Config {
   echoGateDb: number
   /** 进入/退出语音模式的快捷键（形如 Ctrl+Shift+V；留空禁用）。 */
   shortcut: string
+  /** 输入框有焦点时的切换快捷键（默认 Alt+Enter；留空禁用）。 */
+  composerShortcut: string
   /** 语音会话注入口语化提示词（默认开；仅活跃语音会话生效）。 */
   spokenFormat: boolean
   /** P4：SenseVoice 定稿重译（带标点 + ITN；默认开）。 */
@@ -558,6 +565,7 @@ export const Config: z<Config> = z.object({
   // 仍可把回声门阈设成 0（句句误打断）或让位窗口设成 60000（让位后一分钟不说话）。
   echoGateDb: z.number().min(3).max(12).default(6),
   shortcut: z.string().default('Ctrl+Shift+V'),
+  composerShortcut: z.string().default('Alt+Enter'),
   spokenFormat: z.boolean().default(true),
   senseVoice: z.boolean().default(true),
   wakeWord: z.string().default(''),
@@ -587,13 +595,13 @@ function voiceSettingsFromConfig(config: Config): VoiceSettingsValue {
   const {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
     idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, readAloud, showCaptions, showStatusBar, bargeInMode,
-    echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
+    echoGateDb, shortcut, composerShortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
     senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage, llmCorrect,
   } = config
   return {
     ttsEngine, kokoroModel, voice, rate, interruptLevel, silenceMs,
     idleTimeoutMinutes, modelHost, autoSend, autoResume, mode, readAloud, showCaptions, showStatusBar, bargeInMode,
-    echoGateDb, shortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
+    echoGateDb, shortcut, composerShortcut, spokenFormat, senseVoice, wakeWord, toolBeep,
     senseITN, captionFontSize, captionMaxWidth, backchannelYield, yieldMs, bargeInSalvage, llmCorrect,
   }
 }
@@ -1241,6 +1249,7 @@ export function apply(ctx: Context, config: Config): void {
             bargeInMode: vset.bargeInMode,
             echoGateDb: vset.echoGateDb,
             shortcut: vset.shortcut,
+            composerShortcut: vset.composerShortcut,
             wakeWord: vset.wakeWord,
             toolBeep: vset.toolBeep,
             captionFontSize: vset.captionFontSize,

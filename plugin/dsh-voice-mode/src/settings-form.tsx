@@ -241,6 +241,114 @@ function TextField({
   )
 }
 
+function ShortcutField({
+  score,
+  field,
+  value,
+}: {
+  score: ScopeController
+  field: string
+  value: unknown
+}): React.ReactElement {
+  const [draft, setDraft] = useState<string>(String(value ?? ''))
+  const [recording, setRecording] = useState(false)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    setDraft((d) => (d === String(value ?? '') ? d : String(value ?? '')))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+  const notify = (): void => {
+    try {
+      window.dispatchEvent(new Event('dshvm-settings-changed'))
+    } catch {}
+  }
+  const commit = (): void => {
+    void score.set(field, draft.trim())
+    notify()
+  }
+  useEffect(() => {
+    if (!recording) return
+    const onKey = (e: KeyboardEvent): void => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') {
+        setRecording(false)
+        setErr('')
+        return
+      }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        setDraft('')
+        void score.set(field, '')
+        notify()
+        setRecording(false)
+        return
+      }
+      if (e.key === 'Control' || e.key === 'Alt' || e.key === 'Shift' || e.key === 'Meta') return
+      const mods: string[] = []
+      if (e.metaKey) mods.push('Cmd')
+      else if (e.ctrlKey) mods.push('Ctrl')
+      if (e.altKey) mods.push('Alt')
+      if (e.shiftKey) mods.push('Shift')
+      if (mods.length === 0) {
+        setErr(tr('shortcutNeedModifier'))
+        return
+      }
+      const named = e.key === 'Enter' ? 'Enter' : e.key === ' ' ? 'Space' : e.key === 'Tab' ? 'Tab' : ''
+      const codeKey = (e.code || '').replace(/^Key/, '').replace(/^Digit/, '')
+      const k = named || (/^[A-Za-z0-9]$/.test(codeKey) ? codeKey.toUpperCase() : e.key.length === 1 ? e.key.toUpperCase() : e.key)
+      const combo = [...mods, k].join('+')
+      setDraft(combo)
+      void score.set(field, combo)
+      notify()
+      setRecording(false)
+      setErr('')
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [recording, score, field])
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <input
+          style={{ ...inputStyle, width: 150 }}
+          value={draft}
+          placeholder={tr('shortcutPlaceholder')}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            if (err) setErr('')
+          }}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit()
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            setRecording((r) => !r)
+            setErr('')
+          }}
+          style={{
+            height: 28,
+            padding: '0 10px',
+            borderRadius: 6,
+            border: '1px solid var(--dsw-alias-border-l3)',
+            background: 'transparent',
+            color: 'var(--dsw-alias-label-secondary)',
+            fontSize: 12,
+            cursor: 'pointer',
+          }}
+        >
+          {recording ? tr('shortcutCancel') : tr('shortcutRecord')}
+        </button>
+      </span>
+      <span style={{ fontSize: 11, lineHeight: '14px', color: err ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-label-tertiary)' }}>
+        {recording ? tr('shortcutRecording') : err}
+      </span>
+    </span>
+  )
+}
+
 function SelectField({
   score,
   field,
@@ -1101,9 +1209,6 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
                 ]}
               />
             </Row>
-            <Row name="shortcut" desc={tr('descShortcut')}>
-              <TextField score={scope} field="shortcut" value={value.shortcut ?? 'Ctrl+Shift+V'} placeholder="Ctrl+Shift+V" />
-            </Row>
             <Row name="wakeWord" desc={tr('descWakeWord')}>
               <TextField score={scope} field="wakeWord" value={value.wakeWord ?? ''} placeholder={tr('wakePlaceholder')} />
             </Row>
@@ -1172,6 +1277,39 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
             <Row name="yieldMs" desc={tr('descYieldMs')}>
               <NumberField score={scope} field="yieldMs" value={value.yieldMs ?? 1500} min={500} max={3000} step={100} />
             </Row>
+            </Section>
+            <Section title={tr('secShortcut')}>
+            <Row name="shortcut" desc={tr('descShortcut')}>
+              <ShortcutField score={scope} field="shortcut" value={value.shortcut ?? ''} />
+            </Row>
+            <Row name="composerShortcut" desc={tr('descComposerShortcut')}>
+              <ShortcutField score={scope} field="composerShortcut" value={value.composerShortcut ?? 'Alt+Enter'} />
+            </Row>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '2px 0 6px' }}>
+              <div style={{ flex: 1, fontSize: 11, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>{tr('shortcutNote')}</div>
+              <button
+                type="button"
+                onClick={() => {
+                  void scope.set('shortcut', /Mac/i.test(navigator.platform) ? 'Cmd+Alt+V' : 'Ctrl+Shift+V')
+                  try {
+                    window.dispatchEvent(new Event('dshvm-settings-changed'))
+                  } catch {}
+                }}
+                style={{
+                  flexShrink: 0,
+                  height: 26,
+                  padding: '0 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--dsw-alias-border-l3)',
+                  background: 'transparent',
+                  color: 'var(--dsw-alias-label-secondary)',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                {tr('shortcutReset')}
+              </button>
+            </div>
             </Section>
             <Section title={tr('secRecognition')}>
             <Row name="senseVoice" desc={tr('descSenseVoice')}>
