@@ -3859,7 +3859,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "85a4e18";
+var BUILD_TAG = "0f6220f";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -6392,7 +6392,6 @@ function MicButton({
             return;
           }
           if (Date.now() < suppressClickUntilRef.current) return;
-          if (e.detail !== 0) e.currentTarget.blur();
           if (localRef.current === "on" && (bus.ui.playing || onceRef.current)) {
             bus.stopReading(!!useSession);
             void exitModeRef.current("manual");
@@ -6402,6 +6401,9 @@ function MicButton({
             if (e.detail !== 0) return;
           }
           toggle();
+        },
+        onMouseDown: (e) => {
+          e.preventDefault();
         },
         onPointerDown,
         onPointerMove,

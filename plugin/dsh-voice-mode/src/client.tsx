@@ -3700,7 +3700,6 @@ export function MicButton({
           }
           // toggle 模式长按打断松手后，抑制合成的 click（防误触发 tap-to-exit）。
           if (Date.now() < suppressClickUntilRef.current) return
-          if (e.detail !== 0) (e.currentTarget as HTMLElement).blur()
           if (localRef.current === 'on' && (bus.ui.playing || onceRef.current)) {
             bus.stopReading(!!useSession)
             void exitModeRef.current('manual')
@@ -3713,6 +3712,10 @@ export function MicButton({
             // 键盘/Space/Enter 激活（detail === 0）保持 a11y 可用
           }
           toggle()
+        }}
+        onMouseDown={(e: React.MouseEvent) => {
+          // mousedown 默认把焦点移到按钮上，输入框光标会丢；拦掉，输入框内快捷键继续可用。
+          e.preventDefault()
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
