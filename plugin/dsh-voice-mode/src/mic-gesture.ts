@@ -285,6 +285,23 @@ export function isGestureEnd(
   return armed.id === up.id && armed.button === up.button
 }
 
+/** pointerup 的收尾判定（三态）：
+ *  - `finish`：本次抬起是我们 arm 的那次手势 → 正常收尾（清打断计时器 + 退 holding 态）。
+ *  - `ignore`：抬起的是别的按键 / 别的 pointer → **完全不碰**任何状态（鼠标所有按键共用
+ *    一个 pointerId，右键抬起不是手势结束）。
+ *  - `unarmed`：根本没有 arm 过（holdPtrRef 为空）→ **不碰 holding 态**。
+ *    典型：hold 模式「按住 Ctrl 说话」的指示（setHolding(true) + beginHeld）**不经**
+ *    holdPtrRef，其收尾由 cancelCtrl() 负责；若这里无条件 setHolding(false)，用户
+ *    仍按住 Ctrl 时右键点一下按钮就会把「录音中」红态踩掉（指示与实际状态不符）。 */
+export function pointerUpAction(
+  armed: { id: number; button: number } | null,
+  up: { id: number; button: number },
+): 'finish' | 'ignore' | 'unarmed' {
+  if (!armed) return 'unarmed'
+  if (!isGestureEnd(armed, up)) return 'ignore'
+  return 'finish'
+}
+
 /* ---------------------------------------------------------------------------
  * /focus 上报
  * ------------------------------------------------------------------------- */

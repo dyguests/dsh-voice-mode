@@ -53,6 +53,20 @@ await t('denyNonLoopback / denyCrossOrigin 无隐式头路径', () => {
     assert.ok(/respondJson\(res, 403/.test(body), `${guard} 未走 respondJson`)
   }
 })
+await t('全文件无隐式头三段式（新端点不会再成为第 N 个漏网的）', () => {
+  // R15（Issue #15 Minor-H-15）：原先只对「已知端点清单」逐个断言，于是 /models/retry、
+  // /settings 这类**不在清单里**的端点用同一形态写了隐式头三段式却没人管（gzip 包装器下
+  // 产出「content-encoding: gzip 头 + 明文 body」）。清单式断言的固有缺口：新增端点时必须
+  // 记得把它加进清单，否则漏网。改为**全文件形态断言**后，任何新端点写出隐式头都会立刻红。
+  // 唯一豁免：SSE/二进制响应的 `res.writeHead(...)`（它走的是 gzip 包装器能识别的显式头路径）。
+  const implicitStatus = [...indexSrc.matchAll(/res\.statusCode\s*=/g)]
+  assert.equal(implicitStatus.length, 0, `仍有 ${implicitStatus.length} 处 res.statusCode 赋值（隐式头三段式）`)
+  const implicitCT = [...indexSrc.matchAll(/res\.setHeader\(\s*'content-type'/g)]
+  assert.equal(implicitCT.length, 0, `仍有 ${implicitCT.length} 处 res.setHeader('content-type', …)`)
+  // Allow 之类的**非 content-type** 头允许单独 setHeader（writeHead 时与 respondJson 的头合并）。
+  const allowOnly = [...indexSrc.matchAll(/res\.setHeader\('([^']+)'/g)].map((m) => m[1])
+  assert.deepEqual([...new Set(allowOnly)], ['allow'], `res.setHeader 出现了 content-type 之外的用途：${allowOnly}`)
+})
 await t('preview / toggle / cancel 三处 429 与 /mode 400/500 全部 respondJson', () => {
   // 路由体内不得再出现隐式头三段式（405 Allow 头是合法的非 JSON 响应，排除）。
   const implicit = [...indexSrc.matchAll(/res\.statusCode\s*=\s*(\d+)[\s\S]{0,200}?res\.setHeader\('content-type'/g)]
@@ -62,6 +76,9 @@ await t('preview / toggle / cancel 三处 429 与 /mode 400/500 全部 respondJs
     ['toggle', 429],
     ['cancel', 429],
     ['mode', 400],
+    // R15（H-15）：下面两个端点的 405 原先也是隐式头三段式，只是不在本清单里才漏网。
+    ['models/retry', 405],
+    ['settings', 405],
   ]) {
     const i = indexSrc.indexOf(`path: \`\${base}/${path}\``)
     assert.ok(i > 0, `缺 /${path} 路由`)

@@ -447,28 +447,54 @@ function sseRes() {
     r.chunks.push(String(c))
     return true
   }
+  r._closeCbs = []
+  // 桩按 Node 的真实语义建模「响应结束」与「close 事件」的两段时序：
+  //   · end() 只结束响应体，**同步**置 ended；
+  //   · 'close' 是**之后**才派发的（本机独立探针实测：不会在 handler 的同步体内同步触发），
+  //     这里用微任务模拟「同一 tick 之后到达」；
+  //   · emitClose() 供测试按需手动驱动（幂等：已自动派发过则空操作），用于精确控制
+  //     「被顶替的旧连接的 close 迟到」这类时序。
+  // 这是**通用能力**而非某个用例的后门：任何依赖「close 何时到达」的用例都能用它。
+  let closeEmitted = false
+  // 返回本次是否真的派发了（已派发过则 false）——调用方据此判断「这次关闭是否真的发生」，
+  // 例如释放 SSE 槽位时跳过早已关闭的连接。
+  const emitClose = () => {
+    if (closeEmitted) return false
+    closeEmitted = true
+    for (const cb of r._closeCbs) cb()
+    r._closeCbs.length = 0
+    return true
+  }
   const end0 = r.end.bind(r)
   r.end = (b) => {
     r.ended = true
     end0(b)
+    queueMicrotask(emitClose)
   }
-  r._closeCbs = []
+  r.emitClose = emitClose
   r.on = (ev, cb) => {
     if (ev === 'close') r._closeCbs.push(cb)
   }
   r.events = () => r.chunks.filter((c) => c.startsWith('event: ')).map((c) => c.split('\n')[0].slice(7))
   return r
 }
+/** 本文件已打开的所有 SSE 连接（{res, tabId}）：供用例释放槽位 / 检查归属。
+ *  ⑦ 的「上限 8」用例会占满连接数，后续用例需要自己腾位置——这是通用能力，不是某条用例的后门。 */
+const openedStreams = []
 const openStream = (tabId) => {
   const res = sseRes()
   routes.get('/voice-mode/stream')(makeReq({ method: 'GET', url: `/voice-mode/stream?tabId=${tabId}` }), res)
+  openedStreams.push({ res, tabId })
   return res
 }
 const postFocus = (payload, extra = {}) =>
   awaitRes(get('/voice-mode/focus', makeReq({ url: '/voice-mode/focus', body: JSON.stringify(payload), ...extra })))
 const focusOf = (res) => JSON.parse(res.body)
 
+/** SSE 观察通道：本文件所有 SSE 断言都从它读广播，因此**任何用例都不得关闭它**。 */
+let sseObserver = null
 const watcher = openStream('tab-W')
+sseObserver = watcher
 await t('SSE 上线即下发 mode + focus + display（新标签页立刻知道焦点归属与显示类设置）', () => {
   assert.equal(watcher.statusCode, 200)
   assert.deepEqual(watcher.events().slice(0, 3), ['mode', 'focus', 'display'])
@@ -1126,6 +1152,206 @@ await t('H-6 窗口不得回归：取消时回合号不可知 + 同一回合 ste
   preStep(SID, 111, 1) // 真正的下一回合 → 恢复
   await drive(SID, '下一回合恢复。')
   assert.ok(await waitFor((s) => spoken().includes('下一回合恢复。')), '真回合边界没有恢复朗读')
+})
+
+// ---------------------------------------------------------------- ⑭ SSE 焦点/owner 保持不变式
+// Issue #15 R15-16（H-12）：`/stream` 的「同 tabId 只留最新连接」在把旧连接 end() 之后，
+//   旧连接的 cleanup 里靠 `latestConnByTab.get(tabId) === client` 判等才武装让出/清焦点。
+//   不变式：被顶替的旧连接，其**迟到的 close 不得**清焦点、不得武装 8s 让出计时。
+//   此前零行为锁——删掉判等，focus-ownership / mic-gesture 两个套件仍全绿。
+//
+// ⚠ 前提（写在锁里以免后人误判）：本锁依赖「res.end() 不会在 handler 同步体内同步派发 'close'」
+//   ——这是 Node 的行为（本机独立探针实测）。桩按同样的时序在微任务里派发。若将来宿主/运行时
+//   改成同步派发，桩与真实行为会一起漂移，本锁的前提需要重新评估。
+console.log('⑭ SSE 焦点/owner 保持：被顶替连接的迟到 close 不得让出')
+
+/** 当前焦点标签页（从最近一次 focus 广播读出；用来避免误关正在持有焦点的连接）。 */
+const currentFocusTab = () => {
+  for (let i = seen.length - 1; i >= 0; i--) {
+    const f = seen[i]
+    if (f.event === 'focus') return f.data.tabId ?? null
+  }
+  return null
+}
+/** 释放 n 个 SSE 槽位：关闭最早打开的、且不是当前焦点标签页的连接。
+ *  ⑦ 的「上限 8」用例把连接数占满，⑭ 需要自己腾位置；close 按桩的真实语义驱动（cleanup 照常跑）。 */
+const freeSseSlots = (n) => {
+  const keep = currentFocusTab()
+  let freed = 0
+  for (let i = 0; i < openedStreams.length && freed < n; ) {
+    // 不关：当前焦点标签页的连接（否则会连带触发清焦点，污染断言）、SSE 观察通道本身。
+    if (openedStreams[i].tabId === keep || openedStreams[i].res === sseObserver) {
+      i++
+      continue
+    }
+    const entry = openedStreams[i]
+    if (entry.res.emitClose()) {
+      openedStreams.splice(i, 1)
+      freed++
+    } else {
+      i++ // 早已关闭：跳过（不占槽位，也不计数）
+    }
+  }
+  return freed
+}
+
+/** 捕获「长延时」计时器并手动触发（观察 8s 让出计时这类依赖真实等待的行为）。
+ *  只代理 setTimeout/clearTimeout，<1s 的延时原样委派 → 通用能力，非本用例后门。 */
+const captureLongTimers = () => {
+  const pending = []
+  const realSet = globalThis.setTimeout
+  const realClear = globalThis.clearTimeout
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    if (typeof ms === 'number' && ms >= 1000) {
+      const h = { fn }
+      pending.push(h)
+      return h
+    }
+    return realSet(fn, ms, ...rest)
+  }
+  globalThis.clearTimeout = (h) => {
+    const i = pending.findIndex((t) => t === h)
+    if (i >= 0) pending.splice(i, 1)
+  }
+  return {
+    pending,
+    fire() {
+      const list = pending.splice(0, pending.length)
+      for (const t of list) t.fn()
+    },
+    restore() {
+      globalThis.setTimeout = realSet
+      globalThis.clearTimeout = realClear
+    },
+  }
+}
+
+await t('SSE 焦点保持：被顶替连接的迟到 close 不得清掉焦点', async () => {
+  reset()
+  const SID = 'live-sse-18'
+  assert.ok(freeSseSlots(2) >= 2, '前置不成立：腾不出 2 个 SSE 槽位')
+  const oldConn = openStream('tab-O')
+  assert.equal((await postFocus({ sessionId: SID, tabId: 'tab-O' })).statusCode, 200)
+  const newConn = openStream('tab-O') // 同 tabId → 旧连接被顶替（收 replaced + end）
+  assert.ok(oldConn.events().includes('replaced'), '旧连接未收到 replaced——前置不成立')
+  assert.equal(oldConn.ended, true, '旧连接未被关闭——前置不成立')
+  // 旧连接的 close 迟到（桩在微任务里派发；此时新连接早已登记进 latestConnByTab）
+  oldConn.emitClose()
+  await sleep(0)
+  drain()
+  assert.equal(
+    seen.filter((f) => f.event === 'focus' && f.data.sessionId === null).length,
+    0,
+    '被顶替连接的迟到 close 清掉了焦点——焦点标签页还在，readAloud=always 会继续给没人听的页面合成',
+  )
+  assert.ok(newConn.ended === false, '新连接被误关')
+})
+
+await t('SSE owner 保持：被顶替连接的迟到 close 不得武装 8s 让出计时（否则健康 owner 被让出）', async () => {
+  reset()
+  const SID = 'live-sse-19'
+  assert.ok(freeSseSlots(2) >= 2, '前置不成立：腾不出 2 个 SSE 槽位')
+  assert.equal((await postFocus({ sessionId: SID, tabId: 'tab-P' })).statusCode, 200)
+  // 让 tab-P 成为语音模式的 owner tab（/toggle 上报 tabId）
+  const toggleRes = await awaitRes(
+    get('/voice-mode/toggle', makeReq({ url: '/voice-mode/toggle', body: JSON.stringify({ sessionId: SID, on: true, tabId: 'tab-P' }) })),
+  )
+  assert.equal(toggleRes.statusCode, 200, `前置不成立：/toggle 未成功（${toggleRes.statusCode}）`)
+  const oldConn = openStream('tab-P')
+  assert.ok(oldConn._closeCbs.length > 0, '前置不成立：旧连接没注册 close 监听')
+
+  const timers = captureLongTimers()
+  try {
+    const newConn = openStream('tab-P') // 同 tabId → 旧连接被顶替
+    assert.ok(oldConn.events().includes('replaced'), '旧连接未收到 replaced——前置不成立')
+    oldConn.emitClose() // 迟到的 close 到达
+    await sleep(0)
+    drain()
+    assert.equal(timers.pending.length, 0, `被顶替连接的迟到 close 武装了 ${timers.pending.length} 个让出计时——健康 owner 会被让出`)
+    timers.fire() // 保险：若真有计时器，触发后应能看到 owner 被让出
+    await sleep(0)
+    drain()
+    assert.equal(
+      seen.filter((f) => f.event === 'mode' && f.data.active === null).length,
+      0,
+      '语音模式被误让出——用户正在用的模式因旧连接的迟到 close 而关闭',
+    )
+    assert.equal(newConn.ended, false, '新连接被误关')
+  } finally {
+    timers.restore()
+  }
+})
+
+await t('SSE owner 让出（正向对照）：当前连接**真正**断开仍会武装 8s 让出计时并让出', async () => {
+  // 这条是正向对照：上一条锁的是「不该武装时没武装」（否定式断言，天然抓不到「让出功能被整个删掉」）。
+  // 两者合起来才把 `tabId === activeTabId → 8s 让出计时` 这条路径的两端都锁住。
+  reset()
+  const SID = 'live-sse-20'
+  assert.ok(freeSseSlots(1) >= 1, '前置不成立：腾不出 1 个 SSE 槽位')
+  assert.equal((await postFocus({ sessionId: SID, tabId: 'tab-Q' })).statusCode, 200)
+  const toggleRes = await awaitRes(
+    get('/voice-mode/toggle', makeReq({ url: '/voice-mode/toggle', body: JSON.stringify({ sessionId: SID, on: true, tabId: 'tab-Q' }) })),
+  )
+  assert.equal(toggleRes.statusCode, 200, `前置不成立：/toggle 未成功（${toggleRes.statusCode}）`)
+  const conn = openStream('tab-Q')
+  assert.ok(conn._closeCbs.length > 0, '前置不成立：连接没注册 close 监听')
+
+  const timers = captureLongTimers()
+  try {
+    conn.emitClose() // 真正的断开（非被顶替）
+    assert.equal(timers.pending.length, 1, `真正断开应当武装 1 个让出计时，实际 ${timers.pending.length}`)
+    timers.fire() // 到点 → yieldActiveSession
+    await sleep(0)
+    drain()
+    assert.equal(
+      seen.filter((f) => f.event === 'mode' && f.data.active === null).length,
+      1,
+      '真正断开后没有让出语音模式——B2 的 8s 宽限让出失效',
+    )
+  } finally {
+    timers.restore()
+  }
+})
+
+// ---------------------------------------------------------------- ⑮ /preview 方法校验 + 限流桶不被无效请求消耗
+// Issue #15 R15-17（H-13）：跨站 `<img src>` 的 GET 不带 Origin，sameOriginRequest 放行；
+//   而 /preview 的限流键是 clientKey(req)（无反代时即回环地址），攻击者无需任何秘密即与受害者
+//   共用同一个桶。修法两道：① 只接受 POST（形态同 /models/retry）；② 限流挪到入参校验之后
+//   （限流桶只保护真正会发起合成的请求）。
+console.log('⑮ /preview：GET 不被受理、无效请求不烧试听限流桶')
+
+await t('/preview 非 POST → 405（跨站 <img src> 的 GET 被方法校验挡住）', async () => {
+  const res = await awaitRes(get('/voice-mode/preview', makeReq({ method: 'GET', url: '/voice-mode/preview', body: undefined })))
+  assert.equal(res.statusCode, 405, `GET /preview 应 405（实际 ${res.statusCode}）`)
+  assert.equal(res.headers.allow, 'POST')
+})
+
+await t('/preview 无效请求（无 body / 缺 voice）不消耗试听限流桶', async () => {
+  // 跨站 GET 已被 405 挡住；这里是**合法 POST 但入参非法**这一路：同样不得进桶，
+  // 否则「空 body 的 POST」也是一条无密钥的烧配额路径。
+  for (let i = 0; i < 25; i++) {
+    // body: '' = 合法的「空 body 请求」（makeReq 对 undefined 不会派发 end，handler 会一直等）
+    const res = await awaitRes(get('/voice-mode/preview', makeReq({ url: '/voice-mode/preview', body: '' })))
+    assert.equal(res.statusCode, 400, `第 ${i + 1} 次空 body 应 400（实际 ${res.statusCode}）`)
+  }
+  // 配额未被消耗：随后的合法 POST 仍能走到合成（而不是第 21 次就 429）。
+  const ok = await awaitRes(
+    get('/voice-mode/preview', makeReq({ url: '/voice-mode/preview', body: JSON.stringify({ voice: 'zh-CN-XiaoxiaoNeural' }) })),
+  )
+  assert.notEqual(ok.statusCode, 429, '无效请求把试听限流桶烧光了——限流必须排在入参校验之后')
+})
+
+await t('/asr 非 POST → 405（跨站 GET 不消耗 ASR 限流桶）', async () => {
+  // 跨站 <img src> 的 GET 不带 Origin，跨源层放行；若无方法校验，它会带着 query 里的 sessionId
+  // 进限流桶（`asr:${sid}`，60 次/秒滑动窗口）→ 持续压制该会话的 ASR 上行。
+  const SID = 'live-asr-21'
+  for (let i = 0; i < 70; i++) {
+    const res = await awaitRes(get('/voice-mode/asr', makeReq({ method: 'GET', url: `/voice-mode/asr?sessionId=${SID}` })))
+    assert.equal(res.statusCode, 405, `第 ${i + 1} 次 GET /asr 应 405（实际 ${res.statusCode}）`)
+  }
+  // 桶未被消耗：随后的合法 POST（空 body，走 asr-host 桩）仍不应 429。
+  const post = await awaitRes(get('/voice-mode/asr', makeReq({ url: `/voice-mode/asr?sessionId=${SID}`, body: '' })))
+  assert.notEqual(post.statusCode, 429, 'GET 把 ASR 限流桶烧光了——方法校验必须排在限流之前')
 })
 
 rmSync(tmp, { recursive: true, force: true })

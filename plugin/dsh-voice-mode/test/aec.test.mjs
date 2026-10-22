@@ -270,4 +270,108 @@ t('双讲冻结：frozen 时权重不更新（回声不被消除，输出≈输�
   )
 })
 
+// ---------------------------------------------------------------------------
+// A-5（Issue #15 R15-5）：参考侧非有限守卫 + 权重非有限重置。
+//
+// 失效链：误差侧已有收敛（eSafe），但**参考侧没有**——±Inf 参考进入 FIR 窗后，
+// 权重更新里的 `gain * x` 遇 Inf 即 0*Inf=NaN → 256 个权重全 NaN → 此后 y 恒非有限
+// → 输出恒 0 → 麦克风整场静音 + 自动打断永久失效（FIR 窗逐样本滑动 → 16ms 内毒化
+// 全部 tap，且 NLMS 无 reset 机制 → 不可自愈）。
+// NaN 参考**无害**（norm 变 NaN → 跳过更新，权重干净）——两者不可一刀切。
+// ---------------------------------------------------------------------------
+
+t('A-5：±Inf 参考样本不得毒化权重（0*Inf=NaN 会杀死全部 256 个权重）且事后能自愈', () => {
+  const rng = noise(31)
+  const N2 = 32000
+  const ref = new Float32Array(N2)
+  for (let i = 0; i < N2; i++) ref[i] = rng() * 2 - 1
+  const aec = new NlmsAec({ delay: 64 })
+  const block = 1024
+  // 训练：mic = 0.6×延迟参考 + 噪声 → 权重学到回声路径且保持有限
+  for (let off = 0; off < 8192; off += block) {
+    const m = new Float32Array(block)
+    const r = ref.subarray(off, off + block)
+    for (let i = 0; i < block; i++) m[i] = (off + i >= 64 ? 0.6 * ref[off + i - 64] : 0) + (rng() * 2 - 1) * 0.02
+    aec.process(m, r)
+  }
+  assert.ok(
+    Array.from(aec.w).every((v) => Number.isFinite(v)),
+    '前置条件：训练后权重应有限',
+  )
+  // 注入一个 ±Inf 参考样本（参考侧无守卫时：0*Inf=NaN → 全部权重被毒化）。
+  // 参考取随机噪声、麦克风取常数：二者不相关 → AEC **正确地**不该把它消掉（输出应 ≈ 麦克风），
+  // 于是「输出塌成 0」就唯一地指征「权重被毒化」，不会与「AEC 正常消回声」混淆。
+  const badRef = new Float32Array(block)
+  for (let i = 0; i < block; i++) badRef[i] = rng() * 2 - 1
+  badRef[10] = Infinity
+  const poisoned = aec.process(new Float32Array(block).fill(0.5), badRef)
+  // ① 权重仍有限（或有界）——非有限权重 → y 恒非有限 → 输出恒 0（永久静音 + 自动打断永久失效）
+  assert.ok(
+    Array.from(aec.w).every((v) => Number.isFinite(v)),
+    '±Inf 参考毒化了权重——0*Inf=NaN，256 个权重全死（此后 y 恒非有限 → 输出恒 0 → 麦克风整场静音 + 自动打断永久失效）',
+  )
+  // ② 参考侧守卫的可观察面：注入块的**输出尾部**不得塌成 0——权重被毒化时该段输出恒 0
+  //（单次 ±Inf 参考不应造成整块输出塌陷；事后重置只能救权重、救不回这段音频）
+  const tailRms = rms(poisoned.subarray(block - 256))
+  assert.ok(
+    tailRms > 0.05,
+    `±Inf 参考后输出尾部塌成 0（实测 ${tailRms.toFixed(4)}）——参考侧缺守卫时权重被 0*Inf=NaN 毒化 → 该段输出恒 0（需参考侧守卫，不能只靠事后重置）`,
+  )
+  // ③ 自愈：恢复「正常信号」后 AEC 必须继续工作。注意参考要与麦克风**不相关**——
+  // 若给与参考成正比的信号，AEC 正确地把它消到 ~0（那是健康行为，不是失能）。
+  const healRef = new Float32Array(block)
+  for (let i = 0; i < block; i++) healRef[i] = rng() * 2 - 1
+  const out = aec.process(new Float32Array(block).fill(0.5), healRef)
+  assert.ok(
+    rms(out) > 0.05,
+    `注入 ±Inf 参考后 AEC 必须能自愈（输出 rms=${rms(out).toFixed(4)}）——权重被毒化后输出恒 0（永久静音且不可恢复）`,
+  )
+})
+
+t('A-5：麦克风极大有限值不得把权重撑成非有限（重置滤波器而非永久坏死）', () => {
+  const rng = noise(37)
+  const N2 = 32000
+  const ref = new Float32Array(N2)
+  for (let i = 0; i < N2; i++) ref[i] = rng() * 2 - 1
+  const aec = new NlmsAec({ delay: 64 })
+  const block = 1024
+  for (let off = 0; off < 4096; off += block) {
+    const m = new Float32Array(block)
+    const r = ref.subarray(off, off + block)
+    for (let i = 0; i < block; i++) m[i] = (off + i >= 64 ? 0.6 * ref[off + i - 64] : 0) + (rng() * 2 - 1) * 0.02
+    aec.process(m, r)
+  }
+  // 麦克风极大有限值 + 近零参考（既有「发散防护」用例的最恶劣场景）：gain = mu·e/norm
+  // 极大 → 权重更新溢出到非有限（实测：mic=1e38 + 近零参考时权重 max|w| 直接冲到非有限；
+  // 而 mic=1e38 + 正常参考时权重收敛到 ~9e35，保持有限——溢出的关键是 norm 极小）。
+  for (let off = 0; off < 4096; off += block) {
+    aec.process(new Float32Array(block).fill(1e38), new Float32Array(block).fill(0.001))
+  }
+  assert.ok(
+    Array.from(aec.w).every((v) => Number.isFinite(v)),
+    '麦克风极大有限值把权重撑成非有限——滤波器应重置（否则 y 恒非有限 → 输出恒 0 → 永久静音且不可恢复）',
+  )
+  // 自愈：参考与麦克风不相关（否则 AEC 正确地消到 ~0，那是健康行为）→ 输出必须恢复
+  const healRef = new Float32Array(block)
+  for (let i = 0; i < block; i++) healRef[i] = rng() * 2 - 1
+  const out = aec.process(new Float32Array(block).fill(0.5), healRef)
+  assert.ok(
+    rms(out) > 0.05,
+    `麦克风极大有限值后 AEC 必须能自愈（输出 rms=${rms(out).toFixed(4)}）——权重坏死后输出恒 0（永久静音）`,
+  )
+})
+
+t('A-6：预热透传不得把麦克风的非有限样本漏进输出（否则 rms 变非有限 → 回声地板被毒化）', () => {
+  for (const bad of [NaN, Infinity, -Infinity]) {
+    const aec = new NlmsAec({ delay: 64 })
+    const m = new Float32Array(64).fill(0.5)
+    m[3] = bad
+    const out = aec.process(m, new Float32Array(64))
+    assert.ok(
+      Array.from(out).every((v) => Number.isFinite(v)),
+      `预热透传把麦克风的 ${bad} 漏进了输出——asr.ts 的 rms 会变非有限 → 回声地板/峰值被毒化 → 自动打断整场会话失效`,
+    )
+  }
+})
+
 console.log(`\naec：${passed} 项通过`)

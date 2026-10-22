@@ -872,8 +872,26 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
       data = echo.process(data, ref)
     }
     let sum = 0
-    for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
-    const rms = Math.sqrt(sum / data.length)
+    let nonFinite = 0
+    for (let i = 0; i < data.length; i++) {
+      const v = data[i]
+      if (Number.isFinite(v)) sum += v * v
+      else nonFinite++
+    }
+    let rms = Math.sqrt(sum / data.length)
+    // A-6（Issue #15 R15-5）：非有限样本（原始麦克风 NaN/Inf——原生 AEC 生效时的旁路
+    // 路径 client.tsx 无任何守卫，这是多数浏览器的常态路径）不得污染下游：
+    // ① 拷贝一份并清零（**不改调用方缓冲**），避免 NaN PCM 进入检测/识别通道；
+    // ② 该帧按「无有效信号」处理——不参与回声地板/峰值更新。一次 NaN 帧若进了地板，
+    // 地板变 NaN → 「=== 0」永假、「> 0」永假 → 门控恒 false → 自动打断整场会话失效
+    // （且每次门控否决都作废抢救种子 → R15-5 症状从偶发变为常态）。
+    if (nonFinite > 0) {
+      const clean = new Float32Array(data)
+      for (let i = 0; i < clean.length; i++) if (!Number.isFinite(clean[i])) clean[i] = 0
+      data = clean
+      if (!Number.isFinite(rms)) rms = 0
+    }
+    const frameValid = nonFinite === 0
     const durationMs = (data.length / SAMPLE_RATE) * 1000
 
     for (const fn of levelListeners) {
@@ -899,7 +917,13 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     // 衰减与地板 alpha 折算到本帧时长，跨浏览器口径一致（Safari 48k 不再衰减过快）。
     const peakDecay = Math.pow(0.9, durationMs / 64)
     const floorAlpha = 1 - Math.pow(0.98, durationMs / 64)
-    if (playingNow) {
+    // A-6：地板/峰值自身也要能**自愈**——已变非有限（NaN/Inf）时在后续正常帧上重建
+    // （否则一次非有限帧就要等下一次 start() 才能恢复：门控恒 false → 整场会话的自动
+    // 打断失效）。注：这是**纵深防御层**——上面的 rms 守卫已使该状态当前不可达（故无
+    // 独立行为锁可抓；属「为未来其它路径预留的复位」）。
+    if (!Number.isFinite(echoFloorRms)) echoFloorRms = 0
+    if (!Number.isFinite(echoPeak)) echoPeak = 0
+    if (playingNow && frameValid) {
       latestResidualRms = rms
       // 峰值保持（慢衰减 ~0.4s，跨音节间隙保持语音证据）。
       echoPeak = Math.max(echoPeak * peakDecay, rms)
@@ -909,8 +933,12 @@ export function createAsrEngine(config: AsrConfig, sessionId: string): AsrEngine
     // 致自打断（对抗审查 Open#9）。
     const doubleTalk = playingNow && echoFloorRms > 0 && rms > echoFloorRms * gateRatio
     if (playingNow) {
-      if (echoFloorRms === 0) echoFloorRms = rms
-      else if (!doubleTalk) echoFloorRms = echoFloorRms * (1 - floorAlpha) + rms * floorAlpha
+      // A-6：无有效信号（非有限样本）的帧不参与地板更新——地板的均值跟踪器一旦被
+      // NaN 污染就再也回不来（唯一归零点只有 start()）。
+      if (frameValid) {
+        if (echoFloorRms === 0) echoFloorRms = rms
+        else if (!doubleTalk) echoFloorRms = echoFloorRms * (1 - floorAlpha) + rms * floorAlpha
+      }
     } else {
       echoPeak = 0
     }

@@ -893,8 +893,20 @@ function createAsrEngine(config, sessionId) {
       data = echo.process(data, ref);
     }
     let sum = 0;
-    for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-    const rms = Math.sqrt(sum / data.length);
+    let nonFinite = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = data[i];
+      if (Number.isFinite(v)) sum += v * v;
+      else nonFinite++;
+    }
+    let rms = Math.sqrt(sum / data.length);
+    if (nonFinite > 0) {
+      const clean = new Float32Array(data);
+      for (let i = 0; i < clean.length; i++) if (!Number.isFinite(clean[i])) clean[i] = 0;
+      data = clean;
+      if (!Number.isFinite(rms)) rms = 0;
+    }
+    const frameValid = nonFinite === 0;
     const durationMs = data.length / SAMPLE_RATE2 * 1e3;
     for (const fn of levelListeners) {
       try {
@@ -906,14 +918,18 @@ function createAsrEngine(config, sessionId) {
     const gateRatio = Math.pow(10, (config.echoGateDb ?? 6) / 20);
     const peakDecay = Math.pow(0.9, durationMs / 64);
     const floorAlpha = 1 - Math.pow(0.98, durationMs / 64);
-    if (playingNow) {
+    if (!Number.isFinite(echoFloorRms)) echoFloorRms = 0;
+    if (!Number.isFinite(echoPeak)) echoPeak = 0;
+    if (playingNow && frameValid) {
       latestResidualRms = rms;
       echoPeak = Math.max(echoPeak * peakDecay, rms);
     }
     const doubleTalk = playingNow && echoFloorRms > 0 && rms > echoFloorRms * gateRatio;
     if (playingNow) {
-      if (echoFloorRms === 0) echoFloorRms = rms;
-      else if (!doubleTalk) echoFloorRms = echoFloorRms * (1 - floorAlpha) + rms * floorAlpha;
+      if (frameValid) {
+        if (echoFloorRms === 0) echoFloorRms = rms;
+        else if (!doubleTalk) echoFloorRms = echoFloorRms * (1 - floorAlpha) + rms * floorAlpha;
+      }
     } else {
       echoPeak = 0;
     }
@@ -1465,7 +1481,9 @@ var NlmsAec = class {
     const bufLen = xBuf.length;
     let cursor = this.cursor;
     for (let i = 0; i < n; i++) {
-      xBuf[cursor] = i < ref.length ? ref[i] : 0;
+      let r = i < ref.length ? ref[i] : 0;
+      if (!Number.isFinite(r) && !Number.isNaN(r)) r = 0;
+      xBuf[cursor] = r;
       cursor = (cursor + 1) % bufLen;
       this.filled = Math.min(this.filled + 1, bufLen);
       const d = mic[i];
@@ -1492,10 +1510,16 @@ var NlmsAec = class {
           }
         }
       } else {
-        out[i] = d;
+        out[i] = Number.isFinite(d) ? d : 0;
       }
     }
     this.cursor = cursor;
+    for (let t3 = 0; t3 < this.filterLength; t3++) {
+      if (!Number.isFinite(this.w[t3])) {
+        this.w.fill(0);
+        break;
+      }
+    }
     return out;
   }
 };
@@ -1568,6 +1592,7 @@ var ERROR_I18N_KEY = {
   unknown_session: "errUnknownSession",
   forbidden: "errForbidden",
   bad_request: "errBadRequest",
+  method_not_allowed: "errMethodNotAllowed",
   engine_not_active: "errEngineNotActive",
   model_download_failed: "errModelDownload",
   too_many_streams: "errTooManyStreams",
@@ -1848,6 +1873,7 @@ var zh = {
   errUnknownSession: "\u8BED\u97F3\u4F1A\u8BDD\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u5F00\u542F\u8BED\u97F3\u6A21\u5F0F",
   errForbidden: "\u8BF7\u6C42\u88AB\u62D2\u7EDD\uFF08\u4EC5\u9650\u672C\u673A\u8BBF\u95EE\uFF0C\u6216\u6765\u6E90\u4E0D\u7B26\uFF09",
   errBadRequest: "\u8BF7\u6C42\u65E0\u6548",
+  errMethodNotAllowed: "\u8BF7\u6C42\u65B9\u6CD5\u4E0D\u88AB\u652F\u6301",
   errEngineNotActive: "\u8BE5\u6717\u8BFB\u5F15\u64CE\u5F53\u524D\u672A\u542F\u7528",
   errModelDownload: "\u6A21\u578B\u4E0B\u8F7D\u5931\u8D25\uFF1A\u8BF7\u68C0\u67E5\u7F51\u7EDC",
   errTooManyStreams: "\u8BED\u97F3\u8FDE\u63A5\u8FC7\u591A\uFF0C\u8BF7\u5173\u95ED\u5176\u5B83\u8BED\u97F3\u9875\u9762\u540E\u91CD\u8BD5",
@@ -2113,6 +2139,7 @@ var en = {
   errUnknownSession: "Voice session expired \u2014 re-enter voice mode",
   errForbidden: "Request denied (local access only, or origin mismatch)",
   errBadRequest: "Invalid request",
+  errMethodNotAllowed: "Request method not allowed",
   errEngineNotActive: "That read-aloud engine is not active",
   errModelDownload: "Model download failed \u2014 check your network",
   errTooManyStreams: "Too many voice connections \u2014 close other voice tabs and retry",
@@ -2307,6 +2334,11 @@ function isAuxClickToIgnore(pending, clickDetail) {
 function isGestureEnd(armed, up) {
   if (!armed) return false;
   return armed.id === up.id && armed.button === up.button;
+}
+function pointerUpAction(armed, up) {
+  if (!armed) return "unarmed";
+  if (!isGestureEnd(armed, up)) return "ignore";
+  return "finish";
 }
 function focusFailureAction(status, attempt) {
   if (status !== 403) return "silent";
@@ -3702,7 +3734,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "9a8abce";
+var BUILD_TAG = "85a4e18";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -6044,11 +6076,12 @@ function MicButton({
   };
   const onPointerUp = (e) => {
     const p = holdPtrRef.current;
-    if (p && !isGestureEnd(p, { id: e.pointerId, button: e.button })) return;
+    const action = pointerUpAction(p, { id: e.pointerId, button: e.button });
+    if (action === "ignore") return;
     holdPtrRef.current = null;
     clearBreakTimer();
+    if (action === "unarmed" || !p) return;
     setHolding(false);
-    if (!p) return;
     const ms = Date.now() - p.t;
     if (bootNow().mode !== "hold") {
       if (toggleHoldRef.current) {
@@ -6079,6 +6112,7 @@ function MicButton({
     if (localRef.current === "on") engineRef.current?.endHeld(false);
   };
   const onPointerCancel = () => {
+    if (!holdPtrRef.current && !toggleHoldRef.current) return;
     holdPtrRef.current = null;
     toggleHoldRef.current = false;
     clearBreakTimer();

@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { applyTurnEvent, auxClickPending, cancelPayload, createScopeBridge, decayConfirmCount, eqPaintMode, focusFailureAction, handleReplaced, isAuxClickToIgnore, isEditingShortcut, isGestureEnd, isPrimaryPress, menuFocusIndex, onceFinished, registerScopeDispose, reportFocus, shouldReleaseStopLine, takeToggleSlot } from '../src/mic-gesture.ts'
+import { applyTurnEvent, auxClickPending, cancelPayload, createScopeBridge, decayConfirmCount, eqPaintMode, focusFailureAction, handleReplaced, isAuxClickToIgnore, isEditingShortcut, isGestureEnd, isPrimaryPress, menuFocusIndex, pointerUpAction, onceFinished, registerScopeDispose, reportFocus, shouldReleaseStopLine, takeToggleSlot } from '../src/mic-gesture.ts'
 import { createHttpScope } from '../src/settings-http-scope.ts'
 
 let passed = 0
@@ -116,9 +116,9 @@ t('左键 pointerdown（button=0）：照常 arm，长按打断不被守卫误�
 })
 t('onPointerUp 收尾判据：按「同 pointerId + 同按键」，右键抬起不是手势结束', () => {
   const body = handlerSrc('const onPointerUp = (e: React.PointerEvent): void => {')
-  assert.ok(body.includes('isGestureEnd('), 'onPointerUp 未按 isGestureEnd 判定收尾')
+  assert.ok(body.includes('pointerUpAction('), 'onPointerUp 未按 pointerUpAction 判定收尾（内部即 isGestureEnd）')
   assert.ok(
-    body.indexOf('isGestureEnd(') < body.indexOf('holdPtrRef.current = null'),
+    body.indexOf('pointerUpAction(') < body.indexOf('holdPtrRef.current = null'),
     '收尾判定必须早于 holdPtrRef / 打断计时器的清理',
   )
   // 判据本身：鼠标所有按键共用一个 pointerId → 右键抬起（button=2）不是手势结束。
@@ -729,7 +729,10 @@ t('C-14 接线：client.tsx 的 pointerdown 记下 arm 的按键，pointerup 按
   const down = handlerSrc('const onPointerDown = (e: React.PointerEvent): void => {')
   assert.ok(/button: e\.button/.test(down), 'pointerdown 未记下 arm 的按键（收尾判据要比按键）')
   const up = handlerSrc('const onPointerUp = (e: React.PointerEvent): void => {')
-  assert.ok(/isGestureEnd\(p, \{ id: e\.pointerId, button: e\.button \}\)/.test(up), 'pointerup 未按「同 pointerId + 同按键」判定收尾')
+  assert.ok(
+    /pointerUpAction\(p, \{ id: e\.pointerId, button: e\.button \}\)/.test(up),
+    'pointerup 未按「同 pointerId + 同按键」判定收尾（pointerUpAction 内部即 isGestureEnd）',
+  )
 })
 
 
@@ -768,7 +771,30 @@ t('C-16：权威回合号必须真的参与判定（lastTurn 喂成 undefined �
     sameRoundContinuation: false,
   })
   assert.equal(withLast.release, false, '同一回合（turn 相同）不得解除拒绝线')
-  assert.equal(withLast.identity.lastTurn, 7, '未更新回合身份（供下一次比较）')
+  // 回合身份必须被**推进**——客户端靠 r.identity.lastTurn 推进 currentTurn；这一半此前是
+  // 恒真断言（输入本就带 lastTurn，断言被输入满足，与函数行为无关）。这里输入**不带**
+  // identity，输出必须带上本次的 turn。
+  const fresh = applyTurnEvent({
+    turn: 9,
+    identity: {},
+    hasStopLine: false,
+    untilNextRun: false,
+    sameRoundContinuation: false,
+  })
+  assert.equal(
+    fresh.identity.lastTurn,
+    9,
+    '回合身份未推进——客户端的 currentTurn 永不前进，同回合第二次 agent-speaking 会误解除拒绝线',
+  )
+  // 载荷缺 turn 键时不得清掉已有回合身份
+  const noTurn = applyTurnEvent({
+    turn: undefined,
+    identity: { lastTurn: 5 },
+    hasStopLine: false,
+    untilNextRun: false,
+    sameRoundContinuation: false,
+  })
+  assert.equal(noTurn.identity.lastTurn, 5, '载荷缺 turn 键时不得清掉已有回合身份')
   // 同样的载荷，但该会话「最近回合号」喂成 undefined（客户端不再用权威回合号）
   // → 退回代理信号（此处无代理信号 → 旧行为：解除）→ 结果**必须不同**
   const withoutLast = applyTurnEvent({
@@ -827,6 +853,45 @@ t('C-17 接线：client.tsx 的补报带「焦点是否已变」判据', () => {
     '补报前未复核焦点是否已变——会把焦点写回旧会话',
   )
   assert.ok(/focusWarned\.has\(warnedSession\)/.test(body), '留痕未按每会话去重（反复切标签页会刷屏）')
+})
+
+
+// --------------------------------------------------------------------------
+// C-19：「未 arm 的 pointerup」也会清 holding → 踩掉 hold 模式「按住 Ctrl 说话」的
+// 录音指示（该路径 setHolding(true) + beginHeld 但**不写** holdPtrRef，收尾由
+// cancelCtrl() 负责）。
+// --------------------------------------------------------------------------
+t('C-19：未 arm 的 pointerup 不得碰 holding 态（Ctrl 按住说话的指示归 cancelCtrl 管）', () => {
+  // hold 模式 Ctrl 按住说话：holding=true，但不写 holdPtrRef → 未 arm
+  assert.equal(pointerUpAction(null, { id: 1, button: 0 }), 'unarmed', '未 arm 的抬起必须判为 unarmed')
+  // 右键 pointerup（未 arm）同样不得碰 holding 态
+  assert.equal(pointerUpAction(null, { id: 1, button: 2 }), 'unarmed', '右键抬起（未 arm）不得碰 holding 态')
+  // arm 过的：正常收尾（清计时器 + 退 holding 态 + 走手势结束逻辑）
+  assert.equal(pointerUpAction({ id: 1, button: 0 }, { id: 1, button: 0 }), 'finish', 'arm 过的抬起必须正常收尾')
+  // 别的按键 / 别的 pointer：完全不碰
+  assert.equal(pointerUpAction({ id: 1, button: 0 }, { id: 1, button: 2 }), 'ignore', '右键抬起不是手势结束')
+  assert.equal(pointerUpAction({ id: 1, button: 0 }, { id: 2, button: 0 }), 'ignore', '别的 pointer 的抬起不是手势结束')
+})
+t('C-19 接线：client.tsx 的 pointerup 在「未 arm」分支不碰 holding 态', () => {
+  const up = handlerSrc('const onPointerUp = (e: React.PointerEvent): void => {')
+  assert.ok(/pointerUpAction\(/.test(up), 'pointerup 未走 pointerUpAction 判定')
+  // 按**行**定位（注释里也出现了 setHolding(false) 字样，indexOf 会误命中注释）。
+  const lines = up.split('\n')
+  const unarmedLine = lines.findIndex((l) => l.includes("action === 'unarmed'"))
+  const holdingLine = lines.findIndex((l) => l.trim() === 'setHolding(false)')
+  assert.ok(unarmedLine >= 0, 'pointerup 缺「未 arm」分支')
+  assert.ok(holdingLine >= 0, 'pointerup 缺 setHolding(false)（arm 过的手势必须退 holding 态）')
+  assert.ok(
+    holdingLine > unarmedLine,
+    'setHolding(false) 必须晚于「未 arm」分支——否则 Ctrl 按住说话的「录音中」指示会被误清',
+  )
+})
+t('C-19 接线：client.tsx 的 pointercancel 只在 arm 过时才收尾（不抢 Ctrl 路径的收尾）', () => {
+  const cancel = handlerSrc('const onPointerCancel = (): void => {')
+  assert.ok(
+    /if \(!holdPtrRef\.current && !toggleHoldRef\.current\) return/.test(cancel),
+    'pointercancel 未按「是否 arm 过」过滤——未 arm 的取消会 endHeld(true) 丢掉 Ctrl 按住录的段',
+  )
 })
 
 console.log(`\nmic-gesture：${passed} 项通过`)

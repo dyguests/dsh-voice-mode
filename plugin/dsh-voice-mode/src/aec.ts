@@ -73,7 +73,16 @@ export class NlmsAec {
     let cursor = this.cursor
     for (let i = 0; i < n; i++) {
       // 参考样本写入历史环。
-      xBuf[cursor] = i < ref.length ? ref[i] : 0
+      // A-5（Issue #15 R15-5）：参考侧也要有非有限守卫——**±Inf 参考会毒化全部权重**：
+      // 误差侧已收敛（eSafe），但权重更新里的 `gain * x` 遇 Inf 即 0*Inf=NaN → 256 个
+      // 权重全 NaN → 此后 y 恒非有限 → 输出恒 0 → 麦克风整场静音 + 自动打断永久失效；
+      // FIR 窗逐样本滑动 → 256 个样本（16ms）内即可毒化全部 tap，不可自愈。
+      // **NaN 参考保持原样**（与 ±Inf 区别对待，不可一刀切）：NaN 让 norm 变 NaN →
+      // `norm > MIN_REF_NORM` 为假 → 整段跳过更新，权重保持干净（既有正确行为，实测
+      // 能自愈）；±Inf 则收敛为 0（该 tap 视作无参考能量，FIR 照常工作）。
+      let r = i < ref.length ? ref[i] : 0
+      if (!Number.isFinite(r) && !Number.isNaN(r)) r = 0
+      xBuf[cursor] = r
       cursor = (cursor + 1) % bufLen
       this.filled = Math.min(this.filled + 1, bufLen)
       const d = mic[i]
@@ -108,10 +117,24 @@ export class NlmsAec {
         }
       } else {
         // 预热：参考历史不足，透传麦克风。
-        out[i] = d
+        // A-5/A-6：透传同样要守卫——预热期（delay+filterLength 样本；生产配置
+        // filterLength=1024/delay=0 → 约 64ms）的原始麦克风 NaN/Inf 会直接漏进输出帧
+        // → asr.ts 的 rms 变非有限 → 回声地板/峰值被毒化 → 自动打断整场会话失效。
+        out[i] = Number.isFinite(d) ? d : 0
       }
     }
     this.cursor = cursor
+    // A-5：权重非有限时**重置滤波器**（而不是让它永久坏死）——麦克风极大有限值（如
+    // 1e38）会让权重更新溢出到 Inf（既有「发散防护」用例的期望是「不发散 + 之后仍
+    // 能收敛」，不是「坏了就坏」）。权重一旦非有限：y 恒非有限 → 输出恒 0（麦克风整场
+    // 静音 + 自动打断永久失效），而 NLMS 没有别的 reset 机制——只能在这里清零权重，
+    // 让它重新学习（自愈）。每次 process 调用扫一遍权重（256 次，代价可忽略）。
+    for (let t = 0; t < this.filterLength; t++) {
+      if (!Number.isFinite(this.w[t])) {
+        this.w.fill(0)
+        break
+      }
+    }
     return out
   }
 }

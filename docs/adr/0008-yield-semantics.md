@@ -72,7 +72,7 @@ YIELDING (let the user interrupt)
    - `vset.recognitionLanguage?: 'auto' | 'zh' | 'en' | 'ja' | 'ko' | 'yue'`（默认 `auto`）——为 Layer 4 variable 准备（recognitionLanguage 已于批 7M 砍除）
    - `vset.captionOnly?: boolean`（默认 `false`）——为 Layer 4 variable 准备
    - **同步改 `src/asr-host.ts` / `src/sense-worker.ts` / `src/settings-form.tsx`** 接收 + 暴露 2 个新字段
-   - 真机当前 grep 0 命中（K-2 已知 — backlog「纯字幕模式」行已复核：`audioOutputMuted` 在 HEAD 全仓 0 命中，锚点改为「键待新设 + 新键落点 `index.ts:294-409` / `:217-254`」，旧写的 `index.ts:224-227` 系误指）
+   - 真机当前 grep 0 命中（K-2 已知 — backlog「纯字幕模式」行已复核：`audioOutputMuted` 在 HEAD 全仓 0 命中，锚点改为「键待新设 + 新键落点 index.ts（原锚 294-409） / `:217-254`」，旧写的 index.ts（原锚 224-227） 系误指）
 2. **第二步（4 层模板粘贴）**：
    - 把第 6 轮 `scan-system-prompt-design-2026-09.md` 的 4 层（身份 + 行为 + tools + runtime）拷到 `src/prompts.ts` 的 `spokenPrompt`（2026-10-02 自 `src/index.ts` 的 `VOICE_SPOKEN_PROMPT`（**原名**，原址 `:103-110`）迁入）附近替换单段
    - 7 个 `ctx.systemPrompt.variable()` 注册（实测已可达，第五轮 peer 实证）

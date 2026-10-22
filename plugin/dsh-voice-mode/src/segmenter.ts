@@ -111,6 +111,19 @@ export class SentenceSegmenter {
     }
   }
 
+  /**
+   * 安全阀：把超过 maxChars 的文字墙切下一段（feed 与 flush 共用同一口径）。
+   * 切点优先落在「，,、\s」处，但必须 ≤ maxChars——否则切出来的这一段仍然超长，阀形同虚设
+   * （原 feed 实现会切出一个 maxChars 之外的长段）；没有可用分隔符时取一半。
+   */
+  private cutWall(): string {
+    const cut = this.buffer.search(/[，,、\s]/)
+    const idx = cut > 0 && cut <= this.maxChars ? cut : Math.max(1, Math.floor(this.maxChars / 2))
+    const head = sanitizeForTts(this.buffer.slice(0, idx)).trim()
+    this.buffer = this.buffer.slice(idx)
+    return head
+  }
+
   /** 喂入一段 raw delta，返回它补全的完整句子。 */
   feed(chunk: string): string[] {
     const cleaned = plainText(this.dropFences(chunk))
@@ -125,10 +138,7 @@ export class SentenceSegmenter {
     }
     // 安全阀：一堵没有标点的文字墙。
     if (this.buffer.length > this.maxChars) {
-      const cut = this.buffer.search(/[，,、\s]/)
-      const idx = cut > 0 ? cut : Math.floor(this.maxChars / 2)
-      const head = sanitizeForTts(this.buffer.slice(0, idx)).trim()
-      this.buffer = this.buffer.slice(idx)
+      const head = this.cutWall()
       if (head) out.push(head)
     }
     return out
@@ -138,15 +148,25 @@ export class SentenceSegmenter {
    * 收尾：flush 剩余缓冲（流结束）。
    * 整回合未见闭合围栏 → 把围栏内被抑制的内容回退输出（v0.7.27 之前未配对围栏零损失，
    * 全靠这一条守住；否则一个孤立的 ``` 会静默吞掉本回合剩余正文）。
+   *
+   * 过安全阀后的多段仍按「代码内容」朗读：既有取舍是「宁念代码不吞正文」，切分只改朗读粒度
+   * （每段一次合成请求）、不改取舍；段序 = 原文字序，段内容 = 原文字符的连续切片（切点沿用
+   * feed() 同一口径）。不回退成「整体不念」——那等于回到吞正文的老问题。
    */
   flush(): string[] {
     if (this.inFence) this.buffer = plainText(this.buffer + this.fenced)
+    const out: string[] = []
+    // 安全阀：与 feed() 同一口径逐段切分（未闭合围栏回退出的超长内容也不允许单条超长合成）
+    while (this.buffer.length > this.maxChars) {
+      const head = this.cutWall()
+      if (head && !SKIP_PREFIX.test(head)) out.push(head)
+    }
     const t = sanitizeForTts(this.buffer).trim()
     this.buffer = ''
     this.inFence = false
     this.ticks = ''
     this.fenced = ''
-    if (t && !SKIP_PREFIX.test(t)) return [t]
-    return []
+    if (t && !SKIP_PREFIX.test(t)) out.push(t)
+    return out
   }
 }

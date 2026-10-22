@@ -58,15 +58,41 @@ export function correctionSystem(lang: 'zh' | 'en'): string {
  *     正是 I-3 要防的静默替换，R4 回退双语均不要求冒号（回退实现落在 R4，commit 4916bd8）。
  *     代价：「纠正一下：…」这类以纠正动词开头的真实指令会被误伤（丢一次纠错、发原文）
  *     ——安全方向（不漏拦），验真评估后接受。
- *  ③ en 大小写不敏感（/i）：句首 "corrected"/"CORRECTED" 均收。 */
+ *  ③ en 大小写不敏感（/i）：句首 "corrected"/"CORRECTED" 均收。
+ *
+ * MO-4（Issue #15 R8）：英文侧的 `here is` 漏检撇号形态 `here's`——弱模型写
+ * "here's corrected: …" / "here's the corrected text: …" 时越过 ^ 锚，元叙述
+ * 静默顶替用户消息（与 M-2/M-3 同型，v0.7.28 发布说明第 9 条承诺修掉这一类）。
+ * 逐个核过本正则里的全部英文片段（`here is ` / `the ` / `corrected` / `correction`）：
+ * **只有 `here is` 有撇号形态**，故只此一处需改（`the`/动词/名词无撇号变体）。
+ *
+ * MO-5（Issue #15 R8）：冠词形态只收 `the` → "here's a correction: …" /
+ * "here is a corrected version: …" 仍漏检（同一失效形态）。冠词补 `a` / `an`。
+ * 判据（与既有形态统一）：**`corrected`/`correction` 紧跟在引导语（here is / here's）
+ * 及其冠词之后 ⇒ 说明头**；`corrected` 出现在别处（如 "here's my file, already
+ * corrected"）⇒ 正文，不判说明头。误判方向不对称——把说明头判成正文 = 模型元叙述
+ * 顶替用户消息（发布说明第 9 条要修的正是这个）；把正文判成说明头 = 白丢一次纠错
+ * （回退原文，用户话仍在）——故取「宁可漏拦」的一侧（同 R1 I-3 既有取舍）。 */
 const CORRECTION_PREAMBLE_RE =
-  /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i
+  /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here(?:'s| is) (?:the |an |a )?)?(?:corrected|correction)\b/i
 
 /**
- * 寒暄词表：弱模型爱加的客套（中文 6 词 + 英文 9 词）。两个正则共用一份词表，
- * 避免「前缀形态」与「纯寒暄形态」的词表漂移。
+ * 寒暄词表：弱模型爱加的客套/应答。两个正则共用一份词表，避免「前缀形态」与
+ * 「纯寒暄形态」的词表漂移。
+ *
+ * 词条（zh 11 / en 13，长的在前以便优先匹配多词短语）：
+ *  - zh：当然可以、当然、好吧、好的/好、行吧、行、是的、嗯、收到、明白了、知道了
+ *  - en：Thank you、Of course、Got it、OK、Okay、Sure、Certainly、Alright、
+ *        Understood、Hello、Hi、Yes、Thanks
+ * 选取理由：只收「模型用来应答、且不承载用户原话」的短应答/致谢语——
+ *  弱模型在「原文没有错别字」时的典型输出（"好的"/"收到"/"Got it"/"Thank you"），
+ *  它们会整条顶替用户原话（autoSend 默认开 → 直接发出去）。
+ * 不收「是」「对」「OK 了」这类高频实义字（误伤面太大）；「行」只收单词形态，
+ *  「行不行」「行业」等不匹配（纯寒暄判据要求**整串**都是词表词）。
  */
-const CORRECTION_FILLER_WORDS = '当然可以|当然|好吧|好的?|行吧|是的|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi'
+const CORRECTION_FILLER_WORDS =
+  '当然可以|当然|好吧|好的?|行吧|行|是的|嗯|收到|明白了|知道了' +
+  '|Thank you|Of course|Got it|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi|Yes|Thanks'
 
 /**
  * 前言护栏的寒暄**前缀**（每个词后面必须跟分隔符）：弱模型爱在说明头前先来一句

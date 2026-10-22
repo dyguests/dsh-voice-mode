@@ -48,6 +48,7 @@
  *        [--allow-raise --reason "为什么必须抬高 undecidable 额度"] [--root <仓库根>]
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -145,8 +146,37 @@ function looksLikeCode(tok) {
   return changes >= 2
 }
 
-/** 收集仓库内所有 markdown 文件。 */
+/**
+ * 收集仓库内所有 markdown 文件。
+ *
+ * 2026-10-22 改：**只扫「git 不会忽略」的文件**（`git ls-files --cached --others
+ * --exclude-standard`）。此前用 `readdirSync` 遍历全树，会把**`.gitignore` 掉的
+ * 本机专属文件**（AGENTS.md / CLAUDE.md / docs/storefront-assets.md /
+ * docs/RELEASE-WORKFLOW.md / docs/codex-native-imagegen-handoff.md）也算进去 ——
+ * 而 **CI 的 checkout 里没有这些文件**。于是「本机实测」与「CI 实测」天然不等，
+ * 基线是**精确值**语义（实测 ≠ 基线即红）⇒ 本机写死的基线会让 **CI 判红**。
+ * 改用 git 的文件集合后，本机与 CI 看到的是**同一批文件**，基线两边都成立。
+ */
 function collectMarkdown(dir, out = []) {
+  // 首选：git 视角的文件集合（与 CI checkout 一致）
+  try {
+    const res = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    for (const rel of res.split('\0')) {
+      if (!rel || !rel.endsWith('.md')) continue
+      const abs = join(ROOT, rel)
+      if (!existsSync(abs)) continue
+      // 额外跳过 SKIP_DIRS（构建产物 / 依赖）——它们通常已被 .gitignore 覆盖，
+      // 但显式再挡一层，避免有人把 site/ 之类纳入跟踪。
+      if (rel.split('/').some((seg) => SKIP_DIRS.has(seg))) continue
+      out.push(abs)
+    }
+    return out
+  } catch {
+    // 非 git 仓库（或 git 不可用）→ 退回全树遍历（旧行为）
+  }
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.name.startsWith('.')) continue
     const p = join(dir, e.name)
@@ -164,8 +194,37 @@ function collectMarkdown(dir, out = []) {
  * 仓库内文件按 basename 索引——文档里常只写文件名（`STATE.md` / `backlog.md` /
  * `0003-server-side-vad.md`），逐个候选根试会漏；用全仓 basename 兜底。
  */
+/** git 视角的仓库文件集合（相对仓库根的 posix 路径）——null 表示非 git 仓库（退回旧语义）。 */
+let REPO_FILE_SET = null
+
 const BY_BASENAME = new Map()
 function indexBasenames(dir) {
+  // 2026-10-22：与 collectMarkdown 同一口径——**只索引 git 不会忽略的文件**。
+  // 此前用全树遍历，会把 `.gitignore` 掉的本机专属文件（如 docs/storefront-assets.md）
+  // 索引进去；于是「文档引用的文件在本机存在 → 判『无法判定』」而「CI 的 checkout 里
+  // 该文件不存在 → 判『历史陈述』」——**同一个基线在两边得到不同分类**，
+  // 本机写死的基线会让 CI 判红。索引与扫描必须看到同一批文件。
+  try {
+    const res = execFileSync('git', ['-C', ROOT, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    REPO_FILE_SET = new Set()
+    for (const rel of res.split('\0')) {
+      if (!rel) continue
+      if (rel.split('/').some((seg) => SKIP_DIRS.has(seg))) continue
+      const abs = join(ROOT, rel)
+      if (!existsSync(abs)) continue
+      REPO_FILE_SET.add(rel)
+      const name = rel.split('/').pop()
+      const arr = BY_BASENAME.get(name) ?? []
+      arr.push(abs)
+      BY_BASENAME.set(name, arr)
+    }
+    return
+  } catch {
+    // 非 git 仓库（或 git 不可用）→ 退回全树遍历（旧行为）
+  }
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     // `.github` 以点开头，但里面的 `ci.yml` / `release.yml` 会被文档引用 → 仍要索引
     if (e.name.startsWith('.') && e.name !== '.github') continue
@@ -198,10 +257,29 @@ function resolvePath(ref) {
     join(ROOT, 'plugin', 'dsh-voice-mode', 'lib', base),
     join(ROOT, 'plugin', 'dsh-voice-mode', 'docs', base),
   ]
-  for (const c of cands) if (existsSync(c) && statSync(c).isFile()) return c
+  for (const c of cands) if (isRepoFile(c)) return c
   // 全仓 basename 兜底（同名多份时取第一个存在的）
-  for (const p of BY_BASENAME.get(base) ?? []) if (existsSync(p) && statSync(p).isFile()) return p
+  for (const p of BY_BASENAME.get(base) ?? []) if (isRepoFile(p)) return p
   return null
+}
+
+/**
+ * 「这个文件在仓库里吗」的判据 —— 2026-10-22 改为**只看 git 可见的文件**。
+ *
+ * 此前用 `existsSync`：本机工作区里有 `.gitignore` 掉的本机专属文件
+ * （scripts/release.sh · scripts/check-dsh-version.sh · docs/RELEASE-WORKFLOW.md ·
+ * docs/storefront-assets.md · docs/codex-native-imagegen-handoff.md），
+ * 而 **CI 的 checkout 里没有它们**。于是同一条文档锚点：
+ *   本机 → 文件存在 → 判「无法判定」（符号抽不出）
+ *   CI   → 文件不存在 → 判「历史陈述」/「仅路径提及」
+ * **同一个基线在两边得到不同分类** ⇒ 本机写死的基线会让 CI 判红。
+ * 判据统一为「git 视角的文件集合」后，本机与 CI 结果逐项一致。
+ */
+function isRepoFile(absPath) {
+  if (!existsSync(absPath) || !statSync(absPath).isFile()) return false
+  if (!REPO_FILE_SET) return true // 非 git 仓库 → 退回旧的 existsSync 语义
+  const rel = relative(ROOT, absPath).split(sep).join('/')
+  return REPO_FILE_SET.has(rel)
 }
 
 /** 从 token 里取「needle」：标识符优先，否则取内部最长的字母数字片段。 */

@@ -294,6 +294,7 @@ async function ensureModelTree(opts) {
       const res = await fetchWithHeadersTimeout(host + "/api/models/" + repo + "?blobs=true", {
         headers: { "user-agent": "dsh-voice-mode" }
       });
+      if (!redirectHostAllowed(res.url, allowCustomHost)) continue;
       if (res.ok) {
         const j = await res.json();
         tree = (j.siblings ?? []).map((s) => s.rfilename ?? "").filter((f) => isSafeModelRel(f, subdir));
@@ -324,9 +325,9 @@ async function ensureModelTree(opts) {
           const res = await fetchWithHeadersTimeout(url, { headers: { "user-agent": "dsh-voice-mode" }, redirect: "follow" });
           if (!redirectHostAllowed(res.url, allowCustomHost)) continue;
           if (res.status !== 200) continue;
-          const sink = createWriteStream(partPath);
           const reader = res.body?.getReader();
           if (!reader) continue;
+          const sink = createWriteStream(partPath);
           let size = 0;
           await new Promise((resolve, reject) => {
             sink.on("error", reject);
@@ -1105,6 +1106,18 @@ var SentenceSegmenter = class {
       s = s.slice(m.index + m[0].length);
     }
   }
+  /**
+   * 安全阀：把超过 maxChars 的文字墙切下一段（feed 与 flush 共用同一口径）。
+   * 切点优先落在「，,、\s」处，但必须 ≤ maxChars——否则切出来的这一段仍然超长，阀形同虚设
+   * （原 feed 实现会切出一个 maxChars 之外的长段）；没有可用分隔符时取一半。
+   */
+  cutWall() {
+    const cut = this.buffer.search(/[，,、\s]/);
+    const idx = cut > 0 && cut <= this.maxChars ? cut : Math.max(1, Math.floor(this.maxChars / 2));
+    const head = sanitizeForTts(this.buffer.slice(0, idx)).trim();
+    this.buffer = this.buffer.slice(idx);
+    return head;
+  }
   /** 喂入一段 raw delta，返回它补全的完整句子。 */
   feed(chunk) {
     const cleaned = plainText(this.dropFences(chunk));
@@ -1118,10 +1131,7 @@ var SentenceSegmenter = class {
       if (t && !SKIP_PREFIX.test(t)) out.push(t);
     }
     if (this.buffer.length > this.maxChars) {
-      const cut = this.buffer.search(/[，,、\s]/);
-      const idx = cut > 0 ? cut : Math.floor(this.maxChars / 2);
-      const head = sanitizeForTts(this.buffer.slice(0, idx)).trim();
-      this.buffer = this.buffer.slice(idx);
+      const head = this.cutWall();
       if (head) out.push(head);
     }
     return out;
@@ -1130,16 +1140,25 @@ var SentenceSegmenter = class {
    * 收尾：flush 剩余缓冲（流结束）。
    * 整回合未见闭合围栏 → 把围栏内被抑制的内容回退输出（v0.7.27 之前未配对围栏零损失，
    * 全靠这一条守住；否则一个孤立的 ``` 会静默吞掉本回合剩余正文）。
+   *
+   * 过安全阀后的多段仍按「代码内容」朗读：既有取舍是「宁念代码不吞正文」，切分只改朗读粒度
+   * （每段一次合成请求）、不改取舍；段序 = 原文字序，段内容 = 原文字符的连续切片（切点沿用
+   * feed() 同一口径）。不回退成「整体不念」——那等于回到吞正文的老问题。
    */
   flush() {
     if (this.inFence) this.buffer = plainText(this.buffer + this.fenced);
+    const out = [];
+    while (this.buffer.length > this.maxChars) {
+      const head = this.cutWall();
+      if (head && !SKIP_PREFIX.test(head)) out.push(head);
+    }
     const t = sanitizeForTts(this.buffer).trim();
     this.buffer = "";
     this.inFence = false;
     this.ticks = "";
     this.fenced = "";
-    if (t && !SKIP_PREFIX.test(t)) return [t];
-    return [];
+    if (t && !SKIP_PREFIX.test(t)) out.push(t);
+    return out;
   }
 };
 
@@ -2510,6 +2529,7 @@ var en = {
   errUnknownSession: "Voice session expired \u2014 re-enter voice mode",
   errForbidden: "Request denied (local access only, or origin mismatch)",
   errBadRequest: "Invalid request",
+  errMethodNotAllowed: "Request method not allowed",
   errEngineNotActive: "That read-aloud engine is not active",
   errModelDownload: "Model download failed \u2014 check your network",
   errTooManyStreams: "Too many voice connections \u2014 close other voice tabs and retry",
@@ -2526,8 +2546,8 @@ var en = {
 function correctionSystem(lang) {
   return lang === "en" ? "You are a speech-recognition corrector. The user text comes from ASR and may contain homophone errors, typos, or missing/wrong punctuation. Make only minimal fixes: correct typos/homophones and fix punctuation, preserving the original meaning and colloquial style. Do not rewrite sentences, do not add content, do not answer questions, and do not alter numbers or proper nouns. Output only the corrected text, with no explanation. If the input has no obvious errors, return it unchanged." : "\u4F60\u662F\u4E2D\u6587\u8BED\u97F3\u8BC6\u522B\u7EA0\u9519\u5668\u3002\u7528\u6237\u7684\u8BDD\u6765\u81EA\u8BED\u97F3\u8BC6\u522B\uFF08ASR\uFF09\uFF0C\u53EF\u80FD\u6709\u540C\u97F3\u5B57\u3001\u9519\u522B\u5B57\u3001\u6807\u70B9\u7F3A\u5931\u6216\u9519\u8BEF\u3002\u8BF7\u53EA\u505A\u6700\u5C0F\u4FEE\u6B63\uFF1A\u6539\u9519\u522B\u5B57/\u540C\u97F3\u5B57\u3001\u8865\u6807\u70B9\uFF0C\u4FDD\u6301\u539F\u610F\u4E0E\u53E3\u8BED\u98CE\u683C\uFF1B\u4E0D\u8981\u6539\u5199\u53E5\u5B50\u3001\u4E0D\u8981\u8865\u5145\u5185\u5BB9\u3001\u4E0D\u8981\u56DE\u7B54\u95EE\u9898\u3001\u4E0D\u8981\u6539\u53D8\u6570\u5B57\u548C\u4E13\u4E1A\u672F\u8BED\u3002\u53EA\u8F93\u51FA\u4FEE\u6B63\u540E\u7684\u6587\u672C\uFF0C\u4E0D\u8981\u4EFB\u4F55\u89E3\u91CA\u3002\u5982\u679C\u539F\u6587\u6CA1\u6709\u660E\u663E\u9519\u8BEF\uFF0C\u539F\u6837\u8FD4\u56DE\u3002";
 }
-var CORRECTION_PREAMBLE_RE = /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here is (?:the )?)?(?:corrected|correction)\b/i;
-var CORRECTION_FILLER_WORDS = "\u5F53\u7136\u53EF\u4EE5|\u5F53\u7136|\u597D\u5427|\u597D\u7684?|\u884C\u5427|\u662F\u7684|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi";
+var CORRECTION_PREAMBLE_RE = /^(?:以下是|这是)?(?:修正|纠正|更正|纠错)|^(?:here(?:'s| is) (?:the |an |a )?)?(?:corrected|correction)\b/i;
+var CORRECTION_FILLER_WORDS = "\u5F53\u7136\u53EF\u4EE5|\u5F53\u7136|\u597D\u5427|\u597D\u7684?|\u884C\u5427|\u884C|\u662F\u7684|\u55EF|\u6536\u5230|\u660E\u767D\u4E86|\u77E5\u9053\u4E86|Thank you|Of course|Got it|OK|Okay|Sure|Certainly|Alright|Understood|Hello|Hi|Yes|Thanks";
 var CORRECTION_FILLER_PREFIX_RE = new RegExp(
   "^(?:(?:" + CORRECTION_FILLER_WORDS + ")(?:\\s*[,\uFF0C\u3001:\uFF1A.\u3002!\uFF01?\uFF1F)\uFF09]|\\s))+",
   "i"
@@ -3346,11 +3366,12 @@ function apply(ctx, config) {
       path: `${base}/preview`,
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
-        if (denyCrossOrigin(req, res)) return;
-        if (!limiter.hit(`preview:${clientKey(req)}`, 20, 6e4)) {
-          respondJson2(res, 429, { code: "rate_limited", error: "rate limited" });
+        if (req.method !== "POST") {
+          res.setHeader("allow", "POST");
+          respondJson2(res, 405, { code: "method_not_allowed", error: "POST required" });
           return;
         }
+        if (denyCrossOrigin(req, res)) return;
         if (!config.enabled) {
           respondJson2(res, 403, { code: "voice_disabled", error: "voice mode disabled" });
           return;
@@ -3372,6 +3393,10 @@ function apply(ctx, config) {
           }
           if (!voice) {
             respondJson2(res, 400, { code: "bad_request", error: "voice required" });
+            return;
+          }
+          if (!limiter.hit(`preview:${clientKey(req)}`, 20, 6e4)) {
+            respondJson2(res, 429, { code: "rate_limited", error: "rate limited" });
             return;
           }
           const sample = previewSample(currentEngine(), voice);
@@ -3530,9 +3555,8 @@ function apply(ctx, config) {
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
         if (req.method !== "POST") {
-          res.statusCode = 405;
           res.setHeader("allow", "POST");
-          res.end();
+          respondJson2(res, 405, { code: "method_not_allowed", error: "POST required" });
           return;
         }
         if (denyCrossOrigin(req, res)) return;
@@ -3664,6 +3688,11 @@ function apply(ctx, config) {
       handler: (req, res) => {
         if (denyNonLoopback(req, res)) return;
         if (denyCrossOrigin(req, res)) return;
+        if (req.method !== "POST") {
+          res.setHeader("allow", "POST");
+          respondJson2(res, 405, { code: "method_not_allowed", error: "POST required" });
+          return;
+        }
         let sid = "";
         try {
           const url = new URL(req.url ?? "/", "http://localhost");
@@ -3729,9 +3758,8 @@ function apply(ctx, config) {
           return;
         }
         if (req.method !== "POST") {
-          res.statusCode = 405;
           res.setHeader("allow", "GET, POST");
-          res.end();
+          respondJson2(res, 405, { code: "method_not_allowed", error: "GET or POST required" });
           return;
         }
         if (denyCrossOrigin(req, res)) return;

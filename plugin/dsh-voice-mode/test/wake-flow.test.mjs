@@ -1028,6 +1028,52 @@ await t('onIsSpeech 抛异常时门控询问作用域必须已关闭（异常不
   await h.engine.stop()
 })
 
+// ---------------------------------------------------------------- Issue #15 R15-5（A-6）：回声门控状态机的非有限防护
+console.log('Issue #15 R15-5（A-6）：单个非有限帧不得毒化回声地板（门控须能自愈）')
+await t('注入一个 NaN 帧 → 回声地板/峰值不得变 NaN，且门控在后续正常帧上恢复', async () => {
+  const LOUD_AMP = 0.7 // 洪亮语音：残差盖过回声地板 6dB → 门控放行
+  let playing = true
+  const h = makeEngine({ wakeWord: '', isPlaying: () => playing, bargeInSalvage: true })
+  await h.engine.start()
+  await say(ECHO_AMP, 3000) // AI 朗读（回声地板收敛）
+  const before = h.engine.echoLevels()
+  await frame(NaN) // 注入一个 NaN 帧（麦克风驱动异常；原生 AEC 生效时的旁路路径无任何守卫）
+  const lv = h.engine.echoLevels()
+  assert.ok(
+    Number.isFinite(lv.floorRms),
+    `回声地板不得变 NaN（实际 ${lv.floorRms}）——一次 NaN 帧即永久毒化（唯一归零点只有 start()）→ 门控恒 false → 自动打断整场会话失效`,
+  )
+  assert.ok(
+    Number.isFinite(lv.peakRms),
+    `残差峰值不得变 NaN（实际 ${lv.peakRms}）——峰值非有限 → 门控恒 false（自动打断永久失效）`,
+  )
+  // 无有效信号的帧**不参与**地板/峰值更新：地板必须原地不动（若按「静音帧」处理，
+  // 均值跟踪器会把它往 0 拉——一次 NaN 帧就削弱了回声地板的判别力）。
+  assert.ok(
+    Math.abs(lv.floorRms - before.floorRms) < 1e-9,
+    `无有效信号的帧不得改动回声地板（注入前 ${before.floorRms} → 注入后 ${lv.floorRms}）——该帧应被整体跳过，不参与地板/峰值更新`,
+  )
+  // 门控须能自愈：恢复正常信号 + 洪亮用户语音 → 门控放行
+  await say(ECHO_AMP, 500)
+  await say(LOUD_AMP, 800)
+  assert.equal(
+    h.engine.aboveEchoFloor(6),
+    true,
+    '门控须在 NaN 帧后恢复正常（地板/峰值须自愈，否则一次 NaN 帧就要等下一次 start()）',
+  )
+  // 非有限样本不得漏进上行音频：NaN 帧会进 prePad → 下一段的首个上传样本即它
+  // （host 收到 NaN PCM → 识别结果不可预期）。
+  playing = false
+  await say(SPEECH_AMP, 600)
+  await say(SIL_AMP, 2000)
+  const firstAmp = firstFedAmp()
+  assert.ok(
+    firstAmp !== null && Number.isFinite(firstAmp),
+    `非有限样本不得漏进上行音频（首个上传样本幅度 ${firstAmp}）——NaN PCM 被送进 host 识别链路`,
+  )
+  await h.engine.stop()
+})
+
 // ---------------------------------------------------------------- Issue #15 R15-5（Minor B）：wake 待机态连败计数
 console.log('Issue #15 R15-5（Minor B）：wake 待机态 partial 连败计数')
 await t('待机态 partial 成功即清连败计数：失败/成功交替不得误触「识别通道持续断」', async () => {

@@ -29,8 +29,8 @@ import {
   handleReplaced,
   isEditingShortcut,
   isAuxClickToIgnore,
-  isGestureEnd,
   isPrimaryPress,
+  pointerUpAction,
   menuFocusIndex,
   onceFinished,
   registerScopeDispose,
@@ -3435,17 +3435,23 @@ export function MicButton({
     }
   }
   const onPointerUp = (e: React.PointerEvent): void => {
-    // 收尾判据：**抬起的是我们 arm 的那一次按下**（同 pointerId + 同按键）。
-    //  - 鼠标所有按键共用一个 pointerId → 还须比按键：左键按住中再按下并松开右键时，
-    //    右键抬起不是手势结束（否则会清掉打断计时器 + endHeld 提前定稿一段话）。
-    //  - 修饰键**不参与**判据：arm 的是主键，抬手时 Ctrl 仍按下也照样收尾（否则打断
-    //    计时器不取消、holding 态不退、引擎持续收音 → 交互态卡住 + 稍后误打断）。
+    // 收尾判据（pointerUpAction 三态）：
+    //  - `ignore`：抬起的是别的按键/别的 pointer → 完全不碰任何状态。
+    //    鼠标所有按键共用一个 pointerId → 右键抬起不是手势结束（否则会清掉打断计时器
+    //    + endHeld 提前定稿一段话）。修饰键**不参与**判据：arm 的是主键，抬手时 Ctrl
+    //    仍按下也照样收尾（否则打断计时器不取消、holding 态不退、引擎持续收音 → 卡住）。
+    //  - `unarmed`：根本没 arm 过 → **不碰 holding 态**。hold 模式「按住 Ctrl 说话」的
+    //    指示（setHolding(true) + beginHeld）不经 holdPtrRef，其收尾由 cancelCtrl() 负责；
+    //    这里若无条件 setHolding(false)，用户仍按住 Ctrl 时右键点一下按钮就会把「录音中」
+    //    红态踩掉（指示与实际状态不符，直到松 Ctrl 才恢复）。
+    //  - `finish`：正常收尾（清打断计时器 + 退 holding 态 + 走手势结束逻辑）。
     const p = holdPtrRef.current
-    if (p && !isGestureEnd(p, { id: e.pointerId, button: e.button })) return
+    const action = pointerUpAction(p, { id: e.pointerId, button: e.button })
+    if (action === 'ignore') return
     holdPtrRef.current = null
     clearBreakTimer() // 松手即取消未到阈值的打断（短按不得取消回复）
+    if (action === 'unarmed' || !p) return
     setHolding(false)
-    if (!p) return
     const ms = Date.now() - p.t
     if (bootNow().mode !== 'hold') {
       // toggle 模式：播放中长按打断 → 松开发送 + 抑制合成 click；短按交给 click（退出）。
@@ -3479,6 +3485,10 @@ export function MicButton({
     if (localRef.current === 'on') engineRef.current?.endHeld(false)
   }
   const onPointerCancel = (): void => {
+    // 同族窄边界：只在**我们 arm 过**手势时才收尾。未 arm 的 pointercancel（如 hold 模式
+    // 「按住 Ctrl 说话」期间的触摸/滚动手势被浏览器取消）不得 endHeld(true) —— 那会把
+    // Ctrl 按住录下的这一段丢掉（Ctrl 路径不经 holdPtrRef，其收尾由 cancelCtrl() 负责）。
+    if (!holdPtrRef.current && !toggleHoldRef.current) return
     holdPtrRef.current = null
     toggleHoldRef.current = false
     clearBreakTimer()

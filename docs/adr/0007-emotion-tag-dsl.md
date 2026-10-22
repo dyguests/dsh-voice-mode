@@ -56,7 +56,7 @@ export interface TtsEngine {
 ```
 
 **`src/tts-local.ts` 加 `normalizeEmotionTags(text: string, engine: TtsEngine): string`**：
-- 在 `enqueue` 之前调一次（`src/tts-queue.ts` 的 `enqueue` 接口 `enqueue(sessionId, text)` / 调用点 `src/index.ts` 的 `tapActiveStream` 内两处 `queue.enqueue(sessionId, s)`——首句与工具结果句；原写 `:357`/`:1716,1735`、以及 2026-10-21 前快照的 `src/tts-queue.ts:427` / `src/index.ts:1902`、`:1921` 均已漂移——2026-10-21 R15-J 改按**符号锚**重锚，行号待最终 HEAD 稳定后统一回填）
+- 在 `enqueue` 之前调一次（`src/tts-queue.ts` 的 `enqueue` 接口 `enqueue(sessionId, text)` / 调用点 `src/index.ts` 的 `tapActiveStream` 内两处 `queue.enqueue(sessionId, s)`——首句与工具结果句；原写 `:357`/`:1716,1735`、以及 2026-10-21 前快照的 `src/tts-queue.ts:427` / src/index.ts（原锚 1902）、`:1921` 均已漂移——2026-10-21 R15-J 改按**符号锚**重锚，行号待最终 HEAD 稳定后统一回填）
 - 解析 `<\w+(?:\s+\d+ms)?>` → 按引擎映射替换为对应 SSML/停顿/emoji
 - 返回**纯字符串**（注意：Edge 引擎后续需走 `rawToFile`/`rawToStream` 路径而非 `_SSMLTemplate`，因为后者的 `<prosody>` 包裹破坏 `<mstts:express-as>` 嵌入）
 
@@ -110,7 +110,7 @@ export interface TtsEngine {
 ## 落地顺序
 
 1. 拍板本 ADR（A 路径 / 本 ADR 路径 / C 路径）
-2. `tts-local.ts` 加 `normalizeEmotionTags` + 三引擎映射表
+2. tts-local.ts 加 `normalizeEmotionTags` + 三引擎映射表
 3. `tapActiveStream` 接入点正确排序
 4. Edge 引擎 `rawToFile`/`rawToStream` 路径分支（不破坏 `_SSMLTemplate` 路径）
 5. `settings-form.tsx` 加 `tts.emotionTags: boolean` 设置（默认关）

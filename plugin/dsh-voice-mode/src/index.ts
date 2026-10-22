@@ -1265,15 +1265,20 @@ export function apply(ctx: Context, config: Config): void {
       path: `${base}/preview`,
       handler: (req: IncomingMessage, res: ServerResponse) => {
         if (denyNonLoopback(req, res)) return
-        if (denyCrossOrigin(req, res)) return
-        // fork 加固：试听限流（每来源 20 次/分钟——设置面板对比音色会连续点击，
-        // 3 次/分钟误伤正常使用；20 次/分钟仍能防滥用打爆 TTS）。
-        // I4：键经 clientKey 取（反代部署下 remoteAddress 恒为回环，裸用会让
-        // 所有经反代的用户共用一个桶——一人点满、全体 429）。
-        if (!limiter.hit(`preview:${clientKey(req)}`, 20, 60000)) {
-          respondJson(res, 429, { code: 'rate_limited', error: 'rate limited' })
+        // 只接受同源 POST（形态同 /models/retry）：跨站 <img src> 的 GET **不带 Origin**，
+        // sameOriginRequest 会放行——仅靠跨源校验挡不住「别的网页拿本机用户的回环地址反复打
+        // /preview」。限流键是 clientKey(req)（无反代时即 remoteAddress=回环），攻击者无需知道
+        // 任何秘密就能与受害者**共用同一个桶**：20 次 GET 就把该用户 1 分钟的试听配额烧光
+        // （表现为「试听一直提示请求过于频繁」）。故方法校验必须排在限流之前。
+        // 响应走 respondJson（本仓 I2 铁律：第三方 gzip 包装器下 `statusCode + setHeader + end`
+        // 的隐式头路径会产出「content-encoding: gzip 头 + 明文 body」）；`Allow` 作为 RFC 建议
+        // 头单独 setHeader，不构成隐式 JSON 响应，writeHead 时会与 respondJson 的头合并。
+        if (req.method !== 'POST') {
+          res.setHeader('allow', 'POST')
+          respondJson(res, 405, { code: 'method_not_allowed', error: 'POST required' })
           return
         }
+        if (denyCrossOrigin(req, res)) return
         // 总开关一致语义（同 /toggle 403）：关闭时试听也不发起合成调用。
         if (!config.enabled) {
           respondJson(res, 403, { code: 'voice_disabled', error: 'voice mode disabled' })
@@ -1298,6 +1303,17 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!voice) {
             respondJson(res, 400, { code: 'bad_request', error: 'voice required' })
+            return
+          }
+          // fork 加固：试听限流（每来源 20 次/分钟——设置面板对比音色会连续点击，
+          // 3 次/分钟误伤正常使用；20 次/分钟仍能防滥用打爆 TTS）。
+          // I4：键经 clientKey 取（反代部署下 remoteAddress 恒为回环，裸用会让
+          // 所有经反代的用户共用一个桶——一人点满、全体 429）。
+          // R15（Issue #15 Minor-H-13）：限流挪到**入参校验之后**——限流桶只保护真正会发起合成
+          // 的请求。原先它排在 handler 最前面，于是「不带 body 的请求」（跨站 GET、空 POST）
+          // 也能烧配额，而它们本来 400 就返回、不产生任何合成调用。
+          if (!limiter.hit(`preview:${clientKey(req)}`, 20, 60000)) {
+            respondJson(res, 429, { code: 'rate_limited', error: 'rate limited' })
             return
           }
           // 试听例句由音色语种决定（prompts.ts previewSample）。
@@ -1517,9 +1533,8 @@ export function apply(ctx: Context, config: Config): void {
         // 只接受同源 POST：跨站 <img src> 的 GET 不带 Origin，sameOriginRequest 会放行，
         // 仅靠跨源校验挡不住「别的网页让本机悄悄下载 ~388MB」，故先要求 POST。
         if (req.method !== 'POST') {
-          res.statusCode = 405
           res.setHeader('allow', 'POST')
-          res.end()
+          respondJson(res, 405, { code: 'method_not_allowed', error: 'POST required' })
           return
         }
         if (denyCrossOrigin(req, res)) return
@@ -1684,6 +1699,21 @@ export function apply(ctx: Context, config: Config): void {
         // 打进来驱动 ASR（烧 CPU + 抢活跃会话识别结果）。同源客户端恒过——
         // sameOriginRequest 对无 Origin 的非浏览器请求放行，浏览器同源请求 host 相等。
         if (denyCrossOrigin(req, res)) return
+        // 只接受同源 POST（形态同 /preview、/models/retry）：跨站 <img src> 的 GET **不带
+        // Origin**，sameOriginRequest 会放行；本端点的限流键取自 query 的 sessionId
+        // （`asr:${sid}`）——键里不含任何秘密（回环攻击面上 sid 可从 URL / SSE 载荷观察），
+        // 持续打满 60 次/秒的**滑动**窗口就能把该会话的 ASR 上行一直压成 429。限流桶是给
+        // 「真的要传 PCM」用的，不该被无 body 的廉价 GET 消耗，故方法校验排在**限流之前**。
+        // 与 /preview 的顺序差异：/preview 的方法校验在跨源之前，本端点放在跨源之后——
+        // M11 的既有锁要求「回环校验之后紧跟跨源校验」，不改那条锁。对威胁模型两者等价：
+        // 跨站 <img> 的 GET 不带 Origin（跨源层放行）随后被方法校验 405；跨站带 Origin 的
+        // 跨源 POST 在跨源层就 403，两者都不会进限流桶。
+        // 限流的位置与配额本身不动（本地 WASM 推理那条防滥用边界是刻意选的）。
+        if (req.method !== 'POST') {
+          res.setHeader('allow', 'POST')
+          respondJson(res, 405, { code: 'method_not_allowed', error: 'POST required' })
+          return
+        }
         let sid = ''
         try {
           const url = new URL(req.url ?? '/', 'http://localhost')
@@ -1780,10 +1810,10 @@ export function apply(ctx: Context, config: Config): void {
           respondJson(res, 200, { managedBy: settingsScopeRef ? 'dsh' : 'plugin', value: vset })
           return
         }
+        // 同 I2 铁律：错误响应走 respondJson，不留隐式头三段式（第三方 gzip 包装器下断链）。
         if (req.method !== 'POST') {
-          res.statusCode = 405
           res.setHeader('allow', 'GET, POST')
-          res.end()
+          respondJson(res, 405, { code: 'method_not_allowed', error: 'GET or POST required' })
           return
         }
         if (denyCrossOrigin(req, res)) return

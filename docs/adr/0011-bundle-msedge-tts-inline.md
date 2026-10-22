@@ -16,7 +16,7 @@
 - `build.mjs` 用 esbuild 把 msedge-tts 及其全部传递依赖打成独立 `lib/msedge-tts.cjs`（CJS，显式具名导出）；host 产物经构建插件把 `msedge-tts` 改写为对它的相对引用；
 - 产物内 Node 核心模块一律 `node:` 前缀（路由器对含冒号的请求直接放行）；ws / debug 的可选依赖（bufferutil、utf-8-validate、supports-color）打成「抛 MODULE_NOT_FOUND」的桩，保持其 try/catch 降级语义；
 - `msedge-tts` 移入 devDependencies；被内联的 32 个第三方包的许可随包发布 `THIRD_PARTY_NOTICES.md`（`scripts/gen-third-party-notices.mjs` 生成并可 `--check`）；
-- 防回归：`test/package-install.test.mjs`（依赖无安装脚本、产物只含核心模块/相对/已声明依赖、无 `createRequire(import.meta.url)`、files 覆盖、许可覆盖）；发版前门禁 `scripts/verify-install.sh` 与 `DSHVM_SPEC` 已安装形态冒烟（见 `docs/qa/TEST-SYSTEM.md` L5）。
+- 防回归：`test/package-install.test.mjs`（依赖无安装脚本、产物只含核心模块/相对/已声明依赖、无 `createRequire(import.meta.url)`、files 覆盖、许可覆盖）；发版前门禁 scripts/verify-install.sh 与 `DSHVM_SPEC` 已安装形态冒烟（见 `docs/qa/TEST-SYSTEM.md` L5）。
 
 ## 后果
 

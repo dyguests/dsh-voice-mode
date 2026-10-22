@@ -270,7 +270,7 @@ Kokoro/VITS 走 sherpa-onnx offline TTS（纯文本+sid 输入），**不支持 
 
 | 文件 | 位置 | 动作 |
 |---|---|---|
-| `src/index.ts` | `VOICE_SPOKEN_PROMPT` L72-76 | 追加 YIELDING 段（中文，与现有 4 句同风格）：`「如果用户在你朗读时插话（哪怕只是"嗯/对"这样的短应答），立即停止当前句，把话轮让给用户；回答后留出停顿，不要连问两个问题；用户沉默时不要主动找新话题。」` |
+| src/index.ts | `VOICE_SPOKEN_PROMPT` L72-76 | 追加 YIELDING 段（中文，与现有 4 句同风格）：`「如果用户在你朗读时插话（哪怕只是"嗯/对"这样的短应答），立即停止当前句，把话轮让给用户；回答后留出停顿，不要连问两个问题；用户沉默时不要主动找新话题。」` |
 | `src/asr.ts` | 顶层（wakeword import 旁） | `matchBackchannel(partial: string): boolean`——**独立归一化**（仅去空白/标点/小写，保留语气词——不复用 normalizeWake：其剥前置语气词会把「嗯」剥成空串，与本场景语义相反）后**整段**匹配词表：`嗯/哎/呃/哦/噢/对/好/行/是/嗯嗯/好好/so/um/uh/yeah/ok`（15 项，**不含 right**——right 5 字符超 §10 R4b ≤4 上限被长度过滤），且归一化后长度 ≤4 字符。**整段匹配，非前缀**（与 wakeWord 的本质区别） |
 | `src/asr.ts` | partial 响应处理 L310+（`state==='speech' && playingNow` 时） | 命中 → 触发新回调 `config.onBackchannel?.()`（AsrConfig 加可选回调，与 onAecState 同模式） |
 | `src/client.tsx` | engine config 组装 L1380+（onAecState 旁） | `onBackchannel: () => { skipAudioRef?(); setBackchannelHold(Date.now()+1500); }`——skipAudio 复用现有 bus.skipAudio |
@@ -466,7 +466,7 @@ I / J 独立可并行
 | **bargeInMode='manual' 真接通**（⚪ 加）| 🟡 重做 | `8278097` | asr-host.ts AsrRuntimeOptions 加 `bargeInMode` getter + feed() 加 `manualPressed` 守卫（manual + !pressed early return）+ handleAsrRequest 透传 `?manual=1`；asr.ts AsrConfig 加 `bargeInMode?` + handleAudio 入口守卫 + asrUrl `&manual=1`；client.tsx createAsrEngine 透传；index.ts createAsrRuntime 透传；**新增 `test/barge-in-manual.test.mjs` 8 项** |
 | **echoGateDb 描述改进** | 🟡 重做 | `d667ffb` | zod schema echoGateDb description 改写「当前 ASR 模型默认 AEC 生效时闲置；Safari/耳机无原生 AEC 环境兜底生效」——与 2026-09-14 2×2 fixture 实证 0/937 帧一致；strings.ts descEchoGate zh+en 同步 |
 | **autoResume 引导文案改写** | 🟡 重做 | `5b6019b` | strings.ts autoResumeHint zh+en 新文案「关闭后切换回上次会话不会自动恢复语音模式（需手动 Ctrl+Shift+V）」 |
-| **端到端补测 3 项**（批 G M4 + 批 E Q1 + 批 F I1+I2 缺口登记）| 🟡 重做 | `58f6d77` + `b0e45fe` + `ee4312b` | ① `yield-ms-wiring.test.mjs` esbuild bundle 真 client.tsx + asr-host.ts 测试；② `test/fixtures/zh-60s.wav` 60s 中文 fixture + 扩展 `asr-e2e.js` 跑 B5 长段话 finalize ≥ 95%；③ `matchBackchannel.test.mjs` esbuild bundle 真 asr.ts 守卫测试 |
+| **端到端补测 3 项**（批 G M4 + 批 E Q1 + 批 F I1+I2 缺口登记）| 🟡 重做 | `58f6d77` + `b0e45fe` + `ee4312b` | ① yield-ms-wiring.test.mjs esbuild bundle 真 client.tsx + asr-host.ts 测试；② `test/fixtures/zh-60s.wav` 60s 中文 fixture + 扩展 `asr-e2e.js` 跑 B5 长段话 finalize ≥ 95%；③ `matchBackchannel.test.mjs` esbuild bundle 真 asr.ts 守卫测试 |
 | **ADR-0003 / ADR-0004 重命名 + 命名纠正** | 🟡 重做 | `0564a51` + `0cacd88` | `git mv 0003-client-side-vad.md → 0003-server-side-vad.md` + 顶部状态 Proposed→Accepted + 命名纠正「真实运行态 Silero VAD 位于 host 侧 asr-host.ts:640-647」+ 标题更新；`git mv 0004-realtime-transport.md → 0004-realtime-transport-deferred.md` + 命名纠正「真实运行态上行 POST /voice-mode/asr 100ms 轮询 + 下行 SSE /voice-mode/stream」+ 标题更新。原文件名误导性「提议」被误读为「已实施」——命名纠正让 ADR 状态与运行态一致 |
 | **autoResume 文案统一 + descAutoResume 时机说明** | 🟡 重做 | `f883b35` | strings.ts zh+en `descAutoResume` 加「下次进入语音会话即生效」时机说明；index.ts zod schema autoResume description 对齐；settings-form.tsx autoResume Row desc 自动同步 `tr('descAutoResume')` |
 

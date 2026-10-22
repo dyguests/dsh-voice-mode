@@ -14,6 +14,7 @@ export type HostErrorCode =
   | 'unknown_session'
   | 'forbidden'
   | 'bad_request'
+  | 'method_not_allowed'
   | 'engine_not_active'
   | 'model_download_failed'
   | 'too_many_streams'
@@ -32,6 +33,7 @@ export const ERROR_I18N_KEY: Readonly<Record<HostErrorCode, TKey>> = {
   unknown_session: 'errUnknownSession',
   forbidden: 'errForbidden',
   bad_request: 'errBadRequest',
+  method_not_allowed: 'errMethodNotAllowed',
   engine_not_active: 'errEngineNotActive',
   model_download_failed: 'errModelDownload',
   too_many_streams: 'errTooManyStreams',

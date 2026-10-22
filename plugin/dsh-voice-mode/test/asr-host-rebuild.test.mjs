@@ -6,6 +6,12 @@
  *  2) 调用 markStale 不抛错、不破坏 runtime 句柄（modelStatus / warmup / dispose 仍可用）。
  *  3) 高频重复调用 markStale 安全（设置面板拨滑块可能一帧内多次触发）。
  *  4) 反向契约：markStale 不主动 free recognizer（实现只清两个闭包键，无 dispose 副作用）。
+ *  5) A-4（Round 8 验真轮补锁）：zipformer 侧 dispose 三路径之「入口判序」——dispose
+ *     先于任何请求时，随后的新请求**根本不该触发模型下载**（观测量是模型桩
+ *     ensureModelFile 的调用次数，不是「最终有没有建 recognizer」——后者被 await
+ *     之后的判序掩蔽，删入口判序也照样绿）。
+ *     与既有 M-2 用例分工：M-2 守「await 之后判序」（dispose 撞在途下载），
+ *     本用例守「入口判序」——两条锁互不掩蔽（各自删对方的判序仍绿）。
  *
  * 实现策略：esbuild 真编译 asr-host.ts，但 externalize + 桩化两处会触发网络/IO 的边界——
  *   - 'sherpa-onnx' → 内置桩（createOnlineRecognizer/createVad 返回 stub），
@@ -271,6 +277,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 await t('M-2：在途模型下载完成于 dispose 之后 → 不得新建 recognizer（~150MB WASM 无人 free）', async () => {
   globalThis.__sherpaRecognizerCreated = 0
+  const free0 = globalThis.__sherpaRecognizerFreeCalls ?? 0
   const rt = createAsrRuntimeM2({
     cacheDir: m2Tmp,
     modelHost: () => 'huggingface.co',
@@ -297,8 +304,103 @@ await t('M-2：在途模型下载完成于 dispose 之后 → 不得新建 recog
     0,
     'dispose 后在途的 getRecognizer 仍新建了 recognizer 并赋值回闭包——该 ~150MB WASM 块再无人 free（热重载每代泄漏一块，长命 host 进程内线性累积）',
   )
+  // 对应 senseDisposed M7① 三路径用例的「terminated 不增」口径：recognizer 从未建成
+  // → 无可 free（闭包引用也未被赋值回——两者是同一处代码点：判序在创建+赋值之前）。
+  assert.equal(
+    globalThis.__sherpaRecognizerFreeCalls ?? 0,
+    free0,
+    'dispose 后不应有 free 增量（recognizer 从未建成 → 闭包引用未被赋值回 → 无可 free）',
+  )
 })
 
+// ---------------------------------------------------------------------------
+// A-4（Round 8 验真轮补锁）：zipformer 侧 dispose 三路径之「入口判序」——
+// dispose **先于**任何请求到达时，随后的新请求**根本不该触发模型下载路径**。
+//
+// 与既有 M-2 用例的分工（两条锁各守一处判序，互不掩蔽）：
+//   - M-2（上方）：dispose 撞在**在途下载** → 放行后不得新建 recognizer → 守「await 之后判序」。
+//   - 本用例：dispose **先于**任何请求 → 新请求连 ensureModels 都不该进 → 守「入口判序」。
+//
+// 为什么入口判序**有可观察后果**（否则它就是纯冗余）：删掉入口判序后，新请求仍会走
+// ensureModels() → 触发一次真实下载窗口（首用 153MB encoder！）→ 被 await 之后的判序
+// 拦下时，下载已经跑完了（白跑一次下载：占带宽/磁盘/时间，且 download 失败会连带
+// asr-error 广播）。故本用例的观测量是**模型桩 ensureModelFile 的调用次数**，而不是
+// 「最终有没有赋值回 recognizer」——后者被 await 之后的判序完全掩蔽（删入口判序也照样绿）。
+// ---------------------------------------------------------------------------
+console.log('A-4：dispose 之后的新请求不得触发模型下载路径（zipformer 入口判序）')
+
+const a4Tmp = mkdtempSync(join(tmpdir(), 'dsh-vm-a4-entry-'))
+const a4ModelsStub = join(a4Tmp, 'models-stub.mjs')
+writeFileSync(
+  a4ModelsStub,
+  `
+export const HOST_PRIMARY = 'https://huggingface.co'
+export function validateModelHost(h, _allow) {
+  return h || HOST_PRIMARY
+}
+let calls = 0
+globalThis.__a4ModelsCalls = () => calls
+export async function ensureModelFile() {
+  calls++
+  await new Promise(() => {})  // 模拟 153MB encoder 下载窗口（永不完成——本用例不关心下载结果）
+  return true
+}
+export async function ensureModelTree() { return true }
+`,
+)
+const a4Out = join(a4Tmp, 'asr-host.bundle.mjs')
+await build({
+  entryPoints: [join(here, '..', 'src', 'asr-host.ts')],
+  outfile: a4Out,
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  alias: { 'sherpa-onnx': sherpaStub },
+  plugins: [
+    {
+      name: 'stub-models-a4',
+      setup(build) {
+        build.onResolve({ filter: /\.\.?\/models\.ts$/ }, () => ({
+          path: a4ModelsStub,
+        }))
+      },
+    },
+  ],
+  logLevel: 'silent',
+})
+const { createAsrRuntime: createAsrRuntimeA4 } = await import(pathToFileURL(a4Out).href)
+
+await t('A-4 入口判序：dispose 之后的新请求不得触发模型下载（ensureModelFile 零调用）', async () => {
+  const created0 = globalThis.__sherpaRecognizerCreated ?? 0
+  const models0 = globalThis.__a4ModelsCalls()
+  const rt = createAsrRuntimeA4({
+    cacheDir: a4Tmp,
+    modelHost: () => 'huggingface.co',
+    senseVoice: () => false,
+    silenceMs: () => 1500,
+    senseITN: () => true,
+    allowCustomHost: false,
+    broadcast: () => {},
+    bargeInMode: () => 'auto',
+  })
+  // dispose 先于任何请求到达（热重载/卸载：旧 runtime 已释放，迟到请求仍可能到达）。
+  rt.dispose()
+  // 新来一次请求 → getRecognizer：入口判序应在 ensureModels 之前拦下。
+  void rt.feed('s-a4', new Float32Array(1600).fill(0.1), false, 0, 0, true).catch(() => {})
+  await sleep(300)
+  assert.equal(
+    globalThis.__a4ModelsCalls(),
+    models0,
+    '入口判序失效：dispose 之后的新请求仍触发了模型下载（ensureModelFile 被调用）——白跑一次 153MB 下载窗口（被 await 之后的判序掩蔽，只看「最终没建 recognizer」抓不到）',
+  )
+  assert.equal(
+    globalThis.__sherpaRecognizerCreated ?? 0,
+    created0,
+    'dispose 之后不得新建 recognizer（~150MB WASM 无人 free）',
+  )
+})
+
+rmSync(a4Tmp, { recursive: true, force: true })
 rmSync(m2Tmp, { recursive: true, force: true })
 rmSync(tmp, { recursive: true, force: true })
 console.log(`\nasr-host-rebuild：${passed} 项通过`)

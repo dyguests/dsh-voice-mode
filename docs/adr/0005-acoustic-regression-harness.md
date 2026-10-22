@@ -14,12 +14,12 @@
 | 检测 VAD 阈值 | 0.35 | `src/asr-host.ts:371` |
 | 端点 VAD 阈值 | 0.5 | `src/asr-host.ts:340` |
 | `INT_CONFIRM_FRAMES` | 3 / 2 / 1 | `src/client.tsx:53`（:52 为其文档注释；原值 `:38`/`:37` 为 2026-10-21 前快照，已随 R15 各批重写漂移） |
-| `peakDecay` 基数 | 0.9 per 64ms | `src/asr.ts:900` |
-| `floorAlpha` 基数 | 0.98 per 64ms | `src/asr.ts:901` |
+| `peakDecay` 基数 | 0.9 per 64ms | `src/asr.ts:918` |
+| `floorAlpha` 基数 | 0.98 per 64ms | `src/asr.ts:919` |
 | `SPEECH_RMS` | 0.015 | `src/asr.ts:169` |
 | `VAD_CONTINUE_RMS` | 0.02 | `src/asr-host.ts:171` |
 | `MIN_SPEECH_MS` | 250 | `src/asr.ts:174` |
-| 确认窗口 | 800 / 350 / 200ms（连词/长句/短句；另有「无新实词 ≥400ms」提前判完） | `src/asr-host.ts:174-177`（+ :573-585 提前判完分支；原写 :529 现为 `}`、`:546-563` 为 2026-10-21 前快照，已随 R15 各批重写漂移） |
+| 确认窗口 | 800 / 350 / 200ms（连词/长句/短句；另有「无新实词 ≥400ms」提前判完） | src/asr-host.ts（原锚 174-177）（+ :573-585 提前判完分支；原写 :529 现为 `}`、`:546-563` 为 2026-10-21 前快照，已随 R15 各批重写漂移） |
 | delay 置信门 | peak > 0.5 | `src/client.tsx` 的 `est.peak > 0.5` 置信门（原写 :856-859 落在 P1-5 延迟埋点 `telemetryStages`、`:988-991` 为 2026-10-21 前快照，已随 R15 各批重写漂移） |
 | 迟滞衰减 | 连续 2 拍假才减 1 | `src/client.tsx:48-49`（`isSpeechFalseRun` 注释 + 声明；原写 :31 是 `interruptFirstAt`、`:32-34` 为 2026-10-21 前快照，已随 R15 各批重写漂移）/ :2593-2595（消费） |
 
@@ -40,8 +40,8 @@
 | 常数 | 位置 | 客户端纯核可覆盖 |
 |---|---|---|
 | `echoGateDb` 6 | 设置默认 | ✅ |
-| `peakDecay` 0.9 | `src/asr.ts:900` | ✅ |
-| `floorAlpha` 0.98 | `src/asr.ts:901` | ✅ |
+| `peakDecay` 0.9 | `src/asr.ts:918` | ✅ |
+| `floorAlpha` 0.98 | `src/asr.ts:919` | ✅ |
 | `confirmFrames` 3/2/1 | `src/client.tsx:2506` | ✅ |
 | 迟滞连续 2 拍 | `src/client.tsx:48-49` / :2593-2595 | ✅ |
 | `SPEECH_RMS` 0.015 | `src/asr.ts:169` | ⏳ 阶段二（分段级联） |

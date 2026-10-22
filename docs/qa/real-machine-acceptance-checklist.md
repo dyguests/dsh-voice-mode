@@ -1,6 +1,6 @@
 # 真机验收清单（dsh-voice-mode 批 2/3/5 + 批 7 周全修复（10 批次 A-J））
 
-> **基准**：代码基线 = `465c253`（Issue #15 R15-G 收口——client 焦点归属实例级化 + 设置 scope 跨标签页失效桥 + 4 处行为锁补齐 + 新增 `test/focus-ownership.test.mjs`；含 lib/client.js，属代码+lib 批；本基线随收口批滚动更新，**现行约定取代码+lib 批——docs-only 提交不滚动基线**）。历史基线 `d7890a4`（R13 收口）/ `38cc23e`（R12 收口）/ `c4e2c3a`（R11 收口）/ `bb42829`（R9 收口）/ `7997b4a`（R8 收口）/ `77cb212`（R6 收口）/ `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）/ `5e2d34f`（批 7O 代码块收口）/ `0b63a13`（块 3 HEAD）保留备查——其「`git diff 5e2d34f..HEAD -- src/ lib/` 为空即纯文档/资产差集」口径已作废（Issue #15 八批代码改动全部落在该差集内）。
+> **基准**：代码基线 = `16072be`（Issue #15 R15-K 收口——回合边界判据换真源 + 3 项客户端护栏 + 剥寒暄补形态 + 文档锚点守卫与回填；前值 `465c253`（R15-G 收口——client 焦点归属实例级化 + 设置 scope 跨标签页失效桥 + 4 处行为锁补齐 + 新增 `test/focus-ownership.test.mjs`；含 lib/client.js，属代码+lib 批；本基线随收口批滚动更新，**现行约定取代码+lib 批——docs-only 提交不滚动基线**）。历史基线 `d7890a4`（R13 收口）/ `38cc23e`（R12 收口）/ `c4e2c3a`（R11 收口）/ `bb42829`（R9 收口）/ `7997b4a`（R8 收口）/ `77cb212`（R6 收口）/ `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（Issue #15 八批收口）/ `5e2d34f`（批 7O 代码块收口）/ `0b63a13`（块 3 HEAD）保留备查——其「`git diff 5e2d34f..HEAD -- src/ lib/` 为空即纯文档/资产差集」口径已作废（Issue #15 八批代码改动全部落在该差集内）。
 > **范围**：5 审计轴（B1 UI Row 本地化 / B2 settings 即时生效 / B3 fetchConfig 白名单 / B4 break 静音错位 / B5 长段话丢失）+ 10 批次周全修复 31 个 commit（A-J 含 7 docs(state) 验收 + 6 docs/adr + 3 chore(lib)+release 收口）共 42 commits 的可重复真机验证步骤。
 > **目的**：每次发版前由用户亲跑 30 分钟闭环验证；所有失败项对应源码行号定位。
 > **纪律**：每步单点验证，不依赖其他步骤状态；预期/失败信号给到具体用户可识别现象。
@@ -137,7 +137,7 @@
   3. 听「这是悄悄话」段音量
 - **预期**：中间段音量明显低于前后（约 0.5 倍）
 - **失败信号**：三段音量相同（whisper 增益未生效）
-- **回退**：检查 `src/emotion.ts` `whisper` 字段 + `src/tts-local.ts` `applyGain` 调用
+- **回退**：检查 `src/emotion.ts` 的 `whisper` 字段 + `src/tts-local.ts:513-516` 的**内联**增益（`if (seg.whisper) { … samples[j] *= 0.5 }`）——**该实现是内联的，没有 `applyGain` 这个函数**（全仓 0 命中），回查时勿按旧名找函数
 - **时间**：1.5 分钟
 
 ### [ ] 4.3 `<laugh>/<sigh>/<emphasis>` 不被读出
@@ -164,7 +164,7 @@
   3. 观察 AI 是否立即停止 + 1.5s 内新内容不播
 - **预期**：当前句立即停止；1.5s 内保持静音（不读新内容）；用户说新内容 → AI 收 + 取消回合
 - **失败信号**：AI 继续朗读完整长段 / 1.5s 后直接接着读 / 「嗯」未生效
-- **回退**：检查 `src/asr.ts:59 matchBackchannel` + `src/client.tsx:972/978` 帧守卫 + `src/client.tsx:1139 setBackchannelHold`
+- **回退**：检查 `src/asr.ts:59 matchBackchannel` + `src/client.tsx:1456` 帧守卫（`backchannelHoldUntil` 让位窗口内丢弃 TTS 帧）+ `src/client.tsx:2727` 的 `setBackchannelHold` 调用点（方法定义在 `:1647`）
 - **时间**：2 分钟
 
 ### [ ] 5.2 hardBreak 真打断优先于让位
@@ -327,7 +327,7 @@
   3. 观察是否自动退出语音模式
 - **预期**：一句话发出即关麦（**保留语音会话以朗读回复**）；回合结束 + host 朗读队列排空（新 `tts-idle` 事件）+ 本地播完 + 稳定 1.2s 后**自动退出语音模式**；关闭自动发送时说完这一段即退出、文字留在草稿
 - **失败信号**：不退出 / 句间空档就提前退出（`tts-idle` 早到）/ 退出前把回复噤声
-- **回退**：检查 `src/client.tsx` 的 `beginOnceWait` 调用点与 `exitModeRef.current('manual')` 两处 once 分支两处 once 分支 + host 侧 `tts-idle` 广播
+- **回退**：检查 `src/client.tsx` 的 `beginOnceWait` 调用点与 `exitModeRef.current('manual')` 两处 once 分支 + host 侧 `tts-idle` 广播
 - **时间**：2 分钟
 
 ### [ ] 8.5 右键快捷设置 + 停止朗读（L2 修复后必过，PR #16）
@@ -435,8 +435,8 @@
   - 发版前必跑 L1（阶段 1 + 6 + 8.1-8.4），约 26 分钟
   - 每个批次独立发版前跑对应阶段，约 5 分钟
   - 全量 L1+L2+L3 = 46 分钟（含 idle 跳过可压到 36 分钟）
-- **基线状态**（代码基线 = `465c253`，Issue #15 R15-G 收口；现行约定取代码+lib 批、docs-only 提交不滚动基线；历史 `d7890a4`（R13 收口）/ `38cc23e`（R12 收口）/ `c4e2c3a`（R11 收口）/ `bb42829`（R9 收口）/ `7997b4a`（R8 收口）/ `77cb212`（R6 收口）/ `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（八批收口）/ `5e2d34f` / `0b63a13` 为历史陈述）：
-  - `npm test` 795/795 全绿（53 文件串联）
+- **基线状态**（代码基线 = `16072be`，Issue #15 R15-K 收口；前值 `465c253`（R15-G 收口）；现行约定取代码+lib 批、docs-only 提交不滚动基线；历史 `d7890a4`（R13 收口）/ `38cc23e`（R12 收口）/ `c4e2c3a`（R11 收口）/ `bb42829`（R9 收口）/ `7997b4a`（R8 收口）/ `77cb212`（R6 收口）/ `2b28539`（R5 收口）/ `6ddfb09`（R3 收口）/ `6995ae7`（R2）/ `d92f43b`（八批收口）/ `5e2d34f` / `0b63a13` 为历史陈述）：
+  - `npm test` 827/827 全绿（53 文件串联）
   - `/voice-mode/config` 返回 4 字段非 null（实证）
   - lib BUILD_TAG = HEAD 短哈希（批 7P P2 起每批 rebuild 对齐；见 STATE 口径澄清）
 

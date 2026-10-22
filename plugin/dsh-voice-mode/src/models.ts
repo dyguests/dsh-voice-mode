@@ -275,6 +275,9 @@ export async function ensureModelTree(opts: {
       const res = await fetchWithHeadersTimeout(host + '/api/models/' + repo + '?blobs=true', {
         headers: { 'user-agent': 'dsh-voice-mode' },
       })
+      // 重定向后的最终域名必须仍在白名单内（与下方两处下载路径同款守卫：文件头
+      // 不变式「重定向跳转到白名单之外的域名一律拒绝」——列举这一跳曾独缺）。
+      if (!redirectHostAllowed(res.url, allowCustomHost)) continue
       if (res.ok) {
         const j = (await res.json()) as { siblings?: Array<{ rfilename?: string }> }
         tree = (j.siblings ?? []).map((s) => s.rfilename ?? '').filter((f) => isSafeModelRel(f, subdir))
@@ -314,9 +317,11 @@ export async function ensureModelTree(opts: {
           const res = await fetchWithHeadersTimeout(url, { headers: { 'user-agent': 'dsh-voice-mode' }, redirect: 'follow' })
           if (!redirectHostAllowed(res.url, allowCustomHost)) continue
           if (res.status !== 200) continue
-          const sink = createWriteStream(partPath)
+          // 先取 body 读流、再开写流：res.body 为 null 时不留未关闭的 fd 与空 .part 文件
+          // （前置 status===200 已使该分支实际不可达，纯顺序卫生）。
           const reader = res.body?.getReader()
           if (!reader) continue
+          const sink = createWriteStream(partPath)
           let size = 0
           await new Promise<void>((resolve, reject) => {
             sink.on('error', reject)

@@ -47,6 +47,8 @@ jobs:
       - run: pnpm run build
       - run: pnpm test
       - run: pnpm run check:anchors
+      # 2026-10-22 补：文档锚点守卫（R15 新增的唯一机械门禁，ci.yml 已有）——发布动作本身也须过
+      - run: pnpm run check:doc-anchors
 
       - name: Publish to npm
         env:

@@ -252,6 +252,156 @@ await t('M-8：空白分隔的叠着寒暄（好的 好的  Sure, corrected: …
   )
 })
 
+// --------------------------------------------------------------------------
+// MO-3（Issue #15 R8 发版前）：纯寒暄的判定域由词表圈定——词表外的客套应答
+// （Yes / Thank you / Got it / 嗯 / 收到 …）仍会整条顶替用户原话。
+// 词表在此**枚举**（与 src/llm-correct.ts 的 CORRECTION_FILLER_WORDS 对应）——
+// 枚举本身就是锁：新增/漏词都会红。
+// --------------------------------------------------------------------------
+const FILLER_ZH = ['好的', '当然', '当然可以', '好吧', '行吧', '行', '是的', '嗯', '收到', '明白了', '知道了']
+const FILLER_EN = [
+  'OK', 'Okay', 'Sure', 'Certainly', 'Alright', 'Understood', 'Hello', 'Hi',
+  'Yes', 'Thank you', 'Thanks', 'Got it', 'Of course',
+]
+
+await t('MO-3：模型只回客套应答（词表全枚举）→ 回退原文（用户原话不得被顶替）', async () => {
+  const zhSrc = '帮我把接口改成异步的'
+  for (const w of FILLER_ZH) {
+    assert.ok(
+      w.length < Math.max(zhSrc.length * 3, zhSrc.length + 24),
+      '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）',
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: w }]), zhSrc, 'zh'),
+      zhSrc,
+      `模型只回「${w}」未回退原文（用户原话被静默丢弃）`,
+    )
+  }
+  const enSrc = 'make the interface async please'
+  for (const w of FILLER_EN) {
+    assert.ok(
+      w.length < Math.max(enSrc.length * 3, enSrc.length + 24),
+      '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）',
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: w }]), enSrc, 'en'),
+      enSrc,
+      `模型只回「${w}」未回退原文（用户原话被静默丢弃）`,
+    )
+  }
+})
+
+await t('MO-3：客套 + 正文 → 不误判为纯寒暄（M-6 不变量：用户原话不得被削）', async () => {
+  // 逐词验证：词 + 正文 不是「整串纯寒暄」→ 输出原样保留（既不回退、也不被削）。
+  for (const w of FILLER_ZH) {
+    const out = w + '，我知道了。'
+    assert.ok(
+      out.length < Math.max('今天天气不错'.length * 3, '今天天气不错'.length + 24),
+      '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）',
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), '今天天气不错', 'zh'),
+      out,
+      `「${w}，我知道了。」被误判为纯寒暄——用户原话不得被削`,
+    )
+  }
+  for (const w of FILLER_EN) {
+    const out = w + ', I got it'
+    assert.ok(
+      out.length < Math.max('check the weather'.length * 3, 'check the weather'.length + 24),
+      '前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）',
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), 'check the weather', 'en'),
+      out,
+      `「${w}, I got it」被误判为纯寒暄——用户原话不得被削`,
+    )
+  }
+})
+
+// --------------------------------------------------------------------------
+// MO-4（Issue #15 R8）：前言正则的**撇号形态**漏检——`here is` 不匹配 `here's`，
+// 弱模型写 "here's corrected: …" / "here's the corrected text: …" 时越过 ^ 锚，
+// 元叙述静默顶替用户消息（与 M-2/M-3 同型）。
+// --------------------------------------------------------------------------
+await t('MO-4：撇号形态的前言（here\'s corrected: / here\'s the corrected text:）→ 回退原文', async () => {
+  const src = '帮我把接口改成异步的，谢谢'
+  for (const out of ["here's corrected: 今天天气不错", "here's the corrected text: 今天天气不错"]) {
+    assert.ok(
+      out.length < Math.max(src.length * 3, src.length + 24),
+      `前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）：len=${out.length}`,
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), src, 'zh'),
+      src,
+      `撇号形态的前言「${out}」未回退原文（元叙述不得进用户消息）`,
+    )
+  }
+})
+
+await t('MO-4：用户原话本就含 "here\'s" → 不得被当成元叙述回退（不误伤合法正文）', async () => {
+  // 边界：用户原话里本就含 here's（如「here's the thing you asked for」）→
+  // 那不是模型加的说明头 → 模型输出原样保留（不回退原文）。
+  const src = "here's the thing you asked for"
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: src }]), src, 'en'),
+    src,
+    '用户原话含 "here\'s" 被误判成元叙述',
+  )
+  // 模型只改了标点（合法纠错）时也应保留——不得因含 here's 而回退原文。
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: "here's the thing you asked for!" }]), src, 'en'),
+    "here's the thing you asked for!",
+    '模型只改了标点却被回退（用户原话含 "here\'s"）',
+  )
+  // 「corrected」不在问候语之后（说明头形态是「here's [the] corrected…」）→
+  // 合法正文不得被当说明头。**模型输出须与原文不同**，否则「回退原文」与「原样返回」
+  // 观察上不可区分（回退返回的就是原文本身）——故用改标点的版本。
+  const src2 = "here's my file, already corrected"
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: "here's my file, already corrected!" }]), src2, 'en'),
+    "here's my file, already corrected!",
+    '「corrected」不在问候语之后的合法正文被当成了说明头（模型只改标点也被回退）',
+  )
+})
+
+// --------------------------------------------------------------------------
+// MO-5（Issue #15 R8）：前言正则的**冠词形态**只收 `the` → "here's a correction: …"
+// / "here is a corrected version: …" 仍漏检（与 MO-4 同型：模型元叙述静默顶替用户消息）。
+//
+// 判据（与既有形态统一）：`corrected`/`correction` **紧跟在引导语（here is / here's）
+// 及其冠词之后** ⇒ 说明头（回退原文）；`corrected` 出现在别处 ⇒ 正文（不判说明头）。
+// "here's a corrected file" 按此判据 ⇒ **说明头**（回退原文）：冠词是说明头形态的
+// 一部分，不是判别依据；且两种误判代价不对称——判成正文 = 模型元叙述顶替用户话
+// （发布说明第 9 条要修的正是这个），判成说明头 = 白丢一次纠错（用户话仍在）。
+// 锁形态沿用 MO-4 已验证的：**模型输出与原文不同**（否则回退与原样返回不可区分）。
+// --------------------------------------------------------------------------
+await t('MO-5：冠词形态的前言（here\'s a correction: / here is a corrected version:）→ 回退原文', async () => {
+  const src = '帮我把接口改成异步的，谢谢'
+  for (const out of ["here's a correction: 今天天气不错", 'here is a corrected version: 今天天气不错']) {
+    assert.ok(
+      out.length < Math.max(src.length * 3, src.length + 24),
+      `前置条件：样例长度应低于长度护栏阈值（否则本例测的是长度护栏）：len=${out.length}`,
+    )
+    assert.equal(
+      await correctText(ctxWith([{ type: 'text-delta', index: 0, text: out }]), src, 'zh'),
+      src,
+      `冠词形态的前言「${out}」未回退原文（元叙述不得进用户消息）`,
+    )
+  }
+})
+
+await t('MO-5：冠词 + corrected 的说明头形态（here\'s a corrected file）→ 判为说明头（回退原文）', async () => {
+  // 判据：corrected 紧跟在引导语及其冠词之后 ⇒ 说明头。
+  // 锁形态：模型输出与原文不同（只差标点）——否则「回退原文」与「原样返回」不可区分。
+  const src = "here's a corrected file"
+  assert.equal(
+    await correctText(ctxWith([{ type: 'text-delta', index: 0, text: "here's a corrected file!" }]), src, 'en'),
+    src,
+    '「here\'s a corrected file」应判为说明头并回退原文（冠词是说明头形态的一部分）',
+  )
+})
+
 await t('correctionSystem：双语提示含关键约束', () => {
   const zh = correctionSystem('zh')
   const en = correctionSystem('en')

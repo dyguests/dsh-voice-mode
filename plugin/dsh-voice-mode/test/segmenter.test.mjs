@@ -204,6 +204,28 @@ t('已闭合代码块的内容不会因后续未闭合围栏而回吐', () => {
   assert.deepEqual(s.feed('再。```js\nlet b = 2;\n'), ['再。'])
   assert.deepEqual(s.flush(), ['js\nlet b 2;']) // 只有未闭合块回吐，第一个已闭合块不泄漏
 })
+t('未闭合围栏 + 超长内容 → flush() 按安全阀逐段输出（每段不超长、内容不丢）', () => {
+  const s = new SentenceSegmenter({ maxSentenceChars: 100 })
+  const code = Array.from({ length: 40 }, (_, i) => `const v${i} = ${i};`).join('\n')
+  assert.deepEqual(s.feed('```\n' + code + '\n'), []) // 围栏未闭合 → 过程中不输出
+  const out = s.flush()
+  assert.ok(out.length > 1, `应切成多段：${JSON.stringify(out)}`)
+  for (const seg of out) assert.ok(seg.length <= 100, `单段超长（${seg.length}）：${seg}`)
+  // 内容一段不丢：只留字母数字比对，避开 sanitizeForTts 的标点剔除与空白折叠
+  const squash = (x) => x.replace(/[^0-9A-Za-z一-鿿]/g, '')
+  assert.equal(squash(out.join('')), squash(sanitizeForTts(code)))
+})
+t('未闭合围栏 + 长段无分隔符 → flush() 切出的每段仍不超过安全阀（切点很远也要切在上限内）', () => {
+  const s = new SentenceSegmenter({ maxSentenceChars: 50 })
+  const wall = 'A'.repeat(200) + '，' + 'B'.repeat(50) // 唯一分隔符在 200 之后，远超上限
+  assert.deepEqual(s.feed('```\n' + wall + '\n'), [])
+  const out = s.flush()
+  assert.ok(out.length > 1, `应切成多段：${JSON.stringify(out)}`)
+  for (const seg of out) assert.ok(seg.length <= 50, `单段超长（${seg.length}）：${seg}`)
+  // 内容一段不丢：只留字母数字比对，避开 sanitizeForTts 的标点剔除与空白折叠
+  const squash = (x) => x.replace(/[^0-9A-Za-z一-鿿]/g, '')
+  assert.equal(squash(out.join('')), squash(wall))
+})
 t('行内单反引号照常朗读内容', () => {
   const s = new SentenceSegmenter()
   assert.deepEqual([...s.feed('运行 `'), ...s.feed('npm test'), ...s.feed('` 就行。')].join(''), '运行 npm test 就行。')
