@@ -126,7 +126,7 @@
   3. 听 TTS 朗读顺序
 - **预期顺序**：「你好」→ ~300ms 静音 → 「世界」（顺序正确）
 - **失败信号**：先 ~300ms 静音 → 然后「你好」+「世界」连读（**错位**）
-- **回退**：检查 `src/tts-local.ts` 的 segments 处理顺序 + `src/segmenter.ts:14` `plainText` 是否豁免 emotion 标签
+- **回退**：检查 `src/tts-local.ts` 的 `segments` 处理顺序 + `src/segmenter.ts:14` `plainText` 是否豁免 emotion 标签
 - **时间**：2 分钟
 
 ### [ ] 4.2 `<whisper>悄悄话</whisper>` 增益降低

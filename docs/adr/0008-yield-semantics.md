@@ -124,8 +124,8 @@ YIELDING (let the user interrupt)
 - `src/tts-queue.ts`（`q.epoch` 逐队列代际字段——epoch 通道本体：类型声明 `QueuedSentence.epoch` :204 / `SessionQueue.epoch` :212（接口 :207），自增 :366（prune 路径）/ :455（cancel）/ :471（re-enter 新队列），入队快照 :444，泵内守卫 :490（break）/ :511（continue）。**勘误（2026-10-20）**：原「`_SSMLTemplate` epoch 通道」全 src 0 命中，系幻影符号。**刷新口径声明（2026-10-21）**：原 `:296`（setEngine）/`:382`（cancel）两处自增锚点系幻影符号——HEAD 中 `cancel` 的 `q.epoch++` 在 :455、`:296` 与 `:382` 均无自增语句；原 `:371` 入队快照实为 :444、原 `:416`/`:437` 泵内守卫实为 :490/:511。**fix-host R14 引擎级 closed 标志改动的终验至今未做**（原 :124 文末「需终验」为遗留待办），故本段锚点为 2026-10-21 符号定位结果，不构成 R14 终验结论）
 - `src/client.tsx` 的 `hardBreak` 定义（`const hardBreak = async`；原值 1946 与 2026-10-21 前快照的 `:2392` 均已漂移——旧文自述的「Δ946」与自述现值互相矛盾，已更正；2026-10-21 R15-J 改按**符号锚**重锚）
 - `src/client.tsx:2716`（`onAecState` 回调已用，证明回调注入机制成熟；原值 2106 已漂移 Δ447、原 1539 区现为 fetchConfig；**原 2553 为 2026-10-21 前快照**，已随 R15 各批重写漂移，本轮按冻结后的工作区源码刷新）
-- `CONTEXT.md:26`（"打断计数仅在播放期累积"不变量）
-- `CONTEXT.md:27`（"不丢句"不变量）
+- `CONTEXT.md`（第 26 行，"打断计数仅在播放期累积"不变量）
+- `CONTEXT.md:27`（"不丢句"不变量，`finalize` 幂等 + 有界重试）
 - `CONTEXT.md:39-40`（"echoGateDb 原生 AEC 生效时从未被执行"真机事实；lead 提示 38-39，实测该 bullet 在 39-40，38 为播放门行）
 - `@deepseek-ai/dsh-system-prompt@0.1.5-rc.1/lib/types/index.d.ts`（按符号定位 `SystemPrompt` service；行号 12-13/27 为 0.1.5-rc.1 时点）
 - `docs/findings/2026-09-15-yield-semantics-research.md`（让位调研 7 机制详细）

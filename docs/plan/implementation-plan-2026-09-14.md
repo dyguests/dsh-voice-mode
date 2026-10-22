@@ -38,11 +38,11 @@ npm test                                                             # ④ 全�
 |---|---|---|---|
 | I1 | finalize 不丢句（幂等 + 并发守卫） | `asr-host.ts:233-236`（finalized 真址；旧锚实指 senseTranscribe 段） | 不改 finalized 缓存/resetGen 语义 |
 | I2 | 打断计数仅播放期累积 | `client.tsx` isSpeechTrueCount 复位分支 | 不把非播放期计数带进开播 |
-| I3 | 播放门分支不得 return | `asr.ts:728-747` 轮询块 | 改动不得在该分支引入 return |
+| I3 | 播放门分支不得 return | `asr.ts（原锚 728-747）` 轮询块 | 改动不得在该分支引入 return |
 | I4 | TTS 单 chunk + final 帧协议 | `tts-queue.ts` pump 帧结构 | 客户端拼帧逻辑不动 |
-| I5 | epoch 守卫（重试 3 次 + 迟到作废） | `tts-queue.ts:300-320` | 新逻辑不得绕过 epoch |
+| I5 | epoch 守卫（重试 3 次 + 迟到作废） | `tts-queue.ts（原锚 300-320）` | 新逻辑不得绕过 epoch |
 | I6 | 客户端 9 锚点交集 | `package.json` dsh.client.inject | **永不**扩 client inject 列表 |
-| I7 | host 侧 cordis inject 仅按需 | `src/index.ts:88` | 本计划 6 批**均不需要**扩（system-prompt/assemble 事件已可用） |
+| I7 | host 侧 cordis inject 仅按需 | `src/index.ts（原锚 88）` | 本计划 6 批**均不需要**扩（system-prompt/assemble 事件已可用） |
 | I8 | 模型 SHA256 固定 + 下载白名单 | `models.ts` | 热词/锁语种不新增模型下载 |
 | I9 | 零 API Key | 全局 | 6 批全部本地，无任何云调用 |
 | I10 | 热词/锁语种**默认行为与现状完全一致** | 新设置键全部带默认值 | 未配置的用户感知零变化。**豁免声明：批 5 `backchannelYield` 默认 true 是产品决策（ADR-0008 已接受），不满足 I10 字面义——回退手段 = 设置关闭；其余各批严格遵守** |

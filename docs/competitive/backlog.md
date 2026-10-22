@@ -63,7 +63,7 @@
 | A5 `interruptThreshold_ms` + `eagerness` 暴露 | Ready | 0.5-1 天 | `index.ts:294-409` 设置 zod schema 主体（`createVoiceSettingsSchema` 的 `return z.object({`）+ `index.ts:260-289` `DESC` 字段说明块（schema `.description()` 的取值来源，原写 `index.ts:269-297` 实落在 DESC 块、非 schema 主体）+ `asr.ts:95-120` config 接口（原写 `asr.ts:108-122` 越界跨到 `SegmentMeta`）+ strings.ts `*Label` 镜像键（行标题唯一真源；FIELD_LABELS 全仓 0 命中，已随整合批删除） | 无需求牵引推迟（竞品对齐，本仓无迁移用户） |
 | A6 浮动状态条 + 启动 chime | Ready | 0.5-1 天 | `client.tsx` 的 `beepCtx` 声明 + `client.tsx` 的 holding CSS（`html.dshvm-holding`）+ `client.tsx` 的 holding state（`const [holding, setHolding] = useState`）；原写 `:168-174` 是文件头注释/`BUILD_TAG`、`:1233` 与 `:2156` 均为 `} catch {`，以及 2026-10-21 前快照的 `:201`/`:1675`/`:3114`，均已漂移——2026-10-21 R15-J 改按**符号锚**重锚 | 无需求牵引推迟 |
 | A10 AI 主播开场问候 | Ready | 1.5-2 天 | `index.ts` 的 `/config` exact 路由仿 `/greeting`（HEAD 全仓无 `/greeting`，属待新增范式）+ `tts-queue.ts` 的 `enqueue`（原写 `tts-queue.ts` 的 `backoffTimers` 字段区（`backoffTimers` 字段区），以及 2026-10-21 前快照的 `index.ts` `/config` 路由 / `tts-queue.ts:427-445`，均已漂移——2026-10-21 R15-J 改按**符号锚**重锚） | 无需求牵引推迟（建议固定模板不调 LLM） |
-| B3 WebRTC APM3 替代自研 NLMS | Need-PoC | PoC 1-2 周 | `aec.ts`（NLMS 自研兜底，无 bypass 开关，按符号定位） + `audio-worklet.ts` + ADR-0001/0005 | 需 PoC 实证 ERLE > 自研 NLMS |
+| B3 WebRTC APM3 替代自研 NLMS | Need-PoC | PoC 1-2 周 | `aec.ts`（`NlmsAec`，NLMS 自研兜底，无 bypass 开关，按符号定位） + `audio-worklet.ts` + ADR-0001/0005 | 需 PoC 实证 ERLE > 自研 NLMS |
 | B5 ADR-0004 协议骨架升级（WebSocket + seq/ts） | Need-ADR | 待 ADR | `asr.ts:258` segmentEpoch + `asr.ts:274` detectGeneration（原写 `:235,247` 实为 `speechMs`/`partialInFlight`）+ `index.ts:696` turnGen 声明 + `index.ts:1109-1110` get/set 与 `:1151` 迟到回合守卫（原写 `:391` 是 zod `.description(`；`index.ts:696` 的 `turnGen`/`:995-1006` 为 2026-10-21 前快照，已随 R15 各批重写漂移）+ `tts-queue.ts:204/:212` `SessionQueue.epoch` 声明（原写 `:174-182` 是测试局限注释；`:207-212` 未覆盖 :204 声明行，本轮订正为 `:204/:212`） | 需 ADR-0004 拍板（升级 accepted） |
 | B6 NotebookLM Interactive mode（播放中提问） | Need-PoC | 1-2 周 | `tts-queue.ts` 的 `cancel`（epoch++ + `engine.interrupt`；原写 `:270-285` 是重试 sleep 句柄集，以及 2026-10-21 前快照的 `:452-460`，均已漂移——2026-10-21 R15-J 改按**符号锚**重锚）+ `asr.ts:169` `rms > SPEECH_RMS` 朗读期不入段门（原写 `:640-648` 实为 `finalizeSegment` 的 force/P1-5 端点路径，非 RMS 门） | 需 PoC 实证「朗读期保留 ASR」不破坏 AEC |
 | B9 Read AI 风「现在听到…」复述 | Need-PoC | 0.5-1 天 | `asr.ts:172` 的 `MAX_SEGMENT_MS` 兜底（现存唯一「长时」计时器；**专用长静音检测在 HEAD 不存在**，需新增；原写 `:640-648` 是 `finalizeSegment` 端点路径，与「长静音」语义相反，2026-10-21 前快照的 `:945` 已漂移——本轮按现态行号刷新）+ client.tsx（`recognition-draft` 0 命中，需新增） | 需先建 recognition-draft 字段（需真机） |
@@ -96,7 +96,7 @@
 - **跨设备 push**（P3，ADR-0008 占位）：行业空白（voice-call README 明文「未做」），本插件定位桌面 webview 非「不在桌前」。
 - **agent call delegation**（P2 agent-initiated voice call + background delegation）：破坏「双工对话」产品哲学（仅两态精简版），且 `jobs`/`agents`/`tools` peer 可达性未实证。
 
-**其余冻结**：C1 人格层+情绪识别（Hume 破零 API Key）/ C2 TTS 流式首包 ≤200ms / B2 xAI fallback（已拒绝，保持零 API Key）/ A4 Krisp VIVA（闭源无对应）/ C5 web 多模态 / C6 gpt-realtime / C7 NotebookLM 双人对谈（边界外）/ Voice Pack Registry / WebSocket 上行 PCM（前置 ADR-0004）/ Spokenly MCP / 修 `/tmp/dsh*-core` 路径（前置 verify:dual 失败）。A8 录制开关已具备 `fixture-recorder.ts`，仅缺 UI 化。
+**其余冻结**：C1 人格层+情绪识别（Hume 破零 API Key）/ C2 TTS 流式首包 ≤200ms / B2 xAI fallback（已拒绝，保持零 API Key）/ A4 Krisp VIVA（闭源无对应）/ C5 web 多模态 / C6 gpt-realtime / C7 NotebookLM 双人对谈（边界外）/ Voice Pack Registry / WebSocket 上行 PCM（前置 ADR-0004）/ Spokenly MCP / 修 `/tmp/dsh*-core` 路径（前置 verify:dual 失败）。A8 录制开关已具备 `fixture-recorder.ts`（`fixtureRecorder` / `recordMode`），仅缺 UI 化。
 
 ---
 
