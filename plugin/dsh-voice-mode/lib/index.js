@@ -1068,6 +1068,17 @@ function splitSentences(chunk) {
   }
   return { sentences, tail: chunk.slice(lastEnd) };
 }
+function cutHead(text, max) {
+  let idx = -1;
+  for (let i = Math.min(max, text.length) - 1; i > 0; i--) {
+    if (/[，,、\s]/.test(text[i])) {
+      idx = i + 1;
+      break;
+    }
+  }
+  if (idx <= 0) idx = Math.max(1, Math.floor(max / 2));
+  return [text.slice(0, idx), text.slice(idx)];
+}
 var SentenceSegmenter = class {
   buffer = "";
   maxChars;
@@ -1108,15 +1119,25 @@ var SentenceSegmenter = class {
   }
   /**
    * 安全阀：把超过 maxChars 的文字墙切下一段（feed 与 flush 共用同一口径）。
-   * 切点优先落在「，,、\s」处，但必须 ≤ maxChars——否则切出来的这一段仍然超长，阀形同虚设
-   * （原 feed 实现会切出一个 maxChars 之外的长段）；没有可用分隔符时取一半。
+   * 切点取 ≤ maxChars 内**最后一个**「，,、\s」——取第一个会把无标点的英文/代码逐词切成
+   * 几十个小段；超长段必须 ≤ maxChars，否则阀形同虚设。没有可用分隔符时取一半。
    */
   cutWall() {
-    const cut = this.buffer.search(/[，,、\s]/);
-    const idx = cut > 0 && cut <= this.maxChars ? cut : Math.max(1, Math.floor(this.maxChars / 2));
-    const head = sanitizeForTts(this.buffer.slice(0, idx)).trim();
-    this.buffer = this.buffer.slice(idx);
-    return head;
+    const [head, rest] = cutHead(this.buffer, this.maxChars);
+    this.buffer = rest;
+    return sanitizeForTts(head).trim();
+  }
+  /** 成句本身超过 maxChars（长逗号句）同样过安全阀，逐段输出。 */
+  capSentence(s, out) {
+    let rest = s;
+    while (rest.length > this.maxChars) {
+      const [head, tail] = cutHead(rest, this.maxChars);
+      rest = tail;
+      const t2 = sanitizeForTts(head).trim();
+      if (t2 && !SKIP_PREFIX.test(t2)) out.push(t2);
+    }
+    const t = sanitizeForTts(rest).trim();
+    if (t && !SKIP_PREFIX.test(t)) out.push(t);
   }
   /** 喂入一段 raw delta，返回它补全的完整句子。 */
   feed(chunk) {
@@ -1126,13 +1147,10 @@ var SentenceSegmenter = class {
     const { sentences, tail } = splitSentences(this.buffer);
     this.buffer = tail;
     const out = [];
-    for (const s of sentences) {
-      const t = sanitizeForTts(s).trim();
-      if (t && !SKIP_PREFIX.test(t)) out.push(t);
-    }
-    if (this.buffer.length > this.maxChars) {
+    for (const s of sentences) this.capSentence(s, out);
+    while (this.buffer.length > this.maxChars) {
       const head = this.cutWall();
-      if (head) out.push(head);
+      if (head && !SKIP_PREFIX.test(head)) out.push(head);
     }
     return out;
   }
@@ -2369,6 +2387,7 @@ var en = {
   shortcutRecording: "Press a key combo\u2026",
   shortcutCancel: "Cancel",
   shortcutNeedModifier: "At least one modifier is required",
+  shortcutUnsupportedKey: "Only letters, digits, Enter, Space and Tab are supported",
   shortcutPlaceholder: "Click Record, then press a combo",
   shortcutReset: "Reset to default",
   shortcutNote: "Alt/Option+Enter toggles inside the composer; Cmd / Ctrl / Alt / Shift combos are supported; leaving it empty means mic button only. While recording, Backspace clears and Esc cancels; avoid browser-reserved combos (Cmd+W / T / N / L). Changes apply immediately.",

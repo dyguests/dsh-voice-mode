@@ -746,7 +746,7 @@ plugin/dsh-voice-mode/package.json（engines + description）、plugin/dsh-voice
      - 【Minor】`asr.ts:448-469` wake 待机分支成功时 `return`（`:468`）绕过 `:478` 的 `partialFailStreak = 0` → 非连续失败可误触「识别通道持续断」。
      - 【Minor】`aec.ts` 的 `eSafe` 守卫（**第九次 sweep 时为 `:92`**，现 `:104`）防护了输出但当时的 `:98` 用**未防护的 `e`** 更新 256 个权重 → 一次非有限样本 → 权重全 NaN → 此后输出恒 0 → **永久不可打断且不可恢复**（`NlmsAec` 无 reset / 无发散检测）。代理已排除「NLMS 数值发散」伪线索（真实语音比下稳定，仅纯 DC 发散）。
      - 【Minor】`strings-coverage.test.mjs:179` 的中文字面量 AST 红线是 **10 文件硬编码白名单**，33 个源文件中 **22 个在覆盖外**（含 PR #16 新增的 `mic-gesture.ts`）；当前这些文件里的中文字面量都是正当的（无实际泄漏），但属**运气**而非守卫。
-     - 【Minor】`settingsCardDesc`（`strings.ts:152`/`:424`）漏列 PR #16 的三个新设置（与 `settingsEffectiveNote` `:153` 已补齐者**内部不一致**）；`modeOnce` 的 fmt 映射（`settings-form.tsx:720`）无行为锁（变异后测试仍绿）。
+     - 【Minor】`settingsCardDesc`（`strings.ts:152`/`:424`）漏列 PR #16 的三个新设置（与 `settingsEffectiveNote` `:153` 已补齐者**内部不一致**）；`modeOnce` 的 fmt 映射（`settings-form.tsx:725`）无行为锁（变异后测试仍绿）。
      - 【Minor】`tts-queue.ts`：`prune()` 是死代码（零调用点）+ always 焦点会话在 `turnGen`/`turnStates`/`TtsQueue.queues` 三表永不回收（违反 `index.ts:633`（`ownerYieldTimer`） 的 M15 不变式自述）；子进程 `exit` 回调无身份校验（`tts-local.ts` 的 `exit`/`error` 回调段，旧子进程迟到 exit 会清掉新子进程引用）；队列溢出丢最旧句只 `console.warn` 不走 `onSkip`（`:384-387`）；`close()` 无超时 await 子进程应答（`:516-526`）。
    - **本轮派单（本轮只动 3 个 Blocker 域，其余下轮）**：`task-5`（segmenter ×3，fix-seg）· `task-6`（client 右键 Blocker，fix-client）· `task-7`（tts-local Kokoro 闸门 + tts-idle，fix-tts）。三者 write scope 不相交。
 

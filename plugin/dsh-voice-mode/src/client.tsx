@@ -2451,7 +2451,7 @@ export function MicButton({
     if (localRef.current === 'off') return
     pendingHoldRef.current = false
     pendingHoldReleaseRef.current = false
-    holdReleaseExitRef.current = false
+    clearHoldExit()
     setLocalMode('off')
     clearOnce()
     clearIdle()
@@ -2854,12 +2854,13 @@ export function MicButton({
         resetIdle()
         submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：新段=新提交周期
         bus.setUi({ partial: '' }) // 定稿即清实时字幕（防旧 partial 遮蔽思考/朗读状态条）
-        if (holdReleaseExitRef.current) {
-          // hold 松手：不朗读或不发送（自动发送关）就没有回复可等 → 定稿后直接退出；否则读完再退。
-          holdReleaseExitRef.current = false
-          if (bootNow().readAloud === 'off' || bootNow().autoSend === false) {
+        if (holdReleaseExitRef.current && meta?.force) {
+          // hold 松手那一段（force；按住途中的 30s 滚段不算）：会发送 → 进 once 等待，回复结束再退
+          // （不朗读也一样——立刻退会取消纠错 RTT 内的在途提交）；不发送（自动发送关）→ 没有回复可等，直接退。
+          clearHoldExit()
+          if (bootNow().autoSend === false) {
             setTimeout(() => {
-              void exitModeRef.current('manual')
+              if (!holdPtrRef.current) void exitModeRef.current('manual')
             }, 300)
           } else {
             beginOnceWait()
@@ -2935,8 +2936,9 @@ export function MicButton({
         } else if (pendingHoldReleaseRef.current) {
           pendingHoldReleaseRef.current = false
           engineRef.current?.endHeld(true)
+          // 引擎就绪前已长按松手：这段话没录上，直接退出（不等兜底）。
           if (holdReleaseExitRef.current) {
-            holdReleaseExitRef.current = false
+            clearHoldExit()
             void exitModeRef.current('manual')
           }
         }
@@ -2945,7 +2947,7 @@ export function MicButton({
       // getUserMedia 被拒等：留在 off，红点提示（Q16）
       pendingHoldRef.current = false
       pendingHoldReleaseRef.current = false
-      holdReleaseExitRef.current = false
+      clearHoldExit()
       setLocalMode('off')
       const msg =
         e instanceof DOMException
@@ -2999,7 +3001,7 @@ export function MicButton({
     const onComposerKey = (e: KeyboardEvent): void => {
       const el = e.target
       const editable = el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)
-      if (!editable || e.repeat || e.isComposing) return
+      if (!editable || e.isComposing) return
       if (el.closest('[data-dshvm-settings]')) return
       const combo = parseShortcut(bootNow().composerShortcut)
       if (!combo) return
@@ -3009,7 +3011,8 @@ export function MicButton({
       if (e.ctrlKey !== combo.ctrl || e.shiftKey !== combo.shift || e.altKey !== combo.alt || e.metaKey !== combo.meta) return
       e.preventDefault()
       e.stopPropagation()
-      toggleRef.current()
+      // 自动重复只吞掉（否则长按会往输入框插换行），不重复切换。
+      if (!e.repeat) toggleRef.current()
     }
     window.addEventListener('keydown', onComposerKey, true)
     return () => window.removeEventListener('keydown', onComposerKey, true)
@@ -3380,6 +3383,26 @@ export function MicButton({
   const pendingHoldRef = useRef(false)
   const pendingHoldReleaseRef = useRef(false)
   const holdReleaseExitRef = useRef(false)
+  /** 本次按下发生在 off 态（按住即进入）：短按松手留在语音模式，不当 tap-to-exit。 */
+  const pressFromOffRef = useRef(false)
+  /** 松手后空段/短噪声被弃时引擎不发 onSegment → 兜底退出（> 定稿重译 20s 上限）。 */
+  const holdExitFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function clearHoldExit(): void {
+    holdReleaseExitRef.current = false
+    if (holdExitFallbackRef.current) clearTimeout(holdExitFallbackRef.current)
+    holdExitFallbackRef.current = null
+  }
+  function armHoldExit(): void {
+    clearHoldExit()
+    holdReleaseExitRef.current = true
+    holdExitFallbackRef.current = setTimeout(() => {
+      holdExitFallbackRef.current = null
+      if (holdReleaseExitRef.current && !holdPtrRef.current && !onceRef.current) {
+        holdReleaseExitRef.current = false
+        void exitModeRef.current('manual')
+      }
+    }, 25000)
+  }
   /** 长按打断定时器：按住 ≥250ms 才真正打断（对抗审查 Blocker——打断不能挂在
    *  pointerdown 上，否则短按退出也会取消正在生成的回复）。 */
   const breakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -3466,10 +3489,17 @@ export function MicButton({
     ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
     if (bootNow().mode === 'hold') {
       // hold 模式全程 pointer 驱动：on=按住说话，off=短按进入；click 事件不参与
-      if (localRef.current === 'off') {
+      pressFromOffRef.current = localRef.current === 'off'
+      clearHoldExit()
+      if (localRef.current === 'off' && !readingOutside()) {
         pendingHoldRef.current = true
         pendingHoldReleaseRef.current = false
-        void enterMode()
+        // 早退（429/被抢占/无会话）不进 catch：无论成败都收掉待决标记，防残留到下一次进入。
+        void enterMode().finally(() => {
+          pendingHoldRef.current = false
+          pendingHoldReleaseRef.current = false
+          if (localRef.current !== 'on') clearHoldExit()
+        })
         return
       }
       if (localRef.current === 'on') {
@@ -3535,7 +3565,7 @@ export function MicButton({
     if (pendingHoldRef.current) {
       pendingHoldReleaseRef.current = true
       if (ms >= 250) {
-        holdReleaseExitRef.current = true
+        armHoldExit()
         suppressClickUntilRef.current = Date.now() + 500
       }
       return
@@ -3560,6 +3590,11 @@ export function MicButton({
         bus.stopReading(!!useSession)
         return
       }
+      if (localRef.current === 'on' && pressFromOffRef.current) {
+        // 按住即进入、引擎先于松手就绪：短按语义仍是「进入」，不得立刻 tap-to-exit。
+        engineRef.current?.endHeld(true)
+        return
+      }
       if (!takeToggleSlot(toggleHistRef.current, Date.now())) return
       if (localRef.current === 'on') {
         engineRef.current?.endHeld(true)
@@ -3571,7 +3606,7 @@ export function MicButton({
     }
     if (localRef.current === 'on') {
       engineRef.current?.endHeld(false)
-      holdReleaseExitRef.current = true
+      armHoldExit()
       suppressClickUntilRef.current = Date.now() + 500
     }
   }

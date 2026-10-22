@@ -295,7 +295,12 @@ function ShortcutField({
       }
       const named = e.key === 'Enter' ? 'Enter' : e.key === ' ' ? 'Space' : e.key === 'Tab' ? 'Tab' : ''
       const codeKey = (e.code || '').replace(/^Key/, '').replace(/^Digit/, '')
-      const k = named || (/^[A-Za-z0-9]$/.test(codeKey) ? codeKey.toUpperCase() : e.key.length === 1 ? e.key.toUpperCase() : e.key)
+      const k = named || (/^[A-Za-z0-9]$/.test(codeKey) ? codeKey.toUpperCase() : /^[A-Za-z0-9]$/.test(e.key) ? e.key.toUpperCase() : '')
+      // 方向键 / F 键等 parseShortcut 不认的键：写进去会让快捷键静默失效，当场提示。
+      if (!k) {
+        setErr(tr('shortcutUnsupportedKey'))
+        return
+      }
       const combo = [...mods, k].join('+')
       setDraft(combo)
       void score.set(field, combo)

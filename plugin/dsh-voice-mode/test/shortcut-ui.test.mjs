@@ -79,8 +79,8 @@ t('空闲按住直接进入并接管收音', () => {
   has(client, 'pendingHoldRef.current = true', 'client')
   has(client, 'engineRef.current?.beginHeld()', 'client')
 })
-t('松手按朗读模式收尾：开朗读走 once 等待，关朗读直接退出', () => {
-  has(client, "if (bootNow().readAloud === 'off' || bootNow().autoSend === false)", 'client')
+t('松手收尾：会发送走 once 等待（回复结束再退），关自动发送直接退出', () => {
+  has(client, 'if (holdReleaseExitRef.current && meta?.force) {', 'client')
   has(client, 'beginOnceWait()', 'client')
   has(client, "void exitModeRef.current('manual')", 'client')
 })
@@ -114,14 +114,49 @@ t('输入框快捷键：留空即禁用（不回落默认值）、设置卡片�
 t('hold 长按松手抑制随后的合成 click（播放中按住说话不被 click 停朗读并退出）', () => {
   const i = client.indexOf('const onPointerUp =')
   const body = client.slice(i, client.indexOf('const onPointerCancel =', i))
-  const n = body.split('holdReleaseExitRef.current = true').length - 1
+  const n = body.split('armHoldExit()').length - 1
   assert.equal(n, 2, '松手置退出标记的两处')
   const m = body.split('suppressClickUntilRef.current = Date.now() + 500').length - 1
   assert.ok(m >= 3, 'toggle 长按 + hold 两处长按松手都须抑制 click')
 })
-t('hold 松手 + 关自动发送：不进 once 等待（没有回复可等）', () => {
-  const i = client.indexOf('if (holdReleaseExitRef.current) {')
-  has(client.slice(i, i + 400), "bootNow().autoSend === false", 'onSegment')
+t('hold 松手 + 关自动发送：不进 once 等待（没有回复可等）；不朗读也等回复（立刻退会取消纠错中的提交）', () => {
+  const i = client.indexOf('if (holdReleaseExitRef.current && meta?.force) {')
+  const win = client.slice(i, i + 700)
+  has(win, 'if (bootNow().autoSend === false) {', 'onSegment')
+  assert.ok(!win.includes("readAloud === 'off'"), '关朗读即 300ms 退出会取消纠错 RTT 内的在途提交')
+})
+t('松手那一段才触发退出：按住途中的 30s 滚段（非 force）不得误进 once 等待', () => {
+  has(client, 'if (holdReleaseExitRef.current && meta?.force) {', 'onSegment')
+})
+t('空段/短噪声被弃（无 onSegment）有兜底退出；新按下清旧退出标记', () => {
+  const i = client.indexOf('function armHoldExit(')
+  has(client.slice(i, i + 500), 'setTimeout(', 'armHoldExit')
+  const d = client.indexOf('const onPointerDown =')
+  const body = client.slice(d, client.indexOf('const onPointerMove =', d))
+  has(body, 'clearHoldExit()', 'onPointerDown')
+})
+t('外部朗读中按下（off 态）= 停读，不进入语音', () => {
+  const d = client.indexOf('const onPointerDown =')
+  const body = client.slice(d, client.indexOf('const onPointerMove =', d))
+  has(body, "if (localRef.current === 'off' && !readingOutside()) {", 'onPointerDown')
+})
+t('enterMode 早退（429/被抢占）也收掉待决标记', () => {
+  has(client, 'void enterMode().finally(() => {', 'onPointerDown')
+})
+t('按住即进入、引擎先于松手就绪：短按不 tap-to-exit', () => {
+  const i = client.indexOf('const onPointerUp =')
+  const body = client.slice(i, client.indexOf('const onPointerCancel =', i))
+  const a = body.indexOf("if (localRef.current === 'on' && pressFromOffRef.current) {")
+  assert.ok(a > 0 && a < body.indexOf('takeToggleSlot('), '起于 off 的短按须先于 tap-to-exit 判定')
+})
+t('输入框快捷键长按：自动重复被吞掉（不插换行）但不重复切换', () => {
+  const i = client.indexOf('const onComposerKey =')
+  const win = client.slice(i, i + 1200)
+  assert.ok(!win.includes('|| e.repeat ||'), 'repeat 提前 return 会让长按插入换行')
+  has(win, 'if (!e.repeat) toggleRef.current()', 'onComposerKey')
+})
+t('录制器拒绝 parseShortcut 不认的键（方向键/F 键）', () => {
+  has(form, "setErr(tr('shortcutUnsupportedKey'))", 'settings-form')
 })
 t('enterMode 失败清掉待决按住状态', () => {
   const i = client.indexOf('// getUserMedia 被拒等：留在 off')

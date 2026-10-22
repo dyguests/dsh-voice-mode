@@ -1706,6 +1706,7 @@ var zh = {
   shortcutRecording: "\u6309\u4E0B\u7EC4\u5408\u952E\u2026",
   shortcutCancel: "\u53D6\u6D88",
   shortcutNeedModifier: "\u9700\u8981\u81F3\u5C11\u4E00\u4E2A\u4FEE\u9970\u952E",
+  shortcutUnsupportedKey: "\u53EA\u652F\u6301\u5B57\u6BCD\u3001\u6570\u5B57\u3001Enter\u3001Space\u3001Tab",
   shortcutPlaceholder: "\u70B9\u5F55\u5236\u540E\u6309\u7EC4\u5408\u952E",
   shortcutReset: "\u6062\u590D\u9ED8\u8BA4",
   shortcutNote: "\u8F93\u5165\u6846\u5185\u53EF\u7528 Alt/Option+Enter \u5207\u6362\uFF1B\u652F\u6301 Cmd / Ctrl / Alt / Shift \u7EC4\u5408\uFF1B\u7559\u7A7A\u8868\u793A\u53EA\u7528\u9EA6\u514B\u98CE\u6309\u94AE\u3002\u5F55\u5236\u65F6 Backspace \u6E05\u7A7A\u3001Esc \u53D6\u6D88\uFF1B\u907F\u514D\u6D4F\u89C8\u5668\u5360\u7528\u7684\u7EC4\u5408\uFF08\u5982 Cmd+W / T / N / L\uFF09\u3002\u4FEE\u6539\u540E\u7ACB\u5373\u751F\u6548\uFF0C\u65E0\u9700\u5237\u65B0\u3002",
@@ -1989,6 +1990,7 @@ var en = {
   shortcutRecording: "Press a key combo\u2026",
   shortcutCancel: "Cancel",
   shortcutNeedModifier: "At least one modifier is required",
+  shortcutUnsupportedKey: "Only letters, digits, Enter, Space and Tab are supported",
   shortcutPlaceholder: "Click Record, then press a combo",
   shortcutReset: "Reset to default",
   shortcutNote: "Alt/Option+Enter toggles inside the composer; Cmd / Ctrl / Alt / Shift combos are supported; leaving it empty means mic button only. While recording, Backspace clears and Esc cancels; avoid browser-reserved combos (Cmd+W / T / N / L). Changes apply immediately.",
@@ -2908,7 +2910,11 @@ function ShortcutField({
       }
       const named = e.key === "Enter" ? "Enter" : e.key === " " ? "Space" : e.key === "Tab" ? "Tab" : "";
       const codeKey = (e.code || "").replace(/^Key/, "").replace(/^Digit/, "");
-      const k = named || (/^[A-Za-z0-9]$/.test(codeKey) ? codeKey.toUpperCase() : e.key.length === 1 ? e.key.toUpperCase() : e.key);
+      const k = named || (/^[A-Za-z0-9]$/.test(codeKey) ? codeKey.toUpperCase() : /^[A-Za-z0-9]$/.test(e.key) ? e.key.toUpperCase() : "");
+      if (!k) {
+        setErr(t("shortcutUnsupportedKey"));
+        return;
+      }
       const combo = [...mods, k].join("+");
       setDraft(combo);
       void score.set(field, combo);
@@ -3889,7 +3895,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "c2ffe48";
+var BUILD_TAG = "1689fa8";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -5517,7 +5523,7 @@ function MicButton({
     if (localRef.current === "off") return;
     pendingHoldRef.current = false;
     pendingHoldReleaseRef.current = false;
-    holdReleaseExitRef.current = false;
+    clearHoldExit();
     setLocalMode("off");
     clearOnce();
     clearIdle();
@@ -5814,11 +5820,11 @@ function MicButton({
         resetIdle();
         submitInFlightRef.current = false;
         bus.setUi({ partial: "" });
-        if (holdReleaseExitRef.current) {
-          holdReleaseExitRef.current = false;
-          if (bootNow().readAloud === "off" || bootNow().autoSend === false) {
+        if (holdReleaseExitRef.current && meta?.force) {
+          clearHoldExit();
+          if (bootNow().autoSend === false) {
             setTimeout(() => {
-              void exitModeRef.current("manual");
+              if (!holdPtrRef.current) void exitModeRef.current("manual");
             }, 300);
           } else {
             beginOnceWait();
@@ -5879,7 +5885,7 @@ function MicButton({
           pendingHoldReleaseRef.current = false;
           engineRef.current?.endHeld(true);
           if (holdReleaseExitRef.current) {
-            holdReleaseExitRef.current = false;
+            clearHoldExit();
             void exitModeRef.current("manual");
           }
         }
@@ -5887,7 +5893,7 @@ function MicButton({
     } catch (e) {
       pendingHoldRef.current = false;
       pendingHoldReleaseRef.current = false;
-      holdReleaseExitRef.current = false;
+      clearHoldExit();
       setLocalMode("off");
       const msg = e instanceof DOMException ? e.name === "NotAllowedError" ? t("micDenied") : (
         // UX：NotReadableError = 麦克风被占用（其他程序/标签页）——与「不可用」
@@ -5930,7 +5936,7 @@ function MicButton({
     const onComposerKey = (e) => {
       const el = e.target;
       const editable = el instanceof HTMLElement && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
-      if (!editable || e.repeat || e.isComposing) return;
+      if (!editable || e.isComposing) return;
       if (el.closest("[data-dshvm-settings]")) return;
       const combo = parseShortcut(bootNow().composerShortcut);
       if (!combo) return;
@@ -5940,7 +5946,7 @@ function MicButton({
       if (e.ctrlKey !== combo.ctrl || e.shiftKey !== combo.shift || e.altKey !== combo.alt || e.metaKey !== combo.meta) return;
       e.preventDefault();
       e.stopPropagation();
-      toggleRef.current();
+      if (!e.repeat) toggleRef.current();
     };
     window.addEventListener("keydown", onComposerKey, true);
     return () => window.removeEventListener("keydown", onComposerKey, true);
@@ -6200,6 +6206,24 @@ function MicButton({
   const pendingHoldRef = (0, import_react3.useRef)(false);
   const pendingHoldReleaseRef = (0, import_react3.useRef)(false);
   const holdReleaseExitRef = (0, import_react3.useRef)(false);
+  const pressFromOffRef = (0, import_react3.useRef)(false);
+  const holdExitFallbackRef = (0, import_react3.useRef)(null);
+  function clearHoldExit() {
+    holdReleaseExitRef.current = false;
+    if (holdExitFallbackRef.current) clearTimeout(holdExitFallbackRef.current);
+    holdExitFallbackRef.current = null;
+  }
+  function armHoldExit() {
+    clearHoldExit();
+    holdReleaseExitRef.current = true;
+    holdExitFallbackRef.current = setTimeout(() => {
+      holdExitFallbackRef.current = null;
+      if (holdReleaseExitRef.current && !holdPtrRef.current && !onceRef.current) {
+        holdReleaseExitRef.current = false;
+        void exitModeRef.current("manual");
+      }
+    }, 25e3);
+  }
   const breakTimerRef = (0, import_react3.useRef)(null);
   const breakDotsTimerRef = (0, import_react3.useRef)(null);
   const clearBreakTimer = () => {
@@ -6260,10 +6284,16 @@ function MicButton({
     holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId, button: e.button };
     e.currentTarget.setPointerCapture?.(e.pointerId);
     if (bootNow().mode === "hold") {
-      if (localRef.current === "off") {
+      pressFromOffRef.current = localRef.current === "off";
+      clearHoldExit();
+      if (localRef.current === "off" && !readingOutside()) {
         pendingHoldRef.current = true;
         pendingHoldReleaseRef.current = false;
-        void enterMode();
+        void enterMode().finally(() => {
+          pendingHoldRef.current = false;
+          pendingHoldReleaseRef.current = false;
+          if (localRef.current !== "on") clearHoldExit();
+        });
         return;
       }
       if (localRef.current === "on") {
@@ -6313,7 +6343,7 @@ function MicButton({
     if (pendingHoldRef.current) {
       pendingHoldReleaseRef.current = true;
       if (ms >= 250) {
-        holdReleaseExitRef.current = true;
+        armHoldExit();
         suppressClickUntilRef.current = Date.now() + 500;
       }
       return;
@@ -6335,6 +6365,10 @@ function MicButton({
         bus.stopReading(!!useSession);
         return;
       }
+      if (localRef.current === "on" && pressFromOffRef.current) {
+        engineRef.current?.endHeld(true);
+        return;
+      }
       if (!takeToggleSlot(toggleHistRef.current, Date.now())) return;
       if (localRef.current === "on") {
         engineRef.current?.endHeld(true);
@@ -6346,7 +6380,7 @@ function MicButton({
     }
     if (localRef.current === "on") {
       engineRef.current?.endHeld(false);
-      holdReleaseExitRef.current = true;
+      armHoldExit();
       suppressClickUntilRef.current = Date.now() + 500;
     }
   };
