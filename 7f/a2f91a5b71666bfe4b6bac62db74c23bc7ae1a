@@ -1,0 +1,16 @@
+plugin/dsh-voice-mode/lib/client.js
+  h_3553f4e32d4a9f 3862,6405-6407
+plugin/dsh-voice-mode/src/client.tsx
+  h_3553f4e32d4a9f 3716-3719
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7fa2f91a5b71666bfe4b6bac62db74c23bc7ae1a",
+  "prompts": {},
+  "humans": {
+    "h_3553f4e32d4a9f": {
+      "author": "fanhl <dyguests@qq.com>"
+    }
+  }
+}
