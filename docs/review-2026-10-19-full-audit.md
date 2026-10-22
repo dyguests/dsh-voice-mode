@@ -28,7 +28,7 @@
 | 插件版本 | v0.7.24（npm latest = git HEAD 877b85c） | `npm view` / `git log` |
 | 工作区 | 干净，main = origin/main，无未推送提交 | `git status` |
 | 单测 | exit 0（440 项 / 34 套件口径，README/CHANGELOG/STATE 一致） | `npm test` 2026-10-19 |
-| 验证矩阵 | 15 版：0.1.1-rc.2 → 0.2.1-alpha.3 | `scripts/verify-dual.sh:43` |
+| 验证矩阵 | 15 版：0.1.1-rc.2 → 0.2.1-alpha.3 | `scripts/verify-dual.sh（原锚 43）` |
 | 上游 dist-tags | latest=0.2.0-rc.2 / next=0.2.1-rc.2 / alpha=0.2.1-alpha.5 | npm registry |
 | GitHub | 19 star / 5 fork / 0 open issue / 4 closed / topics 含 `dsh-plugin` | gh api |
 | CI | ci.yml + dsh-version-check.yml（周一 02:17 UTC）+ edge-tts-probe.yml（每日）全绿 | gh run list |

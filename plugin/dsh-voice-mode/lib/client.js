@@ -1700,6 +1700,17 @@ var zh = {
   // R1 收尾（fix-client 直连 tk() 调用）：连续 3 次回声拒断的解释出口 + 快捷键非法停用提示。
   echoRejectHint: "\u56DE\u58F0\u8F83\u5F3A\uFF0C\u6253\u65AD\u53EF\u80FD\u4E0D\u7075\u654F\u2014\u2014\u8FD9\u662F\u56DE\u58F0\u9632\u62A4\u5728\u751F\u6548\uFF0C\u53EF\u6234\u8033\u673A\u6216\u6539\u7528\u300C\u624B\u52A8\u6253\u65AD\u300D",
   shortcutInvalid: "\u5FEB\u6377\u952E\u65E0\u6548\uFF0C\u5DF2\u505C\u7528\uFF08\u53EF\u5728\u8BBE\u7F6E\u91CC\u6539\u4E3A\u5982 Ctrl+Shift+V\uFF1B\u7559\u7A7A\u8868\u793A\u53EA\u7528\u9EA6\u514B\u98CE\u6309\u94AE\uFF09",
+  descComposerShortcut: "\u8F93\u5165\u6846\u6709\u7126\u70B9\u65F6\u7684\u5207\u6362\u5FEB\u6377\u952E\uFF08\u9ED8\u8BA4 Alt/Option+Enter\uFF1B\u7559\u7A7A\u5219\u53EA\u5728\u8F93\u5165\u6846\u5916\u751F\u6548\uFF09",
+  composerShortcutLabel: "\u8FDB\u5165 / \u9000\u51FA\u8BED\u97F3\u6A21\u5F0F\uFF08\u8F93\u5165\u6846\u5185\uFF09",
+  shortcutRecord: "\u5F55\u5236",
+  shortcutRecording: "\u6309\u4E0B\u7EC4\u5408\u952E\u2026",
+  shortcutCancel: "\u53D6\u6D88",
+  shortcutNeedModifier: "\u9700\u8981\u81F3\u5C11\u4E00\u4E2A\u4FEE\u9970\u952E",
+  shortcutUnsupportedKey: "\u53EA\u652F\u6301\u5B57\u6BCD\u3001\u6570\u5B57\u3001Enter\u3001Space\u3001Tab",
+  shortcutPlaceholder: "\u70B9\u5F55\u5236\u540E\u6309\u7EC4\u5408\u952E",
+  shortcutReset: "\u6062\u590D\u9ED8\u8BA4",
+  shortcutNote: "\u8F93\u5165\u6846\u5185\u53EF\u7528 Alt/Option+Enter \u5207\u6362\uFF1B\u652F\u6301 Cmd / Ctrl / Alt / Shift \u7EC4\u5408\uFF1B\u7559\u7A7A\u8868\u793A\u53EA\u7528\u9EA6\u514B\u98CE\u6309\u94AE\u3002\u5F55\u5236\u65F6 Backspace \u6E05\u7A7A\u3001Esc \u53D6\u6D88\uFF1B\u907F\u514D\u6D4F\u89C8\u5668\u5360\u7528\u7684\u7EC4\u5408\uFF08\u5982 Cmd+W / T / N / L\uFF09\u3002\u4FEE\u6539\u540E\u7ACB\u5373\u751F\u6548\uFF0C\u65E0\u9700\u5237\u65B0\u3002",
+  secShortcut: "\u5FEB\u6377\u952E",
   elapsedHint: "\u5F53\u524D\u8BED\u97F3\u4F1A\u8BDD\u5DF2\u7528\u65F6\u957F",
   botLevelsHint: "AI \u6717\u8BFB\u97F3\u91CF\uFF08\u84DD\u8272\u6761 = \u6717\u8BFB\uFF0C\u7EFF\u8272\u6761 = \u9EA6\u514B\u98CE\uFF09",
   interruptConfirm: "\u6253\u65AD\u786E\u8BA4",
@@ -1837,7 +1848,7 @@ var zh = {
   bargeInModeLabel: "\u6253\u65AD\u65B9\u5F0F",
   echoGateDbLabel: "\u56DE\u58F0\u95E8\u63A7",
   modeLabel: "\u4EA4\u4E92\u6A21\u5F0F",
-  shortcutLabel: "\u5FEB\u6377\u952E",
+  shortcutLabel: "\u8FDB\u5165 / \u9000\u51FA\u8BED\u97F3\u6A21\u5F0F\uFF08\u5E94\u7528\u5185\uFF09",
   wakeWordLabel: "\u5524\u9192\u8BCD",
   toolBeepLabel: "\u5DE5\u5177\u63D0\u793A\u97F3",
   autoSendLabel: "\u81EA\u52A8\u53D1\u9001",
@@ -1973,6 +1984,17 @@ var en = {
   // R1 收尾（fix-client 直连 tk() 调用）：连续 3 次回声拒断的解释出口 + 快捷键非法停用提示。
   echoRejectHint: "Strong echo detected \u2014 barge-in is limited by echo protection. Use headphones or switch to manual barge-in",
   shortcutInvalid: "Invalid shortcut, disabled. Fix it in settings (e.g. Ctrl+Shift+V); leave empty to use the mic button only",
+  descComposerShortcut: "Shortcut to toggle voice mode while the composer has focus (default Alt/Option+Enter)",
+  composerShortcutLabel: "Enter / exit voice mode (in composer)",
+  shortcutRecord: "Record",
+  shortcutRecording: "Press a key combo\u2026",
+  shortcutCancel: "Cancel",
+  shortcutNeedModifier: "At least one modifier is required",
+  shortcutUnsupportedKey: "Only letters, digits, Enter, Space and Tab are supported",
+  shortcutPlaceholder: "Click Record, then press a combo",
+  shortcutReset: "Reset to default",
+  shortcutNote: "Alt/Option+Enter toggles inside the composer; Cmd / Ctrl / Alt / Shift combos are supported; leaving it empty means mic button only. While recording, Backspace clears and Esc cancels; avoid browser-reserved combos (Cmd+W / T / N / L). Changes apply immediately.",
+  secShortcut: "Shortcut",
   elapsedHint: "Current voice session duration",
   botLevelsHint: "AI playback level (blue bar = TTS playback, green bar = microphone)",
   interruptConfirm: "interrupt confirm",
@@ -2103,7 +2125,7 @@ var en = {
   bargeInModeLabel: "Interrupt mode",
   echoGateDbLabel: "Echo gate",
   modeLabel: "Interaction mode",
-  shortcutLabel: "Shortcut",
+  shortcutLabel: "Enter / exit voice mode (app-wide)",
   wakeWordLabel: "Wake word",
   toolBeepLabel: "Tool-call beep",
   autoSendLabel: "Auto-send",
@@ -2838,6 +2860,114 @@ function TextField({
     }
   );
 }
+function ShortcutField({
+  score,
+  field,
+  value
+}) {
+  const [draft, setDraft] = (0, import_react2.useState)(String(value ?? ""));
+  const [recording, setRecording] = (0, import_react2.useState)(false);
+  const [err, setErr] = (0, import_react2.useState)("");
+  (0, import_react2.useEffect)(() => {
+    setDraft((d) => d === String(value ?? "") ? d : String(value ?? ""));
+  }, [value]);
+  const notify = () => {
+    try {
+      window.dispatchEvent(new Event("dshvm-settings-changed"));
+    } catch {
+    }
+  };
+  const commit = () => {
+    void score.set(field, draft.trim());
+    notify();
+  };
+  (0, import_react2.useEffect)(() => {
+    if (!recording) return;
+    const onKey = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(false);
+        setErr("");
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        setDraft("");
+        void score.set(field, "");
+        notify();
+        setRecording(false);
+        return;
+      }
+      if (e.key === "Control" || e.key === "Alt" || e.key === "Shift" || e.key === "Meta") return;
+      const mods = [];
+      if (e.metaKey) mods.push("Cmd");
+      else if (e.ctrlKey) mods.push("Ctrl");
+      if (e.altKey) mods.push("Alt");
+      if (e.shiftKey) mods.push("Shift");
+      if (mods.length === 0) {
+        setErr(t("shortcutNeedModifier"));
+        return;
+      }
+      const named = e.key === "Enter" ? "Enter" : e.key === " " ? "Space" : e.key === "Tab" ? "Tab" : "";
+      const codeKey = (e.code || "").replace(/^Key/, "").replace(/^Digit/, "");
+      const k = named || (/^[A-Za-z0-9]$/.test(codeKey) ? codeKey.toUpperCase() : /^[A-Za-z0-9]$/.test(e.key) ? e.key.toUpperCase() : "");
+      if (!k) {
+        setErr(t("shortcutUnsupportedKey"));
+        return;
+      }
+      const combo = [...mods, k].join("+");
+      setDraft(combo);
+      void score.set(field, combo);
+      notify();
+      setRecording(false);
+      setErr("");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, score, field]);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: { display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "input",
+        {
+          style: { ...inputStyle, width: 150 },
+          value: draft,
+          placeholder: t("shortcutPlaceholder"),
+          onChange: (e) => {
+            setDraft(e.target.value);
+            if (err) setErr("");
+          },
+          onBlur: commit,
+          onKeyDown: (e) => {
+            if (e.key === "Enter") commit();
+          }
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "button",
+        {
+          type: "button",
+          onClick: () => {
+            setRecording((r) => !r);
+            setErr("");
+          },
+          style: {
+            height: 28,
+            padding: "0 10px",
+            borderRadius: 6,
+            border: "1px solid var(--dsw-alias-border-l3)",
+            background: "transparent",
+            color: "var(--dsw-alias-label-secondary)",
+            fontSize: 12,
+            cursor: "pointer"
+          },
+          children: recording ? t("shortcutCancel") : t("shortcutRecord")
+        }
+      )
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 11, lineHeight: "14px", color: err ? "var(--dsw-alias-state-error-primary)" : "var(--dsw-alias-label-tertiary)" }, children: recording ? t("shortcutRecording") : err })
+  ] });
+}
 function SelectField({
   score,
   field,
@@ -3516,7 +3646,6 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
               ]
             }
           ) }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "shortcut", desc: t("descShortcut"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { score: scope, field: "shortcut", value: value.shortcut ?? "Ctrl+Shift+V", placeholder: "Ctrl+Shift+V" }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "wakeWord", desc: t("descWakeWord"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, { score: scope, field: "wakeWord", value: value.wakeWord ?? "", placeholder: t("wakePlaceholder") }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "toolBeep", desc: t("descToolBeep"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.toolBeep), onChange: (e) => void scope.set("toolBeep", e.target.checked) }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "autoSend", desc: t("descAutoSend"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.autoSend), onChange: (e) => void scope.set("autoSend", e.target.checked) }) }),
@@ -3567,6 +3696,39 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "bargeInSalvage", desc: t("descBargeInSalvage"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.bargeInSalvage !== false, onChange: (e) => void scope.set("bargeInSalvage", e.target.checked) }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "llmCorrect", desc: t("descLlmCorrect"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: value.llmCorrect === true, onChange: (e) => void scope.set("llmCorrect", e.target.checked) }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "yieldMs", desc: t("descYieldMs"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, { score: scope, field: "yieldMs", value: value.yieldMs ?? 1500, min: 500, max: 3e3, step: 100 }) })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, { title: t("secShortcut"), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "shortcut", desc: t("descShortcut"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutField, { score: scope, field: "shortcut", value: value.shortcut ?? "" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "composerShortcut", desc: t("descComposerShortcut"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutField, { score: scope, field: "composerShortcut", value: value.composerShortcut ?? "Alt+Enter" }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "flex-start", gap: 10, padding: "2px 0 6px" }, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { flex: 1, fontSize: 11, lineHeight: "17px", color: "var(--dsw-alias-label-tertiary)" }, children: t("shortcutNote") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "button",
+              {
+                type: "button",
+                onClick: () => {
+                  void scope.set("shortcut", "Ctrl+Shift+V");
+                  void scope.set("composerShortcut", "Alt+Enter");
+                  try {
+                    window.dispatchEvent(new Event("dshvm-settings-changed"));
+                  } catch {
+                  }
+                },
+                style: {
+                  flexShrink: 0,
+                  height: 26,
+                  padding: "0 10px",
+                  borderRadius: 6,
+                  border: "1px solid var(--dsw-alias-border-l3)",
+                  background: "transparent",
+                  color: "var(--dsw-alias-label-secondary)",
+                  fontSize: 12,
+                  cursor: "pointer"
+                },
+                children: t("shortcutReset")
+              }
+            )
+          ] })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Section, { title: t("secRecognition"), children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { name: "senseVoice", desc: t("descSenseVoice"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: Boolean(value.senseVoice), onChange: (e) => void scope.set("senseVoice", e.target.checked) }) }),
@@ -3734,7 +3896,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "85a4e18";
+var BUILD_TAG = "feb6f03";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
@@ -3808,6 +3970,9 @@ function parseShortcut(s) {
     else if (t3 === "alt" || t3 === "option") mods.alt = true;
     else if (t3 === "meta" || t3 === "cmd" || t3 === "command") mods.meta = true;
     else if (t3.length === 1 && /^[a-z0-9]$/.test(t3)) {
+      if (key) return null;
+      key = t3;
+    } else if (t3 === "enter" || t3 === "space" || t3 === "tab") {
       if (key) return null;
       key = t3;
     } else return null;
@@ -4190,6 +4355,7 @@ function createVoiceBus(basePath = BASE_PATH2, ctx) {
     bargeInMode: "detect",
     echoGateDb: 6,
     shortcut: "Ctrl+Shift+V",
+    composerShortcut: "Alt+Enter",
     wakeWord: "",
     toolBeep: false,
     captionFontSize: 0,
@@ -5019,6 +5185,7 @@ function MicButton({
     bargeInMode: "detect",
     echoGateDb: 6,
     shortcut: "Ctrl+Shift+V",
+    composerShortcut: "Alt+Enter",
     wakeWord: "",
     toolBeep: false,
     captionFontSize: 0,
@@ -5066,6 +5233,7 @@ function MicButton({
         bargeInMode: c.bargeInMode === "manual" ? "manual" : c.bargeInMode === "detect" ? "detect" : "auto",
         echoGateDb: typeof c.echoGateDb === "number" ? Math.min(12, Math.max(3, c.echoGateDb)) : cur.echoGateDb,
         shortcut: typeof c.shortcut === "string" ? c.shortcut : cur.shortcut,
+        composerShortcut: typeof c.composerShortcut === "string" ? c.composerShortcut : cur.composerShortcut,
         wakeWord: typeof c.wakeWord === "string" ? c.wakeWord : cur.wakeWord,
         toolBeep: c.toolBeep === true,
         // 批 3：fetchConfig 是白名单拼接（plan §5.2 措辞「通用透传」与此处源码不符——见 commit message）
@@ -5354,6 +5522,9 @@ function MicButton({
   };
   const exitMode = async (reason) => {
     if (localRef.current === "off") return;
+    pendingHoldRef.current = false;
+    pendingHoldReleaseRef.current = false;
+    clearHoldExit();
     setLocalMode("off");
     clearOnce();
     clearIdle();
@@ -5650,6 +5821,16 @@ function MicButton({
         resetIdle();
         submitInFlightRef.current = false;
         bus.setUi({ partial: "" });
+        if (holdReleaseExitRef.current && meta?.force) {
+          clearHoldExit();
+          if (bootNow().autoSend === false) {
+            setTimeout(() => {
+              if (!holdPtrRef.current) void exitModeRef.current("manual");
+            }, 300);
+          } else {
+            beginOnceWait();
+          }
+        }
         const actions = actionsRef.current;
         const trimmed = text.trim();
         if (!trimmed) return;
@@ -5665,6 +5846,7 @@ function MicButton({
         }
         if (meta?.force) {
           cancelAutoSend();
+          if (bootNow().mode === "hold" && bootNow().autoSend === false) return;
           submitDraftNow(nextDraft);
           return;
         }
@@ -5695,7 +5877,24 @@ function MicButton({
       micReadyRef.current = true;
       setLocalMode("on");
       resetIdle();
+      if (pendingHoldRef.current) {
+        pendingHoldRef.current = false;
+        if (holdPtrRef.current) {
+          setHolding(true);
+          engineRef.current?.beginHeld();
+        } else if (pendingHoldReleaseRef.current) {
+          pendingHoldReleaseRef.current = false;
+          engineRef.current?.endHeld(true);
+          if (holdReleaseExitRef.current) {
+            clearHoldExit();
+            void exitModeRef.current("manual");
+          }
+        }
+      }
     } catch (e) {
+      pendingHoldRef.current = false;
+      pendingHoldReleaseRef.current = false;
+      clearHoldExit();
       setLocalMode("off");
       const msg = e instanceof DOMException ? e.name === "NotAllowedError" ? t("micDenied") : (
         // UX：NotReadableError = 麦克风被占用（其他程序/标签页）——与「不可用」
@@ -5727,6 +5926,32 @@ function MicButton({
   (0, import_react3.useEffect)(() => {
     sidRef.current = sessionId;
   }, [sessionId]);
+  (0, import_react3.useEffect)(() => {
+    const onChanged = () => {
+      void fetchConfig();
+    };
+    window.addEventListener("dshvm-settings-changed", onChanged);
+    return () => window.removeEventListener("dshvm-settings-changed", onChanged);
+  }, []);
+  (0, import_react3.useEffect)(() => {
+    const onComposerKey = (e) => {
+      const el = e.target;
+      const editable = el instanceof HTMLElement && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
+      if (!editable || e.isComposing) return;
+      if (el.closest("[data-dshvm-settings]")) return;
+      const combo = parseShortcut(bootNow().composerShortcut);
+      if (!combo) return;
+      const key = e.key.toLowerCase();
+      const codeKey = (e.code || "").replace(/^Key/, "").replace(/^Digit/, "").toLowerCase();
+      if (key !== combo.key && codeKey !== combo.key) return;
+      if (e.ctrlKey !== combo.ctrl || e.shiftKey !== combo.shift || e.altKey !== combo.alt || e.metaKey !== combo.meta) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) toggleRef.current();
+    };
+    window.addEventListener("keydown", onComposerKey, true);
+    return () => window.removeEventListener("keydown", onComposerKey, true);
+  }, []);
   const autoResumeTriedForRef = (0, import_react3.useRef)(null);
   const autoResumeHintTimerRef = (0, import_react3.useRef)(null);
   (0, import_react3.useEffect)(() => {
@@ -5979,6 +6204,27 @@ function MicButton({
   const auxClickRef = (0, import_react3.useRef)(false);
   const toggleHoldRef = (0, import_react3.useRef)(false);
   const suppressClickUntilRef = (0, import_react3.useRef)(0);
+  const pendingHoldRef = (0, import_react3.useRef)(false);
+  const pendingHoldReleaseRef = (0, import_react3.useRef)(false);
+  const holdReleaseExitRef = (0, import_react3.useRef)(false);
+  const pressFromOffRef = (0, import_react3.useRef)(false);
+  const holdExitFallbackRef = (0, import_react3.useRef)(null);
+  function clearHoldExit() {
+    holdReleaseExitRef.current = false;
+    if (holdExitFallbackRef.current) clearTimeout(holdExitFallbackRef.current);
+    holdExitFallbackRef.current = null;
+  }
+  function armHoldExit() {
+    clearHoldExit();
+    holdReleaseExitRef.current = true;
+    holdExitFallbackRef.current = setTimeout(() => {
+      holdExitFallbackRef.current = null;
+      if (holdReleaseExitRef.current && !holdPtrRef.current && !onceRef.current) {
+        holdReleaseExitRef.current = false;
+        void exitModeRef.current("manual");
+      }
+    }, 25e3);
+  }
   const breakTimerRef = (0, import_react3.useRef)(null);
   const breakDotsTimerRef = (0, import_react3.useRef)(null);
   const clearBreakTimer = () => {
@@ -6039,6 +6285,18 @@ function MicButton({
     holdPtrRef.current = { t: Date.now(), y: e.clientY, id: e.pointerId, button: e.button };
     e.currentTarget.setPointerCapture?.(e.pointerId);
     if (bootNow().mode === "hold") {
+      pressFromOffRef.current = localRef.current === "off";
+      clearHoldExit();
+      if (localRef.current === "off" && !readingOutside()) {
+        pendingHoldRef.current = true;
+        pendingHoldReleaseRef.current = false;
+        void enterMode().finally(() => {
+          pendingHoldRef.current = false;
+          pendingHoldReleaseRef.current = false;
+          if (localRef.current !== "on") clearHoldExit();
+        });
+        return;
+      }
       if (localRef.current === "on") {
         setHolding(true);
         const eng = engineRef.current;
@@ -6083,6 +6341,14 @@ function MicButton({
     if (action === "unarmed" || !p) return;
     setHolding(false);
     const ms = Date.now() - p.t;
+    if (pendingHoldRef.current) {
+      pendingHoldReleaseRef.current = true;
+      if (ms >= 250) {
+        armHoldExit();
+        suppressClickUntilRef.current = Date.now() + 500;
+      }
+      return;
+    }
     if (bootNow().mode !== "hold") {
       if (toggleHoldRef.current) {
         toggleHoldRef.current = false;
@@ -6100,6 +6366,10 @@ function MicButton({
         bus.stopReading(!!useSession);
         return;
       }
+      if (localRef.current === "on" && pressFromOffRef.current) {
+        engineRef.current?.endHeld(true);
+        return;
+      }
       if (!takeToggleSlot(toggleHistRef.current, Date.now())) return;
       if (localRef.current === "on") {
         engineRef.current?.endHeld(true);
@@ -6109,7 +6379,11 @@ function MicButton({
       }
       return;
     }
-    if (localRef.current === "on") engineRef.current?.endHeld(false);
+    if (localRef.current === "on") {
+      engineRef.current?.endHeld(false);
+      armHoldExit();
+      suppressClickUntilRef.current = Date.now() + 500;
+    }
   };
   const onPointerCancel = () => {
     if (!holdPtrRef.current && !toggleHoldRef.current) return;
@@ -6193,10 +6467,18 @@ function MicButton({
             return;
           }
           if (Date.now() < suppressClickUntilRef.current) return;
+          if (localRef.current === "on" && (bus.ui.playing || onceRef.current)) {
+            bus.stopReading(!!useSession);
+            void exitModeRef.current("manual");
+            return;
+          }
           if (holdMode && !readingOutside()) {
             if (e.detail !== 0) return;
           }
           toggle();
+        },
+        onMouseDown: (e) => {
+          e.preventDefault();
         },
         onPointerDown,
         onPointerMove,

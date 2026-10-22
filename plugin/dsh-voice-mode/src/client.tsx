@@ -389,6 +389,9 @@ function parseShortcut(s: string): { ctrl: boolean; shift: boolean; alt: boolean
       // M9：多主键（Ctrl+A+B）静默覆盖 → 拒绝；单主键且未重复才接受。
       if (key) return null
       key = t
+    } else if (t === 'enter' || t === 'space' || t === 'tab') {
+      if (key) return null
+      key = t
     } else return null
   }
   if (!key) return null
@@ -881,6 +884,7 @@ function createVoiceBus(basePath: string = BASE_PATH, ctx?: any): VoiceBus {
     bargeInMode: 'detect',
     echoGateDb: 6,
     shortcut: 'Ctrl+Shift+V',
+    composerShortcut: 'Alt+Enter',
     wakeWord: '',
     toolBeep: false,
     captionFontSize: 0,
@@ -1763,6 +1767,8 @@ interface VoiceBootConfig {
   echoGateDb: number
   /** 进入/退出语音模式的快捷键（如 Ctrl+Shift+V；空 = 禁用）。 */
   shortcut: string
+  /** 输入框有焦点时的切换快捷键（默认 Alt+Enter；空 = 禁用）。 */
+  composerShortcut: string
   /** 唤醒词（空 = 关；asr.ts 检测入口，当前宿主侧保留接口）。 */
   wakeWord: string
   /** 工具调用提示音（默认关）。 */
@@ -2009,6 +2015,7 @@ export function MicButton({
       bargeInMode: 'detect',
       echoGateDb: 6,
       shortcut: 'Ctrl+Shift+V',
+    composerShortcut: 'Alt+Enter',
       wakeWord: '',
       toolBeep: false,
       captionFontSize: 0,
@@ -2070,6 +2077,7 @@ export function MicButton({
         bargeInMode: c.bargeInMode === 'manual' ? 'manual' : c.bargeInMode === 'detect' ? 'detect' : 'auto',
         echoGateDb: typeof c.echoGateDb === 'number' ? Math.min(12, Math.max(3, c.echoGateDb)) : cur.echoGateDb,
         shortcut: typeof c.shortcut === 'string' ? c.shortcut : cur.shortcut,
+        composerShortcut: typeof c.composerShortcut === 'string' ? c.composerShortcut : cur.composerShortcut,
         wakeWord: typeof c.wakeWord === 'string' ? c.wakeWord : cur.wakeWord,
         toolBeep: c.toolBeep === true,
         // 批 3：fetchConfig 是白名单拼接（plan §5.2 措辞「通用透传」与此处源码不符——见 commit message）
@@ -2441,6 +2449,9 @@ export function MicButton({
 
   const exitMode = async (reason: 'manual' | 'idle' | 'typing'): Promise<void> => {
     if (localRef.current === 'off') return
+    pendingHoldRef.current = false
+    pendingHoldReleaseRef.current = false
+    clearHoldExit()
     setLocalMode('off')
     clearOnce()
     clearIdle()
@@ -2843,6 +2854,18 @@ export function MicButton({
         resetIdle()
         submitInFlightRef.current = false // Issue #15 批 3（审查 I-2）：新段=新提交周期
         bus.setUi({ partial: '' }) // 定稿即清实时字幕（防旧 partial 遮蔽思考/朗读状态条）
+        if (holdReleaseExitRef.current && meta?.force) {
+          // hold 松手那一段（force；按住途中的 30s 滚段不算）：会发送 → 进 once 等待，回复结束再退
+          // （不朗读也一样——立刻退会取消纠错 RTT 内的在途提交）；不发送（自动发送关）→ 没有回复可等，直接退。
+          clearHoldExit()
+          if (bootNow().autoSend === false) {
+            setTimeout(() => {
+              if (!holdPtrRef.current) void exitModeRef.current('manual')
+            }, 300)
+          } else {
+            beginOnceWait()
+          }
+        }
         const actions = actionsRef.current
         const trimmed = text.trim()
         if (!trimmed) return
@@ -2864,6 +2887,8 @@ export function MicButton({
         // 强制发送（按住 Ctrl / hold 松手）恒立即提交，绕过播放门与 autoSend 开关。
         if (meta?.force) {
           cancelAutoSend()
+          // 按住说话 + 关闭自动发送：松手只定稿，不发送。
+          if (bootNow().mode === 'hold' && bootNow().autoSend === false) return
           submitDraftNow(nextDraft)
           return
         }
@@ -2903,8 +2928,26 @@ export function MicButton({
       micReadyRef.current = true
       setLocalMode('on')
       resetIdle()
+      if (pendingHoldRef.current) {
+        pendingHoldRef.current = false
+        if (holdPtrRef.current) {
+          setHolding(true)
+          engineRef.current?.beginHeld()
+        } else if (pendingHoldReleaseRef.current) {
+          pendingHoldReleaseRef.current = false
+          engineRef.current?.endHeld(true)
+          // 引擎就绪前已长按松手：这段话没录上，直接退出（不等兜底）。
+          if (holdReleaseExitRef.current) {
+            clearHoldExit()
+            void exitModeRef.current('manual')
+          }
+        }
+      }
     } catch (e) {
       // getUserMedia 被拒等：留在 off，红点提示（Q16）
+      pendingHoldRef.current = false
+      pendingHoldReleaseRef.current = false
+      clearHoldExit()
       setLocalMode('off')
       const msg =
         e instanceof DOMException
@@ -2945,6 +2988,35 @@ export function MicButton({
   useEffect(() => {
     sidRef.current = sessionId
   }, [sessionId])
+  // 设置卡片改完立即重拉配置（快捷键 / 交互模式等），不必刷新页面。
+  useEffect(() => {
+    const onChanged = (): void => {
+      void fetchConfig()
+    }
+    window.addEventListener('dshvm-settings-changed', onChanged)
+    return () => window.removeEventListener('dshvm-settings-changed', onChanged)
+  }, [])
+  // 输入框内的切换快捷键（默认 Alt/Option+Enter）：capture 先于编辑器处理，避免插入换行。
+  useEffect(() => {
+    const onComposerKey = (e: KeyboardEvent): void => {
+      const el = e.target
+      const editable = el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)
+      if (!editable || e.isComposing) return
+      if (el.closest('[data-dshvm-settings]')) return
+      const combo = parseShortcut(bootNow().composerShortcut)
+      if (!combo) return
+      const key = e.key.toLowerCase()
+      const codeKey = (e.code || '').replace(/^Key/, '').replace(/^Digit/, '').toLowerCase()
+      if (key !== combo.key && codeKey !== combo.key) return
+      if (e.ctrlKey !== combo.ctrl || e.shiftKey !== combo.shift || e.altKey !== combo.alt || e.metaKey !== combo.meta) return
+      e.preventDefault()
+      e.stopPropagation()
+      // 自动重复只吞掉（否则长按会往输入框插换行），不重复切换。
+      if (!e.repeat) toggleRef.current()
+    }
+    window.addEventListener('keydown', onComposerKey, true)
+    return () => window.removeEventListener('keydown', onComposerKey, true)
+  }, [])
   // I5：autoResume——切回上次语音会话时自动恢复（默认关；需麦克风权限已授予，失败静默降级）。
   // 按 sessionId 触发（而非仅 mount 一次）：组件跨会话持久时「切回上次会话」才有机会命中。
   const autoResumeTriedForRef = useRef<string | null>(null)
@@ -3307,6 +3379,30 @@ export function MicButton({
   const toggleHoldRef = useRef(false)
   /** 长按打断松手后抑制合成 click 的时间戳（防误触发 tap-to-exit）。 */
   const suppressClickUntilRef = useRef(0)
+  // hold 模式：从关闭状态直接按住就录音；松手后等识别/朗读完成再自动退出。
+  const pendingHoldRef = useRef(false)
+  const pendingHoldReleaseRef = useRef(false)
+  const holdReleaseExitRef = useRef(false)
+  /** 本次按下发生在 off 态（按住即进入）：短按松手留在语音模式，不当 tap-to-exit。 */
+  const pressFromOffRef = useRef(false)
+  /** 松手后空段/短噪声被弃时引擎不发 onSegment → 兜底退出（> 定稿重译 20s 上限）。 */
+  const holdExitFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function clearHoldExit(): void {
+    holdReleaseExitRef.current = false
+    if (holdExitFallbackRef.current) clearTimeout(holdExitFallbackRef.current)
+    holdExitFallbackRef.current = null
+  }
+  function armHoldExit(): void {
+    clearHoldExit()
+    holdReleaseExitRef.current = true
+    holdExitFallbackRef.current = setTimeout(() => {
+      holdExitFallbackRef.current = null
+      if (holdReleaseExitRef.current && !holdPtrRef.current && !onceRef.current) {
+        holdReleaseExitRef.current = false
+        void exitModeRef.current('manual')
+      }
+    }, 25000)
+  }
   /** 长按打断定时器：按住 ≥250ms 才真正打断（对抗审查 Blocker——打断不能挂在
    *  pointerdown 上，否则短按退出也会取消正在生成的回复）。 */
   const breakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -3393,6 +3489,19 @@ export function MicButton({
     ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
     if (bootNow().mode === 'hold') {
       // hold 模式全程 pointer 驱动：on=按住说话，off=短按进入；click 事件不参与
+      pressFromOffRef.current = localRef.current === 'off'
+      clearHoldExit()
+      if (localRef.current === 'off' && !readingOutside()) {
+        pendingHoldRef.current = true
+        pendingHoldReleaseRef.current = false
+        // 早退（429/被抢占/无会话）不进 catch：无论成败都收掉待决标记，防残留到下一次进入。
+        void enterMode().finally(() => {
+          pendingHoldRef.current = false
+          pendingHoldReleaseRef.current = false
+          if (localRef.current !== 'on') clearHoldExit()
+        })
+        return
+      }
       if (localRef.current === 'on') {
         setHolding(true)
         const eng = engineRef.current
@@ -3453,6 +3562,14 @@ export function MicButton({
     if (action === 'unarmed' || !p) return
     setHolding(false)
     const ms = Date.now() - p.t
+    if (pendingHoldRef.current) {
+      pendingHoldReleaseRef.current = true
+      if (ms >= 250) {
+        armHoldExit()
+        suppressClickUntilRef.current = Date.now() + 500
+      }
+      return
+    }
     if (bootNow().mode !== 'hold') {
       // toggle 模式：播放中长按打断 → 松开发送 + 抑制合成 click；短按交给 click（退出）。
       if (toggleHoldRef.current) {
@@ -3473,6 +3590,11 @@ export function MicButton({
         bus.stopReading(!!useSession)
         return
       }
+      if (localRef.current === 'on' && pressFromOffRef.current) {
+        // 按住即进入、引擎先于松手就绪：短按语义仍是「进入」，不得立刻 tap-to-exit。
+        engineRef.current?.endHeld(true)
+        return
+      }
       if (!takeToggleSlot(toggleHistRef.current, Date.now())) return
       if (localRef.current === 'on') {
         engineRef.current?.endHeld(true)
@@ -3482,7 +3604,11 @@ export function MicButton({
       }
       return
     }
-    if (localRef.current === 'on') engineRef.current?.endHeld(false)
+    if (localRef.current === 'on') {
+      engineRef.current?.endHeld(false)
+      armHoldExit()
+      suppressClickUntilRef.current = Date.now() + 500
+    }
   }
   const onPointerCancel = (): void => {
     // 同族窄边界：只在**我们 arm 过**手势时才收尾。未 arm 的 pointercancel（如 hold 模式
@@ -3628,6 +3754,11 @@ export function MicButton({
           }
           // toggle 模式长按打断松手后，抑制合成的 click（防误触发 tap-to-exit）。
           if (Date.now() < suppressClickUntilRef.current) return
+          if (localRef.current === 'on' && (bus.ui.playing || onceRef.current)) {
+            bus.stopReading(!!useSession)
+            void exitModeRef.current('manual')
+            return
+          }
           if (holdMode && !readingOutside()) {
             // pointer/触摸合成的 click 一律忽略（tap 进入/退出走 pointer 路径，
             // 否则 tap-exit 的 trailing click 会再次触发 toggle 重进 —— Blocker-1 反面）
@@ -3635,6 +3766,10 @@ export function MicButton({
             // 键盘/Space/Enter 激活（detail === 0）保持 a11y 可用
           }
           toggle()
+        }}
+        onMouseDown={(e: React.MouseEvent) => {
+          // mousedown 默认把焦点移到按钮上，输入框光标会丢；拦掉，输入框内快捷键继续可用。
+          e.preventDefault()
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

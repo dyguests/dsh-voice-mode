@@ -66,6 +66,20 @@ export function splitSentences(chunk: string): { sentences: string[]; tail: stri
   return { sentences, tail: chunk.slice(lastEnd) }
 }
 
+/** 在 ≤ max 的范围内找最后一个软切点（，,、空白）切开；无切点时取 max/2。返回 [头, 余下]。 */
+export function cutHead(text: string, max: number): [string, string] {
+  let idx = -1
+  // 切在分隔符之后：头段带着逗号收尾、下一段开头干净；头段长度 = i+1 ≤ max。
+  for (let i = Math.min(max, text.length) - 1; i > 0; i--) {
+    if (/[，,、\s]/.test(text[i])) {
+      idx = i + 1
+      break
+    }
+  }
+  if (idx <= 0) idx = Math.max(1, Math.floor(max / 2))
+  return [text.slice(0, idx), text.slice(idx)]
+}
+
 export class SentenceSegmenter {
   private buffer = ''
   private readonly maxChars: number
@@ -113,15 +127,26 @@ export class SentenceSegmenter {
 
   /**
    * 安全阀：把超过 maxChars 的文字墙切下一段（feed 与 flush 共用同一口径）。
-   * 切点优先落在「，,、\s」处，但必须 ≤ maxChars——否则切出来的这一段仍然超长，阀形同虚设
-   * （原 feed 实现会切出一个 maxChars 之外的长段）；没有可用分隔符时取一半。
+   * 切点取 ≤ maxChars 内**最后一个**「，,、\s」——取第一个会把无标点的英文/代码逐词切成
+   * 几十个小段；超长段必须 ≤ maxChars，否则阀形同虚设。没有可用分隔符时取一半。
    */
   private cutWall(): string {
-    const cut = this.buffer.search(/[，,、\s]/)
-    const idx = cut > 0 && cut <= this.maxChars ? cut : Math.max(1, Math.floor(this.maxChars / 2))
-    const head = sanitizeForTts(this.buffer.slice(0, idx)).trim()
-    this.buffer = this.buffer.slice(idx)
-    return head
+    const [head, rest] = cutHead(this.buffer, this.maxChars)
+    this.buffer = rest
+    return sanitizeForTts(head).trim()
+  }
+
+  /** 成句本身超过 maxChars（长逗号句）同样过安全阀，逐段输出。 */
+  private capSentence(s: string, out: string[]): void {
+    let rest = s
+    while (rest.length > this.maxChars) {
+      const [head, tail] = cutHead(rest, this.maxChars)
+      rest = tail
+      const t = sanitizeForTts(head).trim()
+      if (t && !SKIP_PREFIX.test(t)) out.push(t)
+    }
+    const t = sanitizeForTts(rest).trim()
+    if (t && !SKIP_PREFIX.test(t)) out.push(t)
   }
 
   /** 喂入一段 raw delta，返回它补全的完整句子。 */
@@ -132,14 +157,11 @@ export class SentenceSegmenter {
     const { sentences, tail } = splitSentences(this.buffer)
     this.buffer = tail
     const out: string[] = []
-    for (const s of sentences) {
-      const t = sanitizeForTts(s).trim()
-      if (t && !SKIP_PREFIX.test(t)) out.push(t)
-    }
-    // 安全阀：一堵没有标点的文字墙。
-    if (this.buffer.length > this.maxChars) {
+    for (const s of sentences) this.capSentence(s, out)
+    // 安全阀：一堵没有标点的文字墙——与 flush() 同口径逐段切到 ≤ maxChars（一次大 delta 不留积压）。
+    while (this.buffer.length > this.maxChars) {
       const head = this.cutWall()
-      if (head) out.push(head)
+      if (head && !SKIP_PREFIX.test(head)) out.push(head)
     }
     return out
   }

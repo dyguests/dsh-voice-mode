@@ -231,5 +231,30 @@ t('行内单反引号照常朗读内容', () => {
   assert.deepEqual([...s.feed('运行 `'), ...s.feed('npm test'), ...s.feed('` 就行。')].join(''), '运行 npm test 就行。')
 })
 
+t('安全阀：无句末标点的英文墙按「上限内最后一个空格」切，不逐词碎切', () => {
+  const s = new SentenceSegmenter({ maxSentenceChars: 50 })
+  const words = Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ')
+  const out = [...s.feed(words), ...s.flush()]
+  for (const o of out) assert.ok(o.length <= 50, `段超长：${o.length}`)
+  assert.ok(out.length <= Math.ceil(words.length / 40), `碎切成 ${out.length} 段`)
+  assert.equal(out.join(' ').replace(/\s+/g, ' '), words)
+})
+
+t('安全阀：一次大 delta 在 feed() 内就切完，不把积压留到下一个 delta', () => {
+  const s = new SentenceSegmenter({ maxSentenceChars: 20 })
+  const out = s.feed('啊'.repeat(200))
+  assert.ok(out.length >= 9, `只切出 ${out.length} 段`)
+  assert.ok(s.flush().join('').length <= 20)
+})
+
+t('安全阀：超过上限的成句（长逗号句以句号收尾）同样逐段输出', () => {
+  const s = new SentenceSegmenter({ maxSentenceChars: 30 })
+  const long = Array.from({ length: 12 }, (_, i) => `第${i}个分句内容`).join('，') + '。'
+  const out = s.feed(long)
+  assert.ok(out.length > 1, '长成句未切')
+  for (const o of out) assert.ok(o.length <= 30, `段超长：${o.length}`)
+  assert.equal(out.join(''), long)
+})
+
 console.log(`\nsegmenter：${passed} 项通过`)
 rmSync(tmp, { recursive: true, force: true })
