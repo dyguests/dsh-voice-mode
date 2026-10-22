@@ -1295,7 +1295,9 @@ export function VoiceSettingsCard({ scope, defaultOpen = false }: { scope: Scope
               <button
                 type="button"
                 onClick={() => {
-                  void scope.set('shortcut', /Mac/i.test(navigator.platform) ? 'Cmd+Alt+V' : 'Ctrl+Shift+V')
+                  // 与配置默认值一致（文档写的就是它）；两项一起恢复。
+                  void scope.set('shortcut', 'Ctrl+Shift+V')
+                  void scope.set('composerShortcut', 'Alt+Enter')
                   try {
                     window.dispatchEvent(new Event('dshvm-settings-changed'))
                   } catch {}

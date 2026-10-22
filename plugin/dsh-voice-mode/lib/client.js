@@ -3707,7 +3707,8 @@ function VoiceSettingsCard({ scope, defaultOpen = false }) {
               {
                 type: "button",
                 onClick: () => {
-                  void scope.set("shortcut", /Mac/i.test(navigator.platform) ? "Cmd+Alt+V" : "Ctrl+Shift+V");
+                  void scope.set("shortcut", "Ctrl+Shift+V");
+                  void scope.set("composerShortcut", "Alt+Enter");
                   try {
                     window.dispatchEvent(new Event("dshvm-settings-changed"));
                   } catch {
@@ -3895,7 +3896,7 @@ function telemetryDeltas(tel) {
   }
   return out;
 }
-var BUILD_TAG = "1689fa8";
+var BUILD_TAG = "feb6f03";
 var TELEMETRY_FLAG = "dsh-voice-mode.telemetry";
 var telemetryEnabled = typeof localStorage !== "undefined" && localStorage.getItem(TELEMETRY_FLAG) === "1";
 console.log("[dsh-voice] build=" + BUILD_TAG);
