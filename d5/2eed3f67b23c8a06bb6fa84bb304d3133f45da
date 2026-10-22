@@ -1,0 +1,24 @@
+plugin/dsh-voice-mode/lib/client.js
+  h_3553f4e32d4a9f 1678-1688,1826,1961-1971,2102,2831-2934,3664-3695,3862,3938-3940,4321,5151,5199,5488-5490,5785-5794,5812,5843-5856,5889-5913,6166-6168,6229-6234,6278-6282,6309-6312,6395-6400
+plugin/dsh-voice-mode/lib/index.js
+  h_3553f4e32d4a9f 2347-2357,2488,2762,2796,2838,2907,3341
+plugin/dsh-voice-mode/src/client.tsx
+  h_3553f4e32d4a9f 392-394,887,1770-1771,2018,2080,2452-2454,2855-2864,2888-2889,2929-2942,2985-3011,3374-3377,3464-3469,3524-3528,3558-3561,3703-3708
+plugin/dsh-voice-mode/src/index.ts
+  h_3553f4e32d4a9f 223-224,280,319,381,507-508,568,1252
+plugin/dsh-voice-mode/src/settings-form.tsx
+  h_3553f4e32d4a9f 244-351,1281-1313
+plugin/dsh-voice-mode/src/strings.ts
+  h_3553f4e32d4a9f 99-109,247,383-393,524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d52eed3f67b23c8a06bb6fa84bb304d3133f45da",
+  "prompts": {},
+  "humans": {
+    "h_3553f4e32d4a9f": {
+      "author": "fanhl <dyguests@qq.com>"
+    }
+  }
+}
