@@ -1,0 +1,16 @@
+plugin/dsh-voice-mode/package.json
+  h_3553f4e32d4a9f 50
+plugin/dsh-voice-mode/test/shortcut-ui.test.mjs
+  h_3553f4e32d4a9f 1-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f6220f874f49e45f589e881fe63e99470c28172",
+  "prompts": {},
+  "humans": {
+    "h_3553f4e32d4a9f": {
+      "author": "fanhl <dyguests@qq.com>"
+    }
+  }
+}
